@@ -12,6 +12,9 @@ import {
   registerBalanceProvider, computeRegisteredBalance, BALANCE_PRIORITY,
 } from '../balance/providerRegistry.js';
 import { serializeAmount, toDecimal } from '../balance/composeBalance.js';
+import { deleteAffiliateSafely } from '../affiliateDeletion.js';
+// Rewards points (separate currency) — post-commit hooks only; they never throw.
+import { onAffiliateOrderStatusCommitted, onAffiliateActivationCommitted } from '../rewardsHooks.js';
 // ── TEMPORARY WIRING (refinement #1) ──────────────────────────────────────────
 // Provider registration currently happens as a side effect of importing the
 // services that own each balance component: importing ugcEarningsService here
@@ -414,18 +417,55 @@ async function activateReferralIfDelivered(affiliateId, orderTotal = 0, db = pri
   }
 }
 
+/** Statuses an affiliate may set on their own order. */
+export const AFFILIATE_SETTABLE_ORDER_STATUSES = Object.freeze(['confirmed', 'cancelled']);
+
 /**
- * Update AffiliateOrder status (affiliate or admin).
- * Triggers referral activation when status becomes "delivered".
+ * Statuses an affiliate's order may be changed FROM. An allowlist (not a
+ * blocklist) so it fails closed: 'delivered', 'cancelled' and any unknown or
+ * differently-cased value (e.g. an admin-typed 'Delivered') are locked.
  */
-export async function updateAffiliateOrderStatus(affiliateOrderId, status) {
-  const order = await prisma.affiliateOrder.update({
-    where: { id: affiliateOrderId },
+export const AFFILIATE_EDITABLE_ORDER_STATUSES = Object.freeze(['pending', 'confirmed', 'shipped']);
+
+/**
+ * Affiliate-initiated status change (PUT /api/affiliate/orders).
+ *
+ * Ownership and eligibility are enforced in ONE conditional write: the WHERE
+ * clause matches only the caller's own order in an editable status, so a
+ * concurrent admin "delivered" update can never be overwritten. Another
+ * affiliate's order and a missing id both report ORDER_NOT_FOUND, so the
+ * response never reveals that someone else's order exists.
+ *
+ * Admin status changes go through adminUpdateAffiliateOrderStatus instead.
+ */
+export async function updateAffiliateOrderStatus(affiliateOrderId, status, { affiliateId, db = prisma } = {}) {
+  if (typeof affiliateId !== 'string' || !affiliateId.trim()) {
+    throw Object.assign(new Error('Affilié requis'), { code: 'AFFILIATE_REQUIRED' });
+  }
+  if (typeof affiliateOrderId !== 'string' || !affiliateOrderId.trim()) {
+    throw Object.assign(new Error('id requis'), { code: 'INVALID_ID' });
+  }
+  if (!AFFILIATE_SETTABLE_ORDER_STATUSES.includes(status)) {
+    throw Object.assign(new Error('Statut non autorisé'), { code: 'INVALID_STATUS' });
+  }
+
+  const result = await db.affiliateOrder.updateMany({
+    where: { id: affiliateOrderId, affiliateId, status: { in: [...AFFILIATE_EDITABLE_ORDER_STATUSES] } },
     data:  { status },
   });
-  if (status === 'delivered') {
-    activateReferralIfDelivered(order.affiliateId, order.total).catch(() => {});
+
+  if (result.count === 0) {
+    const own = await db.affiliateOrder.findFirst({
+      where:  { id: affiliateOrderId, affiliateId },
+      select: { id: true },
+    });
+    if (!own) throw Object.assign(new Error('Commande introuvable'), { code: 'ORDER_NOT_FOUND' });
+    throw Object.assign(new Error('Cette commande ne peut plus être modifiée'), { code: 'ORDER_LOCKED' });
   }
+
+  // Re-read scoped to the caller, never by id alone.
+  const order = await db.affiliateOrder.findFirst({ where: { id: affiliateOrderId, affiliateId } });
+  if (!order) throw Object.assign(new Error('Commande introuvable'), { code: 'ORDER_NOT_FOUND' });
   return mapOrder(order);
 }
 
@@ -472,6 +512,9 @@ export async function syncLinkedAffiliateOrderStatus(orderId, rawStatus, { notif
       },
     }).catch(() => {});
   }
+
+  // Rewards: after the status write committed (deferred if `db` is a tx client).
+  await onAffiliateOrderStatusCommitted(linked.id, { db });
 
   return { synced: true, delivered: becameDelivered };
 }
@@ -1043,7 +1086,7 @@ export async function adminCreateAffiliate({ name, username, password, commissio
   return mapAffiliate(a);
 }
 
-export async function adminUpdateAffiliate(id, data) {
+export async function adminUpdateAffiliate(id, data, { db = prisma } = {}) {
   const update = {};
   if (data.name           !== undefined) update.name           = data.name;
   if (data.commissionRate !== undefined) update.commissionRate = parseFloat(data.commissionRate);
@@ -1061,18 +1104,18 @@ export async function adminUpdateAffiliate(id, data) {
     const n = parseInt(data.goalValidReferrals, 10);
     update.goalValidReferrals = Number.isInteger(n) ? n : null;
   }
-  const a = await prisma.affiliate.update({ where: { id }, data: update });
+  const before = update.isActive === true
+    ? await db.affiliate.findUnique({ where: { id }, select: { isActive: true } })
+    : null;
+  const a = await db.affiliate.update({ where: { id }, data: update });
+  // Rewards: signup bonus on the first inactive → active switch (post-commit, never throws).
+  if (before) await onAffiliateActivationCommitted(id, { wasActive: before.isActive, isActive: a.isActive, db });
   return mapAffiliate(a);
 }
 
+/** false = not found; throws AFFILIATE_HAS_HISTORY (→ 409) when referenced. */
 export async function adminDeleteAffiliate(id) {
-  try {
-    await prisma.affiliate.delete({ where: { id } });
-    return true;
-  } catch (err) {
-    if (err.code === 'P2025') return false;
-    throw err;
-  }
+  return deleteAffiliateSafely(prisma, id);
 }
 
 export async function adminGetAllAffiliateOrders() {
@@ -1110,11 +1153,14 @@ export async function adminGetAllAffiliateOrders() {
   }));
 }
 
-export async function adminUpdateAffiliateOrderStatus(id, status) {
-  const o = await prisma.affiliateOrder.update({ where: { id }, data: { status } });
+export async function adminUpdateAffiliateOrderStatus(id, status, { db = prisma } = {}) {
+  const o = await db.affiliateOrder.update({ where: { id }, data: { status } });
   if (status === 'delivered') {
-    activateReferralIfDelivered(o.affiliateId, o.total).catch(() => {});
+    activateReferralIfDelivered(o.affiliateId, o.total, db).catch(() => {});
   }
+  // Rewards: the update above has committed; award/reverse/re-award is
+  // idempotent and never throws (failures are left for reconcile).
+  await onAffiliateOrderStatusCommitted(o.id, { db });
   return mapOrder(o);
 }
 

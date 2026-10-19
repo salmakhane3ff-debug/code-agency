@@ -9,15 +9,18 @@ import {
   XCircle, CheckCircle, Building2, CreditCard,
   Target, Star, UserPlus, Eye, AlertTriangle, Settings, Video, Wallet,
   ShieldCheck, ShieldAlert, MessageCircle, Upload, Trash2,
-  Home, Plus, MoreHorizontal, X, Rocket,
+  Home, Plus, MoreHorizontal, X, Rocket, Gift,
 } from "lucide-react";
 import UgcTab from "./UgcTab";
 import DepositTab from "./DepositTab";
 import BoosterTab from "./BoosterTab";
+import RewardsTab from "./RewardsTab";
 import LiveActivity from "@/components/LiveActivity";
 import { diffNewItems, shouldPlaySaleSound } from "@/lib/liveFeed";
 import { createSaleSound } from "./saleSound";
 import { resolveSupportLink } from "@/lib/whatsappSupport";
+import { useLanguage } from "@/context/LanguageContext";
+import { orderStatusErrorMessage, shouldRefreshOrdersAfter, orderMessageDir } from "@/lib/affiliateOrderMessages";
 
 // Live feed: the gap BETWEEN background polls (measured after the previous poll
 // finishes, so requests can never stack up). ~3s gives near-instant sale
@@ -223,6 +226,7 @@ function MobileBottomNav({ activeTab, setActiveTab, refLink, onLogout, unread = 
   const moreItems = [
     { icon: Package,     label: "الطلبات",        tab: "orders" },
     { icon: Rocket,      label: "Booster",        tab: "booster" },
+    { icon: Gift,        label: "المكافآت",       tab: "rewards" },
     { icon: Video,       label: "UGC",            tab: "ugc" },
     { icon: Users,       label: "الفريق",         tab: "team" },
     { icon: Wallet,      label: "الرصيد والسحب",  tab: "payout" },
@@ -1241,6 +1245,15 @@ export default function AffiliateDashboard() {
 
   // Order status update
   const [updatingOrder, setUpdatingOrder] = useState(null);
+  // Feedback when the server refuses a status change (404 not yours / 409 locked).
+  const { lang } = useLanguage();
+  const [orderNotice, setOrderNotice] = useState(null);
+  const orderNoticeTimer = useRef(null);
+  const showOrderNotice = (message) => {
+    clearTimeout(orderNoticeTimer.current);
+    setOrderNotice(message);
+    orderNoticeTimer.current = setTimeout(() => setOrderNotice(null), 6000);
+  };
 
   // Order details modal
   const [detailsOrder,  setDetailsOrder]  = useState(null);
@@ -1553,8 +1566,15 @@ export default function AffiliateDashboard() {
       });
       if (res.ok) {
         setOrders((prev) => prev.map((o) => o.id === orderId ? { ...o, status } : o));
+        setOrderNotice(null);
+      } else {
+        showOrderNotice(orderStatusErrorMessage(res.status, lang));
+        // The list is stale (order delivered/cancelled meanwhile, or not ours): reload it.
+        if (shouldRefreshOrdersAfter(res.status)) fetchAll(token, { silent: true });
       }
-    } catch { }
+    } catch {
+      showOrderNotice(orderStatusErrorMessage(0, lang));
+    }
     setUpdatingOrder(null);
   };
 
@@ -1664,6 +1684,7 @@ export default function AffiliateDashboard() {
     { id: "payout",        label: "Retraits" },
     { id: "deposit",       label: "💰 Dépôt de solde" },
     { id: "booster",       label: "🚀 Booster" },
+    { id: "rewards",       label: "🎁 Récompenses" },
     { id: "ugc",           label: "💰 Video UGC" },
     { id: "notifications", label: `Notifs ${unread > 0 ? `(${unread})` : ""}` },
     { id: "team",          label: `Équipe (${team.length})` },
@@ -2937,6 +2958,8 @@ export default function AffiliateDashboard() {
 
         {activeTab === "booster" && <BoosterTab onRecharge={goToDeposit} />}
 
+        {activeTab === "rewards" && <RewardsTab />}
+
         {activeTab === "ugc" && <UgcTab />}
 
         {/* Competition now lives inline on the overview (no standalone tab). */}
@@ -3081,6 +3104,16 @@ export default function AffiliateDashboard() {
         onStatusChange={handleOrderStatus}
         updatingOrder={updatingOrder}
       />
+
+      {/* ── Order status refused (404 / 409) — FR/AR feedback ── */}
+      {orderNotice && (
+        <div role="alert" dir={orderMessageDir(lang)}
+          className="fixed left-1/2 -translate-x-1/2 z-[75] w-[calc(100%-32px)] max-w-md bg-gray-900 text-white text-xs font-semibold px-4 py-3 rounded-2xl shadow-xl flex items-start gap-3 bottom-[calc(104px+env(safe-area-inset-bottom))] md:bottom-6">
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-300" />
+          <span className="flex-1 leading-snug">{orderNotice}</span>
+          <button type="button" onClick={() => setOrderNotice(null)} className="text-white/60 hover:text-white" aria-label="×"><X className="w-4 h-4" /></button>
+        </div>
+      )}
 
       {/* ── Mobile bottom navigation (mobile/tablet only) ── */}
       <MobileBottomNav

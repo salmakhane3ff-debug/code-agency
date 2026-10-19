@@ -85,6 +85,7 @@ const SideBar = ({ onItemClick }) => {
     { href: "/admin/promo", icon: <Tag size={16} />, label: "Promo Codes" },
     { href: "/admin/spin-wheel", icon: <Disc size={16} />, label: "Spin Wheel" },
     { href: "/admin/gifts", icon: <Gift size={16} />, label: "Gift System" },
+    { href: "/admin/rewards", icon: <Gift size={16} />, label: "🎁 Récompenses affiliés" },
     { href: "/admin/affiliate-orders", icon: <ShoppingCart size={16} />, label: "Affiliate Orders" },
     { href: "/admin/affiliate-payouts",    icon: <CreditCard size={16} />,        label: "Affiliate Payouts" },
     { href: "/admin/identity",             icon: <ShieldCheck size={16} />,       label: "Identity Verification" },

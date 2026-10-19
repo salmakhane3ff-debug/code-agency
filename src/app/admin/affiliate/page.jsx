@@ -110,11 +110,16 @@ export default function AffiliatePage() {
 
   const handleDelete = async () => {
     try {
-      await fetch("/api/affiliate", {
+      const res = await fetch("/api/affiliate", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ _id: selectedId }),
       });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        alert(d.error || "Suppression impossible");
+        return;
+      }
       setAffiliates((prev) => prev.filter((a) => a.id !== selectedId && a._id !== selectedId));
     } catch (err) {
       console.error("Delete failed:", err);

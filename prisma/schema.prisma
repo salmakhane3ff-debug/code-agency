@@ -314,6 +314,12 @@ model Affiliate {
   boosterPurchases     AffiliateBoosterPurchase[]
   // Booster DEMO simulation state — additive back-relation.
   boosterSimulations   BoosterSimulation[]
+  // Rewards & Gifts (additive back-relations — no DB column). Points are a
+  // separate currency: never part of the commission balance providers.
+  rewardAccount        RewardPointsAccount?
+  rewardLedger         RewardPointsLedger[]
+  rewardOrderAwards    RewardOrderAward[]
+  rewardRedemptions    RewardRedemption[]
 
   @@index([username])
   @@index([isActive])
@@ -434,6 +440,8 @@ model AffiliateOrder {
   isFake           Boolean   @default(false)
   createdAt        DateTime  @default(now())
   affiliate        Affiliate @relation(fields: [affiliateId], references: [id])
+  // Rewards points award state (additive back-relation — no DB column).
+  rewardAward      RewardOrderAward?
 
   @@index([affiliateId])
   @@index([status])
@@ -1424,4 +1432,180 @@ model AdminNotification {
   @@index([type])
   @@index([createdAt])
   @@map("admin_notifications")
+}
+
+// ══ Rewards & Gifts (affiliate points program) ═══════════════════════════════
+// Entirely ADDITIVE. Points are a separate currency from commissions: nothing
+// here is registered as a balance provider, so the MAD wallet, payouts and
+// boosters are unaffected. The append-only ledger is the source of truth;
+// RewardPointsAccount.balance is a lockable running total updated in the same
+// transaction as every ledger row (verifyAccountBalance checks they agree).
+// Points are always integers. Status/type columns are TEXT with CHECK
+// constraints in the migration (20261019_affiliate_rewards).
+
+/// Physical gift catalog. Archived (never hard-deleted) once referenced.
+model RewardGift {
+  id                 String             @id @default(uuid())
+  name               String
+  description        String             @default("")
+  images             Json               @default("[]")
+  pointsCost         Int
+  stock              Int                @default(0) // CHECK stock >= 0
+  lowStockThreshold  Int?
+  maxPerAffiliate    Int?
+  minDeliveredOrders Int?
+  isActive           Boolean            @default(false)
+  archivedAt         DateTime?
+  sortOrder          Int                @default(0)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  redemptions        RewardRedemption[]
+
+  @@index([isActive])
+  @@index([sortOrder])
+  @@map("reward_gifts")
+}
+
+/// One row per affiliate: running total + the row every points operation locks
+/// first (UPDATE → row lock), which serialises all point changes per affiliate.
+/// balance may be negative ONLY through an order reversal (D3 "points debt").
+model RewardPointsAccount {
+  affiliateId String    @id
+  balance     Int       @default(0)
+  version     Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  affiliate   Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+
+  @@map("reward_points_accounts")
+}
+
+/// Append-only points ledger (UPDATE/DELETE blocked by a DB trigger).
+/// type: SIGNUP_BONUS | ORDER_DELIVERED | ORDER_REVERSAL | REDEMPTION_DEBIT |
+///       REDEMPTION_REFUND | ADMIN_ADJUSTMENT
+model RewardPointsLedger {
+  id             String    @id @default(uuid())
+  affiliateId    String
+  delta          Int // CHECK delta <> 0
+  type           String
+  sourceType     String // affiliate | affiliate_order | redemption | admin
+  sourceId       String?
+  idempotencyKey String    @unique
+  reason         String?
+  actorType      String    @default("SYSTEM") // SYSTEM | ADMIN | AFFILIATE
+  actorId        String?
+  balanceAfter   Int
+  metadata       Json?
+  createdAt      DateTime  @default(now())
+  affiliate      Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+
+  @@index([affiliateId, createdAt])
+  @@index([type])
+  @@index([sourceType, sourceId])
+  @@map("reward_points_ledger")
+}
+
+/// Per-order award state machine — the idempotency anchor for order points.
+/// state: AWARDED | REVERSED | EXCLUDED (EXCLUDED = delivered before launch,
+/// recorded by the launch baseline; never awarded). `points` is the snapshot
+/// taken at the FIRST award and reused on re-award (D9). orderId (the linked
+/// store Order) is unique so one real order can never pay out twice, but has
+/// no FK: store orders may be hard-deleted by an admin.
+model RewardOrderAward {
+  id               String         @id @default(uuid())
+  affiliateOrderId String         @unique
+  orderId          String?        @unique
+  affiliateId      String
+  points           Int            @default(0)
+  state            String
+  exclusionReason  String?
+  version          Int            @default(1)
+  availableAt      DateTime? // end of the hold period (D4)
+  awardedAt        DateTime?
+  reversedAt       DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  affiliateOrder   AffiliateOrder @relation(fields: [affiliateOrderId], references: [id], onDelete: Restrict)
+  affiliate        Affiliate      @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+
+  @@index([affiliateId, state])
+  @@map("reward_order_awards")
+}
+
+/// A gift request. status: PENDING_REVIEW | APPROVED | PREPARING | SHIPPED |
+/// IN_TRANSIT | DELIVERED | REJECTED | CANCELLED | RETURNED. Points are debited
+/// and stock reserved at creation; refund/restock are stamped so they happen once.
+model RewardRedemption {
+  id               String                    @id @default(uuid())
+  reference        String                    @unique
+  affiliateId      String
+  giftId           String
+  giftSnapshot     Json
+  pointsCost       Int
+  status           String                    @default("PENDING_REVIEW")
+  fullName         String
+  phone            String
+  city             String
+  address          String
+  deliveryNotes    String?
+  carrierId        String?
+  carrierName      String?
+  trackingNumber   String?
+  trackingUrl      String?
+  internalNotes    String? // admin-only — never returned to affiliates
+  rejectionReason  String?
+  cancelReason     String?
+  clientRequestId  String
+  pointsRefundedAt DateTime?
+  restockedAt      DateTime?
+  approvedAt       DateTime?
+  preparingAt      DateTime?
+  shippedAt        DateTime?
+  deliveredAt      DateTime?
+  closedAt         DateTime?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+  affiliate        Affiliate                 @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+  gift             RewardGift                @relation(fields: [giftId], references: [id], onDelete: Restrict)
+  history          RewardRedemptionHistory[]
+
+  @@unique([affiliateId, clientRequestId])
+  @@index([affiliateId, createdAt])
+  @@index([status])
+  @@index([giftId])
+  @@map("reward_redemptions")
+}
+
+/// Every redemption status change (append-only).
+model RewardRedemptionHistory {
+  id           String           @id @default(uuid())
+  redemptionId String
+  fromStatus   String?
+  toStatus     String
+  actorType    String // SYSTEM | ADMIN | AFFILIATE
+  actorId      String?
+  note         String?
+  createdAt    DateTime         @default(now())
+  redemption   RewardRedemption @relation(fields: [redemptionId], references: [id], onDelete: Restrict)
+
+  @@index([redemptionId, createdAt])
+  @@map("reward_redemption_history")
+}
+
+/// Settings changes, gift edits, stock changes and other admin actions.
+model RewardAuditLog {
+  id         String   @id @default(uuid())
+  action     String
+  entityType String
+  entityId   String?
+  actorType  String   @default("ADMIN")
+  actorId    String?
+  before     Json?
+  after      Json?
+  reason     String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("reward_audit_log")
 }

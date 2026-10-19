@@ -2043,12 +2043,17 @@ export default function AdminAffiliatesPage() {
 
   const handleDelete = async (id) => {
     if (!confirm("Supprimer cet affilié ?")) return;
+    setError(null);
     try {
-      await fetch("/api/admin/affiliates", {
+      const res = await fetch("/api/admin/affiliates", {
         method:  "DELETE",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ id }),
       });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Erreur suppression");
+      }
       await fetchAffiliates();
     } catch {
       setError("Erreur suppression");

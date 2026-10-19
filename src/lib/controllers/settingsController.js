@@ -13,6 +13,16 @@ import {
   upsertDeliverySettings,
 } from '../services/settingsService.js';
 import { badRequest, serverError } from '../utils/apiResponse.js';
+import { REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID } from '../rewards.js';
+
+/**
+ * Settings rows that have their own service and must never be written raw:
+ * 'rewards-config' is saved only through rewardsService.saveRewardsConfig,
+ * which runs the launch baseline under a table lock, manages the launch
+ * timestamps and writes the audit log. A raw write would bypass all three.
+ * 'rewards-reconcile-state' holds reconcile's resume cursors (system-managed).
+ */
+const RESERVED_SETTING_TYPES = new Set([REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID]);
 
 // ── Generic settings (/api/setting) ──────────────────────────────────────────
 
@@ -57,6 +67,9 @@ export async function upsertSettingsHandler(req) {
   try {
     const { searchParams } = new URL(req.url);
     const type = searchParams.get('type') || 'store';
+    if (RESERVED_SETTING_TYPES.has(type)) {
+      return badRequest('Ce paramètre se modifie uniquement depuis sa page dédiée.');
+    }
     const body = await req.json();
 
     const saved = await upsertSettings(type, body);

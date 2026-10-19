@@ -13,6 +13,7 @@ import {
   adminDeleteAffiliate,
 } from '@/lib/services/affiliateSystemService';
 import { withAdminAuth } from '@/lib/middleware/withAdminAuth';
+import { AFFILIATE_HAS_HISTORY } from '@/lib/affiliateDeletion';
 
 async function getHandler() {
   try {
@@ -75,6 +76,10 @@ async function deleteHandler(req) {
 
     return Response.json({ ok: true, id: affiliateId });
   } catch (err) {
+    // Referenced by points/orders/payouts → clear 409, never the raw DB error.
+    if (err?.code === AFFILIATE_HAS_HISTORY) {
+      return Response.json({ error: err.message, code: err.code }, { status: 409 });
+    }
     console.error('Admin affiliates DELETE error:', err);
     return Response.json({ error: 'Erreur serveur' }, { status: 500 });
   }
