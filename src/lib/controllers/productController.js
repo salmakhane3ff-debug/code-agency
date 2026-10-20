@@ -19,6 +19,8 @@ import {
   notFound,
   serverError,
 } from '../utils/apiResponse.js';
+import { isProductLocked, PRODUCT_LOCKED } from '../productLock.js';
+import { isAdminRequest } from '../adminSession.js';
 
 // ── GET /api/product ──────────────────────────────────────────────────────────
 
@@ -68,6 +70,15 @@ export async function getProductByIdHandler(req, context) {
 
     const product = await getProductById(id);
     if (!product) return notFound('Product not found');
+
+    // Locked: nobody may read it through the API — only the admin edit form
+    // (admin session) still loads the full product.
+    if (isProductLocked(product) && !isAdminRequest(req)) {
+      return Response.json(
+        { error: 'Ce produit est verrouillé', code: PRODUCT_LOCKED },
+        { status: 403, headers: { 'Cache-Control': 'private, no-store' } },
+      );
+    }
 
     return Response.json(product);
   } catch (err) {

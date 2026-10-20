@@ -172,6 +172,7 @@ function Wheel({ segments, rotation }) {
 function ProductWinPopup({ winner, cartTotal, onAddToCart, onStartShopping, onClose, t, formatPrice }) {
   const [product, setProduct] = useState(null);
   const [adding,  setAdding]  = useState(false);
+  const [prizeLocked, setPrizeLocked] = useState(false); // admin product lock (API 403)
 
   const minVal    = Number(winner.minCartValue) || 0;
   const canUnlock = !minVal || cartTotal >= minVal;
@@ -181,7 +182,7 @@ function ProductWinPopup({ winner, cartTotal, onAddToCart, onStartShopping, onCl
   useEffect(() => {
     if (!winner.productId) return;
     fetch(`/api/products/${winner.productId}`)
-      .then((r) => r.json())
+      .then((r) => { if (r.status === 403) setPrizeLocked(true); return r.json(); })
       .then((d) => { if (d?._id) setProduct(d); })
       .catch(() => {});
   }, [winner.productId]);
@@ -194,6 +195,7 @@ function ProductWinPopup({ winner, cartTotal, onAddToCart, onStartShopping, onCl
 
   const handleAdd = async () => {
     if (adding) return;
+    if (prizeLocked) { alert(t("product_locked_cart")); return; }
     setAdding(true);
     await onAddToCart(product);
     setAdding(false);

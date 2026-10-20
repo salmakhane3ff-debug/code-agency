@@ -8,6 +8,7 @@
 import { getConfig, pickWinner, recordEvent, getAnalytics } from '@/lib/services/spinWheelConfigService.js';
 import { serverError, badRequest } from '@/lib/utils/apiResponse.js';
 import { withAdminAuth } from '@/lib/middleware/withAdminAuth';
+import { lockedIdsAmong } from '@/lib/services/productLockService.js';
 
 // Prototype pollution guard
 const BLOCKED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -26,7 +27,15 @@ export async function POST(req) {
                    || req.headers.get('x-real-ip') || null;
     const userAgent = req.headers.get('user-agent') || null;
 
-    const winner = pickWinner(config.segments);
+    // Admin product lock: a product prize that is locked is never drawn (the
+    // wheel still shows it; `index` below refers to the full segment list).
+    const lockedPrizes = await lockedIdsAmong(
+      config.segments.filter((s) => s.rewardType === 'product').map((s) => s.productId),
+    );
+    const drawable = config.segments.filter((s) => !(s.rewardType === 'product' && lockedPrizes.has(s.productId)));
+    if (!drawable.length) return badRequest('No segments available');
+
+    const winner = pickWinner(drawable);
 
     await recordEvent({
       sessionId,

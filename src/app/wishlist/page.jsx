@@ -53,12 +53,19 @@ export default function WishlistPage() {
       salePrice: item.salePrice,
       regularPrice: item.regularPrice,
       currencySymbol: "MAD",
+      // Admin product lock (from the live product list): the cart refuses it.
+      isLocked: productDetails?.isLocked === true,
     };
     await addToCart(product);
   };
 
   const handleMoveToCart = async (item) => {
-    await handleAddToCart(item);
+    try {
+      await handleAddToCart(item);
+    } catch (err) {
+      if (err?.code === "PRODUCT_LOCKED") { alert(t("product_locked_cart")); return; } // stays in the wishlist
+      throw err;
+    }
     handleRemoveFromWishlist(item.productId);
   };
 

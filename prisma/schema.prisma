@@ -69,6 +69,11 @@ model Product {
   conversionStock   Int?
   // ── Bundle & Save offers (optional, JSON array of bundle objects) ──────────
   bundles           Json                 @default("[]")
+  // Product lock (manual, admin-set). true = still listed in the storefront
+  // grids (image, name, price + lock icon) but nobody can open its page or buy
+  // it — enforced in the product API, the product page and createOrder.
+  // Default false = open (current behaviour).
+  isLocked          Boolean              @default(false)
   feedbacks         Feedback[]
   orderItems        OrderItem[]
   analytics         ProductAnalytics?

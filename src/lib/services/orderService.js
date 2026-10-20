@@ -17,6 +17,13 @@ import { mapOrder, parseOrderBody } from '../utils/mappers.js';
 import { sendBemobPostback } from '../bemobApi.js';
 import { getSettings } from './settingsService.js';
 import { syncLinkedAffiliateOrderStatus } from './affiliateSystemService.js';
+import { isProductLocked, productLockedError } from '../productLock.js';
+
+/**
+ * Product a gift-less free line points at: its id up to the first "::" (so any
+ * "<id>::cadeau…" variant resolves to <id>), trimmed.
+ */
+const freeLineProductId = (item) => String(item.productId || item._id || '').split('::')[0].trim() || null;
 
 // ── Analytics helper ──────────────────────────────────────────────────────────
 /**
@@ -198,15 +205,20 @@ export async function createOrder(body) {
       })
     : [];
 
-  // Step 2: collect all productIds we need (paid + gift product refs)
+  // Step 2: collect all productIds we need (paid + gift product refs + the
+  // product a gift-less free line points at, so its lock can be checked)
   const giftProductIds = dbGifts.map((g) => g.productId).filter(Boolean);
-  const allProductIds  = [...new Set([...paidProductIds, ...giftProductIds])];
+  const freeLineIds    = _items
+    .filter((i) => (i.isFreeGift || i._isGift) && !(i.giftId || i._giftId))
+    .map(freeLineProductId)
+    .filter(Boolean);
+  const allProductIds  = [...new Set([...paidProductIds, ...giftProductIds, ...freeLineIds])];
 
   // Step 3: single product fetch covers both paid items and gift products
   const dbProducts = allProductIds.length > 0
     ? await prisma.product.findMany({
         where:  { id: { in: allProductIds } },
-        select: { id: true, salePrice: true, regularPrice: true, isActive: true },
+        select: { id: true, salePrice: true, regularPrice: true, isActive: true, isLocked: true },
       })
     : [];
 
@@ -233,6 +245,14 @@ export async function createOrder(body) {
     );
 
     if (isGift || isCadeauFallback) {
+      // Admin product lock: a locked product is not given away either (Gift
+      // System gift, "2+1" bundle or ::cadeau line). The free line is dropped;
+      // the paid items of the order are unaffected.
+      const refId = isGift ? giftProductMap.get(resolvedGiftId) : freeLineProductId(item);
+      if (refId && isProductLocked(productMap.get(refId))) {
+        console.warn(`[order] free line for locked product ${refId} dropped`);
+        continue;
+      }
       // Use the DB-verified productId from giftProductMap (satisfies FK constraint).
       // Falls back to null — OrderItem.productId is optional in schema.
       resolvedItems.push({
@@ -266,6 +286,10 @@ export async function createOrder(body) {
         { code: 'PRODUCT_INACTIVE' },
       );
     }
+    // Admin product lock: nobody can buy a locked product (checkout, landing
+    // pages, offers and any direct POST all land here). Free lines for a
+    // locked product are dropped above.
+    if (isProductLocked(dbProduct)) throw productLockedError(rawId);
 
     // Canonical server-side price: salePrice takes precedence over regularPrice
     const price = dbProduct.salePrice ?? dbProduct.regularPrice ?? 0;
@@ -286,6 +310,9 @@ export async function createOrder(body) {
       productSnapshot: { title: item.title, images: item.images || [], variants: item.variants || [] },
     });
   }
+
+  // Only reachable when every line was a dropped free line for a locked product.
+  if (resolvedItems.length === 0) throw productLockedError('order');
 
   // ── Persist inside a transaction so order + items are atomic ─────────────
   const order = await prisma.$transaction(async (tx) => {
