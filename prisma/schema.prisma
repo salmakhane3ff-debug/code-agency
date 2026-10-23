@@ -325,6 +325,10 @@ model Affiliate {
   rewardLedger         RewardPointsLedger[]
   rewardOrderAwards    RewardOrderAward[]
   rewardRedemptions    RewardRedemption[]
+  // Demo chat (additive back-relation — no DB column): which demo conversations
+  // this real affiliate has opened. ON DELETE CASCADE so it never blocks
+  // deleteAffiliateSafely.
+  demoChatViewerStates DemoChatViewerState[]
 
   @@index([username])
   @@index([isActive])
@@ -1172,6 +1176,11 @@ model DemoAffiliate {
 
   stats           DemoStats?
   earningsHistory DemoEarningsHistory[]
+  // Demo chat (additive back-relations — no DB column; RESTRICT keeps chat data
+  // from being orphaned: delete is refused while it exists).
+  chatAssignment  DemoChatAssignment?
+  chatMessages    DemoChatMessage[]
+  chatViewers     DemoChatViewerState[]
 
   @@index([isActive])
   @@map("demo_affiliates")
@@ -1613,4 +1622,215 @@ model RewardAuditLog {
   @@index([entityType, entityId])
   @@index([createdAt])
   @@map("reward_audit_log")
+}
+
+// ── Demo chat journeys (Phase 3C) ─────────────────────────────────────────────
+// Admin-authored, scripted 30-day conversations shown by DEMO competition
+// profiles. Fully additive and isolated: these tables reference only
+// demo_affiliates and (read-state only) affiliates; they never touch orders,
+// commissions, balances, payouts, notifications, UGC or fake orders. The feature
+// is OFF by default (server env flag + protected settings row, both required);
+// nothing here enables it. Times are Africa/Casablanca unless stated otherwise.
+// CHECK constraints and the append-only trigger live in the migration SQL.
+
+/// Journey container (drafts). Archived instead of deleted once versions exist.
+model DemoChatJourney {
+  id          String   @id @default(uuid())
+  name        String
+  description String   @default("")
+  status      String   @default("draft") // "draft" | "archived"
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  steps    DemoChatJourneyStep[]
+  versions DemoChatJourneyVersion[]
+
+  @@index([status])
+  @@map("demo_chat_journeys")
+}
+
+/// Editable draft step: day 1–30, "HH:MM" Casablanca, position within the minute.
+model DemoChatJourneyStep {
+  id             String   @id @default(uuid())
+  journeyId      String
+  day            Int
+  time           String   // "HH:MM" (Africa/Casablanca wall clock)
+  position       Int      @default(0)
+  type           String   // "text" | "image" | "audio" | "earnings"
+  text           String?  // text / caption / earnings template (placeholders only)
+  assetId        String?  // image | audio
+  earningsPeriod String?  // "today" | "yesterday" | "week" (type = earnings)
+  metric         String?  // "commission" | "orders" | "revenue" (type = earnings)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  journey DemoChatJourney @relation(fields: [journeyId], references: [id], onDelete: Cascade)
+  asset   DemoChatAsset?  @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@unique([journeyId, day, time, position])
+  @@index([assetId])
+  @@map("demo_chat_journey_steps")
+}
+
+/// Immutable published snapshot (steps frozen as JSON with stable stepIds).
+model DemoChatJourneyVersion {
+  id          String   @id @default(uuid())
+  journeyId   String
+  version     Int
+  steps       Json
+  stepsHash   String
+  publishedAt DateTime @default(now())
+  publishedBy String?
+
+  journey     DemoChatJourney        @relation(fields: [journeyId], references: [id], onDelete: Restrict)
+  assets      DemoChatVersionAsset[]
+  assignments DemoChatAssignment[]
+  messages    DemoChatMessage[]
+
+  @@unique([journeyId, version])
+  @@map("demo_chat_journey_versions")
+}
+
+/// Uploaded image / voice asset (validated server-side; format sniffed, not trusted).
+model DemoChatAsset {
+  id             String   @id @default(uuid())
+  kind           String   // "image" | "audio"
+  url            String
+  storageKey     String?
+  mimeType       String
+  formatDetected String   // format found by inspecting the bytes
+  bytes          Int
+  sha256         String   @unique
+  width          Int?     // image
+  height         Int?     // image
+  durationSec    Float?   // audio (≤ 180 s)
+  createdBy      String?
+  createdAt      DateTime @default(now())
+
+  steps    DemoChatJourneyStep[]
+  versions DemoChatVersionAsset[]
+  messages DemoChatMessage[]
+
+  @@index([kind])
+  @@map("demo_chat_assets")
+}
+
+/// Which assets a published version uses (blocks deleting a used asset).
+model DemoChatVersionAsset {
+  versionId String
+  assetId   String
+
+  version DemoChatJourneyVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  asset   DemoChatAsset          @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@id([versionId, assetId])
+  @@index([assetId])
+  @@map("demo_chat_version_assets")
+}
+
+/// One published version per demo profile. Disabled by default; a new version
+/// or a new anchor date bumps `revision` (profile identity/history untouched).
+model DemoChatAssignment {
+  id              String    @id @default(uuid())
+  demoAffiliateId String    @unique
+  versionId       String
+  anchorDate      DateTime  @db.Date // Casablanca calendar date of journey day 1
+  revision        Int       @default(1)
+  enabled         Boolean   @default(false)
+  enabledAt       DateTime?
+  updatedBy       String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  demoAffiliate DemoAffiliate          @relation(fields: [demoAffiliateId], references: [id], onDelete: Restrict)
+  version       DemoChatJourneyVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  messages      DemoChatMessage[]
+
+  @@index([versionId])
+  @@index([enabled])
+  @@map("demo_chat_assignments")
+}
+
+/// One materialised occurrence of a published step. The unique key makes
+/// creation idempotent across retries, concurrent requests and restarts.
+model DemoChatMessage {
+  id               String   @id @default(uuid())
+  assignmentId     String
+  demoAffiliateId  String
+  versionId        String
+  revision         Int
+  loopIndex        Int      // 0-based 30-day loop
+  day              Int      // 1–30
+  stepId           String   // stable id inside the version's steps JSON
+  position         Int      @default(0)
+  scheduledAt      DateTime // UTC instant of the Casablanca scheduled time
+  type             String   // "text" | "image" | "audio" | "earnings"
+  text             String?
+  assetId          String?
+  earningsPeriod   String?
+  metric           String?
+  earningsSnapshot Json?    // audit only; amounts are re-resolved on read
+  createdAt        DateTime @default(now())
+
+  assignment    DemoChatAssignment     @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  demoAffiliate DemoAffiliate          @relation(fields: [demoAffiliateId], references: [id], onDelete: Restrict)
+  version       DemoChatJourneyVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  asset         DemoChatAsset?         @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@unique([assignmentId, revision, loopIndex, stepId])
+  @@index([demoAffiliateId, revision, scheduledAt])
+  @@index([versionId])
+  @@index([assetId])
+  @@map("demo_chat_messages")
+}
+
+/// Per real affiliate read state for a demo conversation (no message copies).
+model DemoChatViewerState {
+  id                String    @id @default(uuid())
+  demoAffiliateId   String
+  viewerAffiliateId String
+  firstOpenedAt     DateTime  @default(now())
+  lastReadAt        DateTime?
+  updatedAt         DateTime  @updatedAt
+
+  demoAffiliate DemoAffiliate @relation(fields: [demoAffiliateId], references: [id], onDelete: Restrict)
+  viewer        Affiliate     @relation(fields: [viewerAffiliateId], references: [id], onDelete: Cascade)
+
+  @@unique([demoAffiliateId, viewerAffiliateId])
+  @@index([viewerAffiliateId])
+  @@map("demo_chat_viewer_states")
+}
+
+/// Append-only audit trail of admin actions on demo chat (no viewer message bodies).
+model DemoChatAuditLog {
+  id         String   @id @default(uuid())
+  action     String
+  entityType String
+  entityId   String?
+  actorType  String   @default("ADMIN")
+  actorId    String?
+  before     Json?
+  after      Json?
+  reason     String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("demo_chat_audit_log")
+}
+
+/// Demo simulation coverage per history bucket day. `day` uses the SAME bucket
+/// convention as demo_earnings_history.date (3C-0: all stored rows are 00:00
+/// UTC → the UTC calendar date). Lets "no row" be shown as 0 only when the
+/// simulation demonstrably ran through the whole bucket day. No foreign keys.
+model DemoSimDayCoverage {
+  day         DateTime @id @db.Date
+  firstTickAt DateTime
+  lastTickAt  DateTime
+  tickCount   Int      @default(0)
+  maxGapSec   Int      @default(0)
+  updatedAt   DateTime @updatedAt
+
+  @@map("demo_sim_day_coverage")
 }
