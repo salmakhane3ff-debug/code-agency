@@ -462,9 +462,9 @@ function DemoManagementPanel() {
       });
       const d = await r.json();
       if (!r.ok) { setMsg({ type: 'err', text: d.error || 'Erreur' }); return; }
-      setMsg({ type: 'ok', text: busyKey === 'generate' ? `${d.generated} affiliés générés ✓`
+      setMsg({ type: 'ok', text: busyKey === 'generate' ? `${d.generated} profils actifs ✓ (${d.created ?? 0} créés, ${d.reactivated ?? 0} réactivés, ${d.deactivated ?? 0} masqués)`
                                 : busyKey === 'simulate' ? `Tick effectué : +${d.orders ?? 0} commande(s) ✓`
-                                : 'Compétition réinitialisée ✓' });
+                                : `Nouveau cycle #${d.cycle ?? '—'} ✓ (cycle #${d.archived ?? '—'} archivé)` });
       await fetchInfo();
     } catch { setMsg({ type: 'err', text: 'Erreur réseau' }); }
     finally { setBusy(null); setTimeout(() => setMsg(null), 3500); }
@@ -610,6 +610,7 @@ function DemoManagementPanel() {
               {/* Generate */}
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-gray-600">Générer des affiliés</label>
+                <p className="text-[10px] text-gray-400">Profils existants conservés (même identité) · complète ou masque jusqu'au nombre choisi</p>
                 <div className="flex gap-2">
                   <input
                     type="number" min={10} max={100}
@@ -664,7 +665,7 @@ function DemoManagementPanel() {
                 <button
                   type="button"
                   onClick={() => {
-                    if (!confirm('Réinitialiser toute la compétition ? Les stats seront remises à zéro.')) return;
+                    if (!confirm('Démarrer un nouveau cycle ? Le classement actuel est archivé, les scores repartent à zéro. L\'historique est conservé.')) return;
                     post('/api/admin/demo/reset', null, 'reset');
                   }}
                   disabled={!!busy}
@@ -673,7 +674,43 @@ function DemoManagementPanel() {
                   {busy === 'reset' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
                   Nouveau cycle
                 </button>
+                <p className="text-[10px] text-gray-400">Automatique tous les 30 jours · historique conservé</p>
               </div>
+            </div>
+
+            {/* Archived cycles (kept across resets; deleted only explicitly) */}
+            <div className="rounded-xl border border-gray-100 bg-gray-50 p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold text-gray-600">Historique des cycles ({(info?.history || []).length})</p>
+                <button
+                  type="button"
+                  disabled={!!busy || !(info?.history || []).length}
+                  onClick={async () => {
+                    if (!confirm('Supprimer DÉFINITIVEMENT l\'historique des cycles et l\'historique des gains démo ?')) return;
+                    if (prompt('Tapez SUPPRIMER pour confirmer') !== 'SUPPRIMER') return;
+                    setBusy('history'); setMsg(null);
+                    try {
+                      const r = await fetch('/api/admin/demo/history', {
+                        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ confirm: 'DELETE_HISTORY' }),
+                      });
+                      const d = await r.json();
+                      setMsg(r.ok ? { type: 'ok', text: `Historique supprimé (${d.deletedCycles} cycle(s))` } : { type: 'err', text: d.error || 'Erreur' });
+                      await fetchInfo();
+                    } catch { setMsg({ type: 'err', text: 'Erreur réseau' }); }
+                    finally { setBusy(null); }
+                  }}
+                  className="text-[11px] font-bold text-red-600 hover:text-red-700 disabled:opacity-40"
+                >
+                  Supprimer l'historique
+                </button>
+              </div>
+              {(info?.history || []).slice(0, 5).map((h) => (
+                <p key={h.cycleNum} className="text-[11px] text-gray-500">
+                  #{h.cycleNum} · {new Date(h.startDate).toLocaleDateString('fr-FR')} → {new Date(h.endDate).toLocaleDateString('fr-FR')}
+                  {' '}· {h.reason === 'manual' ? 'manuel' : 'auto'} · 🥇 {h.top?.[0]?.name ?? '—'}
+                </p>
+              ))}
             </div>
 
             {/* Feedback */}

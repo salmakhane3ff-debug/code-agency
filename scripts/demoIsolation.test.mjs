@@ -17,7 +17,8 @@
  *   • Avatar library is PERMANENT — survives regeneration + simulation ticks
  *   • Each demo affiliate keeps ONE persisted avatarUrl (never re-randomized)
  *   • Deleting a library avatar leaves assigned affiliate.avatarUrl intact
- *   • New cycle (reset) clears ONLY demo stats, including the 4 UGC fields
+ *   • New cycle (reset) clears ONLY demo stats, including the 4 UGC fields,
+ *     archives the standings and KEEPS the earnings history (Phase 3A)
  * Run: node scripts/demoIsolation.test.mjs
  * ─────────────────────────────────────────────────────────────────────────────
  */
@@ -58,6 +59,7 @@ function makeFakeDb() {
     demoEarningsHistory: [],
     demoCompetition: [],
     demoSettings: [],
+    setting: [], // ONLY demo-competition-cycle:* archive rows are allowed
   };
 
   // Apply data honouring Prisma's { increment } shape.
@@ -121,6 +123,7 @@ function makeFakeDb() {
         if (select) { const o = {}; for (const k of Object.keys(select)) o[k] = aff[k]; return o; }
         return attachIncludes(aff, include);
       },
+      update: async ({ where, data }) => { const r = store.demoAffiliate.find((x) => matches(x, where)); if (!r) throw new Error("affiliate not found"); applyData(r, data); return { ...r }; },
       findMany: async ({ where, include, orderBy, take } = {}) => {
         let rows = store.demoAffiliate.filter((x) => (where ? matches(x, where) : true)).map((a) => attachIncludes(a, include));
         if (orderBy?.stats?.totalOrders === "desc") rows = rows.sort((a, b) => (b.stats?.totalOrders || 0) - (a.stats?.totalOrders || 0));
@@ -156,6 +159,22 @@ function makeFakeDb() {
         if (r) applyData(r, update); else { r = { ...create }; store.demoCompetition.push(r); }
         return { ...r };
       },
+      update: async ({ where, data }) => { const r = store.demoCompetition.find((x) => matches(x, where)); if (!r) throw new Error("competition not found"); applyData(r, data); return { ...r }; },
+    },
+    setting: {
+      create: async ({ data }) => {
+        if (!String(data.id).startsWith("demo-competition-cycle:")) throw new Error(`PRODUCTION SETTING WRITE BLOCKED: ${data.id}`);
+        if (store.setting.some((r) => r.id === data.id)) throw Object.assign(new Error("unique"), { code: "P2002" });
+        store.setting.push({ ...data }); return { ...data };
+      },
+      findMany: async ({ where }) => store.setting.filter((r) => r.id.startsWith(where.id.startsWith)).map((r) => ({ ...r })),
+      deleteMany: async ({ where }) => { const before = store.setting.length; store.setting = store.setting.filter((r) => !r.id.startsWith(where.id.startsWith)); return { count: before - store.setting.length }; },
+    },
+    // Interactive transaction (single-threaded fake) + the competition row lock.
+    $transaction: async (fn) => fn(db),
+    $queryRaw: async (strings) => {
+      if (!/FROM "demo_competition"/.test(strings.join("?"))) throw new Error("unexpected raw query");
+      return store.demoCompetition.filter((r) => r.id === "current").map((r) => ({ ...r }));
     },
     demoSettings: {
       findUnique: async ({ where }) => { const r = store.demoSettings.find((x) => matches(x, where)); return r ? { ...r } : null; },
@@ -326,7 +345,11 @@ async function main() {
     // Affiliates + avatars persist across the cycle (only STATS reset).
     ok("demo affiliates persist across reset", store.demoAffiliate.length === 8);
     ok("avatar library persists across reset", store.demoAvatar.length === 4);
-    ok("history cleared on reset(true)", store.demoEarningsHistory.length === 0);
+    // Phase 3A: a reset ARCHIVES the cycle and KEEPS the history (deleting it is
+    // the separate clearCompetitionHistory action) — this replaces the former
+    // "history cleared on reset(true)" expectation.
+    ok("history KEPT on reset (separate explicit deletion)", store.demoEarningsHistory.length > 0);
+    ok("previous cycle archived on reset", store.setting.some((r) => r.id === "demo-competition-cycle:1"));
   }
 
   console.log("9) New BUSINESS DAY resets 'today' buckets to 0; totals persist:");

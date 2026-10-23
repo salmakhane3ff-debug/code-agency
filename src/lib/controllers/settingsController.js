@@ -16,6 +16,7 @@ import { badRequest, serverError } from '../utils/apiResponse.js';
 import { REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID } from '../rewards.js';
 import { mergeSettings } from '../settingsMerge.js';
 import { AFFILIATE_DASHBOARD_SETTING_ID } from '../affiliateDashboardConfig.js';
+import { CYCLE_ARCHIVE_PREFIX } from '../demoCompetitionCycle.js';
 
 /**
  * Settings rows that have their own service and must never be written raw:
@@ -81,7 +82,8 @@ export async function upsertSettingsHandler(req) {
   try {
     const { searchParams } = new URL(req.url);
     const type = searchParams.get('type') || 'store';
-    if (RESERVED_SETTING_TYPES.has(type)) {
+    // Archived demo competition cycles are written only by demoService.
+    if (RESERVED_SETTING_TYPES.has(type) || type.startsWith(CYCLE_ARCHIVE_PREFIX)) {
       return badRequest('Ce paramètre se modifie uniquement depuis sa page dédiée.');
     }
     const body = await req.json();
