@@ -494,7 +494,7 @@ function DemoManagementPanel() {
         <Trophy className="w-5 h-5 text-indigo-600" />
         <div>
           <h2 className="text-sm font-bold text-gray-900">Système de Compétition Démo</h2>
-          <p className="text-xs text-gray-500">Gérez les affiliés fictifs et les cycles de compétition</p>
+          <p className="text-xs text-gray-500">Gérez les affiliés fictifs et les cycles de compétition · <a href="/admin/demo-profiles" className="font-semibold text-indigo-600 hover:underline">Gérer les profils démo →</a></p>
         </div>
         {s && (
           <button

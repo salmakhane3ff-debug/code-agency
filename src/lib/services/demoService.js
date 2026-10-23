@@ -31,6 +31,8 @@ import {
 // Tests swap in an in-memory fake via __setDemoDb — proving isolation without a DB.
 let _db = prisma;
 export function __setDemoDb(db) { _db = db || prisma; }
+/** The demo DB seam, for the other demo services (profile management). */
+export function getDemoDb() { return _db; }
 
 // ── Name pools (Moroccan market), split by gender for men/women/mixed modes ─────
 const MALE_NAMES = [
@@ -54,7 +56,7 @@ const AVATAR_COLORS = [
 ];
 
 // ── Growth parameters ─────────────────────────────────────────────────────────
-const GROWTH = {
+export const GROWTH = {
   aggressive: { ordersRange: [4, 12], revenuePerOrder: [200, 500], teamGrowthChance: 0.4, cancelRate: 0.05 },
   consistent: { ordersRange: [2, 5],  revenuePerOrder: [120, 320], teamGrowthChance: 0.2, cancelRate: 0.10 },
   slow:       { ordersRange: [0, 2],  revenuePerOrder: [80,  200], teamGrowthChance: 0.1, cancelRate: 0.15 },
@@ -62,7 +64,7 @@ const GROWTH = {
 
 const SPEED_MULT = { slow: 0.4, medium: 1, fast: 2.8 };
 
-const COMMISSION_RATE = 0.05; // 5% parent earns from team
+export const COMMISSION_RATE = 0.05; // 5% parent earns from team
 const DEMO_UGC_COMMISSION = 5; // MAD per simulated UGC sale (demo-only, never a real rate)
 
 function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
@@ -319,7 +321,7 @@ export async function ensureCompetition({ db = _db, now = Date.now() } = {}) {
 // ── Recalculate ranks ─────────────────────────────────────────────────────────
 
 // Current standings of the ACTIVE profiles under the single ranking rule.
-async function currentStandings(db = _db) {
+export async function currentStandings(db = _db) {
   const rows = await db.demoAffiliate.findMany({ where: { isActive: true }, include: { stats: true } });
   return rankStandings(rows.filter((a) => a.stats).map((a) => ({
     id: a.id, affiliate: a, stats: a.stats,
