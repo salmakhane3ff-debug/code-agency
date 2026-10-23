@@ -21,6 +21,8 @@ import { createSaleSound } from "./saleSound";
 import { resolveSupportLink } from "@/lib/whatsappSupport";
 import { useLanguage } from "@/context/LanguageContext";
 import { orderStatusErrorMessage, shouldRefreshOrdersAfter, orderMessageDir } from "@/lib/affiliateOrderMessages";
+import { hiddenDashboardTabs } from "@/lib/affiliateDashboardConfig";
+import { resolveGoal, goalPercent } from "@/lib/affiliateGoals";
 
 // Live feed: the gap BETWEEN background polls (measured after the previous poll
 // finishes, so requests can never stack up). ~3s gives near-instant sale
@@ -205,7 +207,7 @@ function ReferralCta({ link, ratePct }) {
 // ── Mobile bottom navigation (mobile/tablet only, ≤768px) ──────────────────────
 // Additive: the existing desktop header + tab bar are untouched. Reuses the same
 // tabs/actions and the SAME referral link (center button copies it, no new URL).
-function MobileBottomNav({ activeTab, setActiveTab, refLink, onLogout, unread = 0, onOpenNotifications }) {
+function MobileBottomNav({ activeTab, setActiveTab, refLink, onLogout, unread = 0, onOpenNotifications, hiddenTabs = [] }) {
   const router = useRouter();
   const [toast, setToast] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -234,7 +236,7 @@ function MobileBottomNav({ activeTab, setActiveTab, refLink, onLogout, unread = 
     { icon: Building2,   label: "المعلومات البنكية", tab: "bank" },
     { icon: Bell,        label: "الإشعارات",      tab: "notifications", badge: unread },
     { icon: Settings,    label: "الإعدادات",      tab: "settings" },
-  ];
+  ].filter((item) => !hiddenTabs.includes(item.tab)); // admin visibility toggles
 
   const NavItem = ({ icon: Icon, label, active, onClick, dot }) => (
     <button type="button" onClick={onClick} className="relative flex-1 flex flex-col items-center gap-1 py-1.5 focus:outline-none">
@@ -1589,6 +1591,12 @@ export default function AffiliateDashboard() {
     } catch {}
   };
 
+  // A tab the admin hides while it is open (picked up by the live poll) falls
+  // back to the overview instead of leaving an empty page.
+  useEffect(() => {
+    if (hiddenDashboardTabs(data?.dashboard).includes(activeTab)) setActiveTab("overview");
+  }, [activeTab, data?.dashboard]);
+
   // ── Guard ────────────────────────────────────────────────────────────────
   if (!affiliateId || loading) {
     return (
@@ -1658,7 +1666,16 @@ export default function AffiliateDashboard() {
   // UGC progression (validated = admin-approved). Target from admin config (not
   // hardcoded); refreshed by the live poll like every other progression value.
   const ugcValidated = stats?.ugcValidated ?? 0;
-  const ugcGoal      = bonusConfig?.ugcGoal || 5;
+  // Goals: 0 = hidden by the admin, missing/invalid = existing default (5).
+  const ugcGoalInfo    = resolveGoal(bonusConfig?.ugcGoal, 5);
+  const ugcGoal        = ugcGoalInfo.target;
+  const ordersGoalInfo = resolveGoal(affiliate?.goalOrders, 5);
+  const referralGoalHidden = gami?.hidden === true;
+
+  // Admin visibility toggles (display only — APIs and eligibility unchanged).
+  const hiddenTabs     = hiddenDashboardTabs(data?.dashboard);
+  const depositVisible = !hiddenTabs.includes("deposit");
+  const boosterVisible = !hiddenTabs.includes("booster");
 
   // WhatsApp support link (null when disabled / no number → button hidden).
   const supportLink = resolveSupportLink(supportCfg, {
@@ -1689,7 +1706,7 @@ export default function AffiliateDashboard() {
     { id: "notifications", label: `Notifs ${unread > 0 ? `(${unread})` : ""}` },
     { id: "team",          label: `Équipe (${team.length})` },
     { id: "settings",      label: "Paramètres" },
-  ];
+  ].filter((t) => !hiddenTabs.includes(t.id));
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -1840,7 +1857,8 @@ export default function AffiliateDashboard() {
                     </svg>
                   </div>
 
-                  {/* Orders progress */}
+                  {/* Orders progress (hidden when the goal is set to 0) */}
+                  {!referralGoalHidden && (
                   <div>
                     <p className="mb-1.5 text-xs font-bold">
                       {stats?.validReferrals ?? 0} / {gami?.target || 5} parrainages valides
@@ -1850,20 +1868,24 @@ export default function AffiliateDashboard() {
                         style={{ width: `${gami?.progress || 0}%` }} />
                     </div>
                   </div>
+                  )}
 
                   {/* Orders objective — counts delivered orders only (same basis as commissions) */}
+                  {!ordersGoalInfo.hidden && (
                   <div>
                     <p className="mb-1.5 text-xs font-bold">
-                      {affiliate?.deliveredOrdersCount ?? 0} / {affiliate?.goalOrders || 5} commandes
+                      {affiliate?.deliveredOrdersCount ?? 0} / {ordersGoalInfo.target} commandes
                     </p>
                     <div className="w-full overflow-hidden rounded-full h-2" style={{ background: "rgba(255,255,255,0.25)" }}>
                       <div className="h-full rounded-full bg-white transition-all duration-700"
-                        style={{ width: `${Math.min(100, ((affiliate?.deliveredOrdersCount ?? 0) / (affiliate?.goalOrders || 5)) * 100)}%` }} />
+                        style={{ width: `${goalPercent(affiliate?.deliveredOrdersCount ?? 0, ordersGoalInfo.target)}%` }} />
                     </div>
                   </div>
+                  )}
 
                   {/* UGC validated videos — click → UGC page. Only admin-approved
                       (APPROVED/RUNNING) videos count; pending/rejected excluded. */}
+                  {!ugcGoalInfo.hidden && (
                   <button onClick={goToUgc} title="Vidéos UGC validées" className="block w-full text-left">
                     <p className="mb-1.5 text-xs font-bold flex items-center justify-between gap-2">
                       <span>🎬 {ugcValidated} / {ugcGoal} vidéos UGC validées</span>
@@ -1871,9 +1893,10 @@ export default function AffiliateDashboard() {
                     </p>
                     <div className="w-full overflow-hidden rounded-full h-2" style={{ background: "rgba(255,255,255,0.25)" }}>
                       <div className="h-full rounded-full bg-white transition-all duration-700"
-                        style={{ width: `${Math.min(100, (ugcValidated / Math.max(1, ugcGoal)) * 100)}%` }} />
+                        style={{ width: `${goalPercent(ugcValidated, ugcGoal)}%` }} />
                     </div>
                   </button>
+                  )}
 
                   {/* Identity verification condition — click → Paramètres → Vérification */}
                   <button
@@ -1917,7 +1940,7 @@ export default function AffiliateDashboard() {
             </div>
 
             {/* 🚀 Active Booster widget → opens the Booster page */}
-            {activeBoosters.map((b) => (
+            {boosterVisible && activeBoosters.map((b) => (
               <button key={b.id} onClick={() => setActiveTab("booster")} className="w-full text-left">
                 <div dir="rtl" className="rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-600 text-white p-4 hover:brightness-110 transition-all">
                   <div className="flex items-center justify-between gap-2">
@@ -1944,6 +1967,7 @@ export default function AffiliateDashboard() {
             ))}
 
             {/* ── 💰 Dépôt de solde — balance top-up (credited after validation) ── */}
+            {depositVisible && (
             <button onClick={goToDeposit} className="w-full text-left">
               <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4 flex items-center justify-between gap-3 hover:bg-indigo-50 transition-colors">
                 <div>
@@ -1961,6 +1985,7 @@ export default function AffiliateDashboard() {
                 <svg className="w-4 h-4 text-indigo-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg>
               </div>
             </button>
+            )}
 
             {/* ── UGC (simulated video sales) — separate source, never mixed ── */}
             <div className="flex items-center gap-2 px-0.5 pt-1">
@@ -2952,11 +2977,11 @@ export default function AffiliateDashboard() {
         })()}
 
         {/* ══ COMPETITION ═══════════════════════════════════════════════════ */}
-        {activeTab === "deposit" && (
+        {activeTab === "deposit" && depositVisible && (
           <DepositTab token={token} onChanged={() => fetchAll(token, { silent: true })} />
         )}
 
-        {activeTab === "booster" && <BoosterTab onRecharge={goToDeposit} />}
+        {activeTab === "booster" && boosterVisible && <BoosterTab onRecharge={depositVisible ? goToDeposit : undefined} />}
 
         {activeTab === "rewards" && <RewardsTab />}
 
@@ -3123,6 +3148,7 @@ export default function AffiliateDashboard() {
         onLogout={handleLogout}
         unread={unread}
         onOpenNotifications={markNotifsRead}
+        hiddenTabs={hiddenTabs}
       />
 
     </div>

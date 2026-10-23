@@ -1,10 +1,13 @@
 /**
  * GET  /api/admin/team-bonus-config  → returns current config
- * POST /api/admin/team-bonus-config  → saves new config
+ * POST /api/admin/team-bonus-config  → validates, then MERGES into the stored
+ *                                       config (keys not sent — e.g. ugcGoal,
+ *                                       securityDepositAmount — are kept)
  */
 
 import { getTeamBonusConfig, saveTeamBonusConfig } from '@/lib/services/affiliateSystemService';
 import { withAdminAuth } from '@/lib/middleware/withAdminAuth';
+import { validateTeamBonusConfigInput } from '@/lib/teamBonusConfigValidation';
 
 export const GET = withAdminAuth(async () => {
   try {
@@ -18,19 +21,13 @@ export const GET = withAdminAuth(async () => {
 
 export const POST = withAdminAuth(async (req) => {
   try {
-    const body = await req.json();
-    const { requiredActiveAffiliates, bonusAmount, commissionTiers } = body;
-
-    if (
-      typeof requiredActiveAffiliates !== 'number' ||
-      typeof bonusAmount !== 'number' ||
-      !Array.isArray(commissionTiers) ||
-      commissionTiers.length === 0
-    ) {
-      return Response.json({ error: 'Données invalides' }, { status: 400 });
+    const body = await req.json().catch(() => null);
+    const v = validateTeamBonusConfigInput(body);
+    if (!v.ok) {
+      return Response.json({ error: v.error, field: v.field }, { status: 400 });
     }
 
-    const saved = await saveTeamBonusConfig({ requiredActiveAffiliates, bonusAmount, commissionTiers });
+    const saved = await saveTeamBonusConfig(v.patch);
     return Response.json(saved);
   } catch (err) {
     console.error('team-bonus-config POST error:', err);

@@ -14,6 +14,8 @@ import {
 } from '../services/settingsService.js';
 import { badRequest, serverError } from '../utils/apiResponse.js';
 import { REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID } from '../rewards.js';
+import { mergeSettings } from '../settingsMerge.js';
+import { AFFILIATE_DASHBOARD_SETTING_ID } from '../affiliateDashboardConfig.js';
 
 /**
  * Settings rows that have their own service and must never be written raw:
@@ -22,7 +24,19 @@ import { REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID } from '../rewards.js';
  * timestamps and writes the audit log. A raw write would bypass all three.
  * 'rewards-reconcile-state' holds reconcile's resume cursors (system-managed).
  */
-const RESERVED_SETTING_TYPES = new Set([REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID]);
+const RESERVED_SETTING_TYPES = new Set([
+  REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID,
+  // Validated + merged by their dedicated admin routes
+  // (/api/admin/team-bonus-config, /api/admin/affiliate-dashboard-config).
+  'team-bonus-config', AFFILIATE_DASHBOARD_SETTING_ID,
+]);
+
+/**
+ * Rows saved as a PARTIAL update (atomic top-level JSONB merge) instead of a
+ * whole-row replace: keys the admin form does not send — e.g. the landing's
+ * tracking counters written concurrently by /api/tsajlim3ana/track — are kept.
+ */
+const MERGE_SETTING_TYPES = new Set(['booster-packages', 'recruitment-landing']);
 
 // ── Generic settings (/api/setting) ──────────────────────────────────────────
 
@@ -72,7 +86,9 @@ export async function upsertSettingsHandler(req) {
     }
     const body = await req.json();
 
-    const saved = await upsertSettings(type, body);
+    const saved = MERGE_SETTING_TYPES.has(type)
+      ? await mergeSettings(type, body)
+      : await upsertSettings(type, body);
     return Response.json({ message: 'Saved', data: { ...saved, _id: type } });
   } catch (err) {
     console.error('Settings POST error:', err);

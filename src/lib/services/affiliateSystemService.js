@@ -13,6 +13,8 @@ import {
 } from '../balance/providerRegistry.js';
 import { serializeAmount, toDecimal } from '../balance/composeBalance.js';
 import { deleteAffiliateSafely } from '../affiliateDeletion.js';
+import { mergeSettings } from '../settingsMerge.js';
+import { parseGoalInput } from '../affiliateGoals.js';
 // Rewards points (separate currency) — post-commit hooks only; they never throw.
 import { onAffiliateOrderStatusCommitted, onAffiliateActivationCommitted } from '../rewardsHooks.js';
 // ── TEMPORARY WIRING (refinement #1) ──────────────────────────────────────────
@@ -934,6 +936,11 @@ export async function getAffiliateDashboardStats(affiliateId) {
  * Target scales down as the team grows (max reduction: -2 per 2 members, floor 3).
  */
 export function computeGamification(validReferrals, teamSize, explicitTarget) {
+  // Goal explicitly set to 0 by the admin → hidden on the dashboard (no target,
+  // no progress — nothing to aggregate).
+  if (explicitTarget === 0) {
+    return { hidden: true, target: 0, progress: 0, remaining: 0, validReferrals };
+  }
   // Per-affiliate "Objectif parrainages valides" wins when set; otherwise the
   // existing computed target behavior is preserved unchanged.
   const target = (Number.isInteger(explicitTarget) && explicitTarget > 0)
@@ -957,8 +964,8 @@ const DEFAULT_BONUS_CONFIG = {
   ],
 };
 
-export async function getTeamBonusConfig() {
-  const setting = await prisma.setting.findUnique({ where: { id: 'team-bonus-config' } });
+export async function getTeamBonusConfig({ db = prisma } = {}) {
+  const setting = await db.setting.findUnique({ where: { id: 'team-bonus-config' } });
   if (!setting?.data) return DEFAULT_BONUS_CONFIG;
   const d = setting.data;
   const ugcGoal = parseInt(d.ugcGoal, 10);
@@ -966,7 +973,8 @@ export async function getTeamBonusConfig() {
   return {
     requiredActiveAffiliates: d.requiredActiveAffiliates ?? DEFAULT_BONUS_CONFIG.requiredActiveAffiliates,
     bonusAmount:               d.bonusAmount              ?? DEFAULT_BONUS_CONFIG.bonusAmount,
-    ugcGoal:                   Number.isFinite(ugcGoal) && ugcGoal > 0 ? ugcGoal : DEFAULT_BONUS_CONFIG.ugcGoal,
+    // 0 = UGC goal hidden on the dashboard; missing/invalid/negative → default.
+    ugcGoal:                   Number.isFinite(ugcGoal) && ugcGoal >= 0 ? ugcGoal : DEFAULT_BONUS_CONFIG.ugcGoal,
     securityDepositAmount:     Number.isFinite(depositAmount) && depositAmount > 0 ? depositAmount : DEFAULT_BONUS_CONFIG.securityDepositAmount,
     commissionTiers:           Array.isArray(d.commissionTiers) && d.commissionTiers.length > 0
       ? d.commissionTiers
@@ -974,13 +982,12 @@ export async function getTeamBonusConfig() {
   };
 }
 
-export async function saveTeamBonusConfig(data) {
-  const saved = await prisma.setting.upsert({
-    where:  { id: 'team-bonus-config' },
-    update: { data },
-    create: { id: 'team-bonus-config', data },
-  });
-  return saved.data;
+/**
+ * Partial, race-safe save: `patch` is merged into the stored row, so keys the
+ * caller did not send (ugcGoal, securityDepositAmount, unknown keys) are kept.
+ */
+export async function saveTeamBonusConfig(patch, { db = prisma } = {}) {
+  return mergeSettings('team-bonus-config', patch, { db });
 }
 
 /** Returns the commission % for this member based on their delivered count */
@@ -1062,9 +1069,10 @@ export async function adminCreateAffiliate({ name, username, password, commissio
     validParentId = parentId;
   }
 
-  // Optional per-affiliate objectives — stored only when a valid integer is given.
-  const parsedGoalOrders         = parseInt(goalOrders, 10);
-  const parsedGoalValidReferrals = parseInt(goalValidReferrals, 10);
+  // Optional per-affiliate objectives — stored only when a valid integer is given
+  // (0 = hidden on the dashboard). Negative values are refused (INVALID_GOAL).
+  const parsedGoalOrders         = parseGoalInput(goalOrders, 'Objectif commandes');
+  const parsedGoalValidReferrals = parseGoalInput(goalValidReferrals, 'Objectif parrainages valides');
 
   const hashed = await hashPassword(password);
   const a = await prisma.affiliate.create({
@@ -1096,13 +1104,12 @@ export async function adminUpdateAffiliate(id, data, { db = prisma } = {}) {
   }
   // Per-affiliate objectives — only touched when present in the payload (so the
   // quick active-toggle never wipes them). Empty/invalid → null = dashboard fallback.
+  // 0 = hidden on the dashboard; negative → INVALID_GOAL (nothing is written).
   if (data.goalOrders !== undefined) {
-    const n = parseInt(data.goalOrders, 10);
-    update.goalOrders = Number.isInteger(n) ? n : null;
+    update.goalOrders = parseGoalInput(data.goalOrders, 'Objectif commandes');
   }
   if (data.goalValidReferrals !== undefined) {
-    const n = parseInt(data.goalValidReferrals, 10);
-    update.goalValidReferrals = Number.isInteger(n) ? n : null;
+    update.goalValidReferrals = parseGoalInput(data.goalValidReferrals, 'Objectif parrainages valides');
   }
   const before = update.isActive === true
     ? await db.affiliate.findUnique({ where: { id }, select: { isActive: true } })
