@@ -9,8 +9,13 @@
  * UGC rows show ONLY: name, number of videos, total sales, total earnings
  * (earnings come from the server as sales × commissionPerSale). Never views,
  * likes, product names or city — per the UGC display rules.
+ *
+ * The feed is SIMULATED: the disclosure below is always rendered (it does not
+ * depend on the API payload) and each row's time comes from the event's true
+ * timestamp (relative label + Casablanca clock in the tooltip).
  */
 import { useEffect, useRef, useState } from "react";
+import { LIVE_ACTIVITY_DISCLOSURE } from "@/lib/liveActivityTime";
 
 const STAT_META = [
   { key: "todayOrders",      icon: "🛍️", label: "طلبات اليوم",   bg: "bg-rose-50",    fg: "text-rose-500" },
@@ -66,6 +71,14 @@ function Avatar({ ev }) {
   );
 }
 
+function SimulatedBadge() {
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-black">
+      🧪 محاكاة
+    </span>
+  );
+}
+
 function ActivityRow({ ev, animate }) {
   const earned = (ev.type === "delivered" || ev.type === "commission") && ev.amount ? `ربحت ${ev.amount} درهم` : null;
   return (
@@ -92,7 +105,10 @@ function ActivityRow({ ev, animate }) {
           </>
         )}
       </div>
-      <span className="text-[11px] text-gray-400 shrink-0 whitespace-nowrap">{ev.time}</span>
+      <time
+        dateTime={Number.isFinite(ev.at) ? new Date(ev.at).toISOString() : undefined}
+        title={ev.clock ? `${ev.clock} (توقيت المغرب)` : undefined}
+        className="text-[11px] text-gray-400 shrink-0 whitespace-nowrap">{ev.time}</time>
     </div>
   );
 }
@@ -134,6 +150,7 @@ export default function LiveActivity({ pollMs = 4000, windowSize = 3, showViewAl
             <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" /> LIVE
           </span>
           <h2 className="text-base sm:text-lg font-black text-gray-900">🔥 النشاط المباشر</h2>
+          <SimulatedBadge />
         </div>
         {showViewAll && (
           <button type="button" onClick={() => setOpen(true)}
@@ -142,6 +159,11 @@ export default function LiveActivity({ pollMs = 4000, windowSize = 3, showViewAl
           </button>
         )}
       </div>
+
+      {/* Simulation disclosure — covers the counters and the feed below. */}
+      <p data-live-activity-disclosure className="text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 mb-4">
+        ⚠️ {LIVE_ACTIVITY_DISCLOSURE}
+      </p>
 
       {/* Live counters */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 mb-4">
@@ -158,7 +180,7 @@ export default function LiveActivity({ pollMs = 4000, windowSize = 3, showViewAl
       </div>
 
       {/* Feed — compact (≈3–4 rows); full history lives in "عرض الكل" */}
-      <p className="text-xs text-gray-400 mb-2">أخر الأنشطة داخل المنصة لحظة بلحظة</p>
+      <p className="text-xs text-gray-400 mb-2">آخر الأنشطة التجريبية (محاكاة)</p>
       <div className="space-y-2.5">
         {events.slice(0, windowSize).map((ev, i) => <ActivityRow key={ev.id || i} ev={ev} animate={i === 0} />)}
         {events.length === 0 && <p className="text-center text-sm text-gray-400 py-6">المنصة نشيطة، الأنشطة غادي تبان دابا…</p>}
@@ -175,9 +197,10 @@ export default function LiveActivity({ pollMs = 4000, windowSize = 3, showViewAl
           <div className="absolute inset-0 bg-black/40" />
           <div dir="rtl" className="relative w-full sm:max-w-md max-h-[80vh] bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col animate-[laUp_0.3s_ease]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-              <h3 className="text-sm font-black text-gray-900">🔥 كل الأنشطة</h3>
+              <h3 className="text-sm font-black text-gray-900 flex items-center gap-2">🔥 كل الأنشطة <SimulatedBadge /></h3>
               <button type="button" onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-700 text-lg leading-none">✕</button>
             </div>
+            <p className="text-[11px] font-semibold text-amber-800 bg-amber-50 px-5 py-2">⚠️ {LIVE_ACTIVITY_DISCLOSURE}</p>
             <div className="overflow-y-auto px-4 py-3 space-y-2.5">
               {events.map((ev, i) => <ActivityRow key={ev.id || i} ev={ev} animate={false} />)}
             </div>

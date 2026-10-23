@@ -18,23 +18,47 @@
  * State is kept in the `live-activity-state` settings row (durable across
  * restarts) plus a short in-memory cache to bound reads/writes. Counters reset at
  * the business-day boundary and whenever the admin bumps the reset token.
+ *
+ * SIMULATED feed — every served payload and event carries `simulated: true` and
+ * the UI shows a permanent disclosure. Time rules (src/lib/liveActivityTime.js):
+ *   • Africa/Casablanca for the business day, delivery hours and clock labels
+ *   • delivery-related events only at 08:00 ≤ Casablanca time < 20:00
+ *   • every event keeps its TRUE timestamp (catch-up ticks are back-dated to the
+ *     tick they stand for, never stamped "now")
+ * Concurrency: one generation at a time — a single-flight promise per process
+ * and a transaction-scoped Postgres advisory lock across processes; a worker
+ * that cannot take the lock serves the stored state without generating.
+ * A failed read never writes: the last good snapshot (or nothing) is served.
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { getSettings, upsertSettings } from './settingsService.js';
+import prisma from '../prisma.js';
+import { getSettings } from './settingsService.js';
 import { getDemoIdentityPool } from './demoService.js';
 import { getBoosterLiveFacts } from './boosterSimulationService.js';
 import { normalizeUgcSettings } from '../ugcSettings.js';
-import { businessDateKey } from '../ugcTime.js';
 import {
-  normalizeLiveActivity, pickActivityType, applyActivityToStats, driftOnline, relTime,
+  normalizeLiveActivity, pickActivityType, applyActivityToStats, driftOnline,
 } from '../recruitmentCta.js';
+import {
+  LIVE_ACTIVITY_TIMEZONE, LIVE_ACTIVITY_DISCLOSURE, probabilitiesAt, liveActivityDayKey,
+  liveActivityDayStart, eventTimeLabel, casablancaClockLabel,
+} from '../liveActivityTime.js';
 
-const STATE_KEY   = 'live-activity-state';
+export const STATE_KEY = 'live-activity-state';
 const CACHE_MS    = 3000;   // serve the same snapshot for up to 3s
 const MAX_EVENTS  = 40;     // rolling feed length kept in state
 const MAX_CATCHUP = 3;      // never add more than this per advance → no huge jumps
+// pg_try_advisory_xact_lock keys ("LIVE", 1) — distinct from the rewards keys.
+export const LIVE_ACTIVITY_LOCK_KEYS = [0x4c495645, 1];
 
-let _cache = { at: 0, data: null };
+let _cache = { at: 0, view: null }; // last loaded view, reused for CACHE_MS
+let _inflight = null;               // single-flight: one load per process at a time
+let _lastGood = null;               // last successfully loaded view (read-failure fallback)
+
+/** Test hook: forget the per-process cache / single-flight / last good view. */
+export function resetLiveActivityCacheForTests() {
+  _cache = { at: 0, view: null }; _inflight = null; _lastGood = null;
+}
 
 const randInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -101,99 +125,229 @@ function freshState(cfg, dayKey, now) {
   return { dayKey, resetToken: cfg.resetToken || '', counters: { ...cfg.stats }, events: [], lastTickAt: now };
 }
 
+const COUNTER_KEYS = ['todayOrders', 'todayDelivered', 'todayCommissions', 'affiliatesOnline'];
+const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * Usable part of a stored state, or null when there is nothing to keep (no row,
+ * or no valid counters). Malformed events are dropped one by one; valid
+ * counters and events are always preserved.
+ */
+export function salvageState(stored) {
+  if (!isObj(stored) || !isObj(stored.counters)) return null;
+  if (!COUNTER_KEYS.every((k) => Number.isFinite(Number(stored.counters[k])))) return null;
+  const events = Array.isArray(stored.events)
+    ? stored.events.filter((e) => isObj(e) && typeof e.type === 'string' && Number.isFinite(e.at))
+    : [];
+  return {
+    dayKey:     typeof stored.dayKey === 'string' ? stored.dayKey : null,
+    resetToken: typeof stored.resetToken === 'string' ? stored.resetToken : '',
+    counters:   Object.fromEntries(COUNTER_KEYS.map((k) => [k, Number(stored.counters[k])])),
+    events,
+    lastTickAt: Number.isFinite(stored.lastTickAt) ? stored.lastTickAt : null,
+  };
+}
+
+// One generated event at its TRUE timestamp `at` (type allowed at that
+// Casablanca time), applied to the counters.
+function generateAt(state, cfg, at, commissionPerSale, pool, rnd) {
+  const type = pickActivityType(probabilitiesAt(cfg.probabilities, at), rnd);
+  const ev = buildEvent(type, cfg, at, pool, rnd) || buildEvent('newOrder', cfg, at, pool, rnd);
+  state.counters = applyActivityToStats(state.counters, ev.type, counterAmount(ev, commissionPerSale));
+  if (rnd() < 0.15) state.counters.affiliatesOnline = driftOnline(state.counters.affiliatesOnline); // slow fluctuation
+  return ev;
+}
+
 const BOOTSTRAP_COUNT = 15; // events generated up-front so the feed is NEVER empty
 
 // Seed an initial batch of activities with staggered past timestamps so the very
-// first page load already shows a full, natural-looking feed.
-function bootstrapFeed(state, cfg, commissionPerSale, now, avgMs, pool) {
+// first page load already shows a full, natural-looking feed. Never before
+// today's Casablanca midnight (the feed is a per-day feed).
+function bootstrapFeed(state, cfg, commissionPerSale, now, avgMs, pool, rnd) {
+  const dayStart = liveActivityDayStart(now);
   const batch = [];
   for (let i = 0; i < BOOTSTRAP_COUNT; i++) {
-    const type = pickActivityType(cfg.probabilities);
-    const at = now - (BOOTSTRAP_COUNT - i) * avgMs; // i=0 oldest … newest ≈ now-avgMs
-    const ev = buildEvent(type, cfg, at, pool) || buildEvent('newOrder', cfg, at, pool);
-    state.counters = applyActivityToStats(state.counters, type, counterAmount(ev, commissionPerSale));
-    if (Math.random() < 0.15) state.counters.affiliatesOnline = driftOnline(state.counters.affiliatesOnline);
-    batch.push(ev);
+    const at = Math.max(dayStart, now - (BOOTSTRAP_COUNT - i) * avgMs); // i=0 oldest … newest ≈ now-avgMs
+    batch.push(generateAt(state, cfg, at, commissionPerSale, pool, rnd));
   }
   state.events = batch.reverse().slice(0, MAX_EVENTS); // newest first
 }
 
 /**
- * Return the current live-activity snapshot, advancing the shared server state.
- * @returns {Promise<{enabled:boolean, counters:object|null, events:Array, config:object|null}>}
+ * Pure state transition: the stored state advanced to `now`.
+ * Returns { state, dirty } — dirty = something must be written.
  */
-export async function getLiveActivitySnapshot() {
-  if (_cache.data && Date.now() - _cache.at < CACHE_MS) return _cache.data;
-
-  const cfg = normalizeLiveActivity((await getSettings('recruitment-landing').catch(() => null))?.liveActivity);
-  if (!cfg.enabled) {
-    const out = { enabled: false, counters: null, events: [], config: null };
-    _cache = { at: Date.now(), data: out };
-    return out;
-  }
-
-  const commissionPerSale = await getUgcCommissionPerSale();
-  const pool = await getDemoIdentityPool(); // shared with the Monthly Competition
-  // Booster events read the SIMULATION engine — never a second generator.
-  cfg.boosterFacts = await getBoosterLiveFacts().catch(() => []);
-  const now = Date.now();
-  const today = businessDateKey(new Date());
+export function nextState(stored, cfg, { pool, commissionPerSale, now, rnd = Math.random }) {
+  const today = liveActivityDayKey(now);
   const avgMs = ((cfg.intervalMinSec + cfg.intervalMaxSec) / 2) * 1000;
-
-  let state = await getSettings(STATE_KEY).catch(() => null);
-  if (!state || !Array.isArray(state.events) || state.dayKey !== today || state.resetToken !== (cfg.resetToken || '')) {
-    state = freshState(cfg, today, now);
-  }
-
   let dirty = false;
 
-  // Bootstrap: the feed must NEVER be empty. On a brand-new/rolled-over/reset
-  // state, seed an initial batch so the first page load shows several activities.
-  if (!state.events.length) {
-    bootstrapFeed(state, cfg, commissionPerSale, now, avgMs, pool);
+  let state = salvageState(stored);
+  // Day rollover (Casablanca midnight) and admin reset start a new day, as before.
+  if (!state || state.dayKey !== today || state.resetToken !== (cfg.resetToken || '')) {
+    state = freshState(cfg, today, now);
+  } else if (state.lastTickAt === null) {
     state.lastTickAt = now;
     dirty = true;
   }
 
-  // Advance the shared feed by whole ticks since we last advanced (capped).
-  const elapsedTicks = Math.floor((now - state.lastTickAt) / avgMs);
-  if (elapsedTicks > 0) {
-    const add = Math.min(elapsedTicks, MAX_CATCHUP);
-    for (let k = 0; k < add; k++) {
-      const type = pickActivityType(cfg.probabilities);
-      const ev = buildEvent(type, cfg, now, pool) || buildEvent('newOrder', cfg, now, pool);
-      state.counters = applyActivityToStats(state.counters, type, counterAmount(ev, commissionPerSale));
-      if (Math.random() < 0.15) state.counters.affiliatesOnline = driftOnline(state.counters.affiliatesOnline); // slow fluctuation
-      state.events.unshift(ev);
-    }
-    state.events = state.events.slice(0, MAX_EVENTS);
-    // Discard a large idle backlog (jump to now) so counters never leap.
-    state.lastTickAt = elapsedTicks > MAX_CATCHUP ? now : state.lastTickAt + elapsedTicks * avgMs;
+  // Bootstrap: the feed must NEVER be empty. On a brand-new/rolled-over/reset
+  // state, seed an initial batch so the first page load shows several activities.
+  if (!state.events.length) {
+    bootstrapFeed(state, cfg, commissionPerSale, now, avgMs, pool, rnd);
+    state.lastTickAt = now;
     dirty = true;
   }
 
-  if (dirty) await upsertSettings(STATE_KEY, state).catch(() => {});
+  // Advance the shared feed by whole ticks since we last advanced (capped). Each
+  // event is stamped with the tick it stands for — the last `add` tick slots up
+  // to now — so a catch-up never claims an old tick happened "just now".
+  const elapsedTicks = Math.floor((now - state.lastTickAt) / avgMs);
+  if (elapsedTicks > 0) {
+    const add = Math.min(elapsedTicks, MAX_CATCHUP);
+    const batch = [];
+    for (let k = 0; k < add; k++) {
+      const at = state.lastTickAt + (elapsedTicks - add + k + 1) * avgMs;
+      batch.push(generateAt(state, cfg, at, commissionPerSale, pool, rnd));
+    }
+    // A large idle backlog is skipped (only `add` events), so counters never leap.
+    state.events = [...batch.reverse(), ...state.events]
+      .sort((a, b) => b.at - a.at)
+      .slice(0, MAX_EVENTS);
+    state.lastTickAt += elapsedTicks * avgMs;
+    dirty = true;
+  }
 
-  // Serve: relative time + live UGC earnings (respects current commission) + a
-  // fresh identity resolve by personId, so if a person's avatar/username changes
-  // in the shared pool, every stored event follows — one identity everywhere.
-  const byId = new Map(pool.map((p) => [p.id, p]));
-  const events = state.events.map((e) => {
+  return { state, dirty };
+}
+
+/**
+ * Advance the stored state under a transaction-scoped advisory lock. Only the
+ * lock holder generates and writes; anyone else reads the stored state as is.
+ * A read error propagates (the transaction rolls back) — nothing is written.
+ * @returns {Promise<{ state: object|null, generated: boolean }>}
+ */
+export async function advanceLiveActivity({ db = prisma, cfg, pool, commissionPerSale, now, rnd = Math.random }) {
+  return db.$transaction(async (tx) => {
+    const [lock] = await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(${LIVE_ACTIVITY_LOCK_KEYS[0]}::int, ${LIVE_ACTIVITY_LOCK_KEYS[1]}::int) AS locked`;
+    const row = await tx.setting.findUnique({ where: { id: STATE_KEY } });
+    if (!lock?.locked) {
+      const current = salvageState(row?.data);
+      // The lock holder may be rolling the day over: never serve yesterday's feed.
+      return { state: current && current.dayKey === liveActivityDayKey(now) ? current : null, generated: false };
+    }
+    if (row && !salvageState(row.data)) {
+      console.warn('live-activity: stored state unusable (no valid counters) — starting a new one');
+    }
+    const { state, dirty } = nextState(row?.data ?? null, cfg, { pool, commissionPerSale, now, rnd });
+    if (dirty) {
+      await tx.setting.upsert({
+        where:  { id: STATE_KEY },
+        update: { data: state },
+        create: { id: STATE_KEY, data: state },
+      });
+    }
+    return { state, generated: dirty };
+  });
+}
+
+const DISABLED = Object.freeze({ enabled: false, counters: null, events: [], config: null });
+
+// When nothing could be loaded: the last good view (marked stale), else hidden.
+function fallbackView() {
+  return _lastGood ? { ..._lastGood, stale: true } : { enabled: false, degraded: true };
+}
+
+async function loadView(deps, now) {
+  const d = {
+    db: prisma,
+    loadConfig: () => getSettings('recruitment-landing'),
+    loadCommission: getUgcCommissionPerSale,
+    loadPool: () => getDemoIdentityPool(), // shared with the Monthly Competition
+    loadBoosterFacts: () => getBoosterLiveFacts(), // the SIMULATION engine — never a second generator
+    rnd: Math.random,
+    ...deps,
+  };
+
+  // A config read failure must not run the engine on defaults: a default
+  // resetToken would wipe the stored state. Serve what we have instead.
+  let rawConfig;
+  try { rawConfig = await d.loadConfig(); } catch (err) {
+    console.error('live-activity: config read failed — serving the last good snapshot', err);
+    return fallbackView();
+  }
+  const cfg = normalizeLiveActivity(rawConfig?.liveActivity);
+  if (!cfg.enabled) return { enabled: false };
+
+  const commissionPerSale = await d.loadCommission();
+  const pool = await d.loadPool();
+  cfg.boosterFacts = await d.loadBoosterFacts().catch(() => []);
+
+  let result;
+  try {
+    result = await advanceLiveActivity({ db: d.db, cfg, pool, commissionPerSale, now, rnd: d.rnd });
+  } catch (err) {
+    console.error('live-activity: state read/advance failed — nothing written, serving the last good snapshot', err);
+    return fallbackView();
+  }
+  if (!result.state) return fallbackView(); // another worker is creating the first state
+
+  const view = {
+    enabled: true,
+    state: result.state,
+    commissionPerSale,
+    pool,
+    config: { intervalMinSec: cfg.intervalMinSec, intervalMaxSec: cfg.intervalMaxSec },
+  };
+  _lastGood = view;
+  return view;
+}
+
+// Serve a view at `now`: relative time + Casablanca clock from each event's TRUE
+// timestamp, live UGC earnings (current commission) and a fresh identity
+// resolve by personId, so if a person's avatar/username changes in the shared
+// pool, every stored event follows — one identity everywhere.
+function serve(view, now) {
+  if (!view?.enabled) return { ...DISABLED, ...(view?.degraded ? { degraded: true } : {}) };
+  const byId = new Map((view.pool || []).map((p) => [p.id, p]));
+  const events = view.state.events.map((e) => {
     const p = e.personId ? byId.get(e.personId) : null;
     const identity = p
       ? { name: p.name, username: p.username, avatarUrl: p.avatarUrl ?? null, color: p.avatarColor }
       : {};
-    const time = relTime(now - (e.at || now));
-    if (e.type === 'ugc') return { ...e, ...identity, time, earnings: Math.round(e.sales * commissionPerSale) };
-    return { ...e, ...identity, time };
+    const timing = { time: eventTimeLabel(e.at, now), clock: casablancaClockLabel(e.at) };
+    const out = { ...e, ...identity, ...timing, simulated: true };
+    if (e.type === 'ugc') out.earnings = Math.round(e.sales * view.commissionPerSale);
+    return out;
   });
-
-  const out = {
+  return {
     enabled: true,
-    counters: state.counters,
+    simulated: true,
+    disclosure: LIVE_ACTIVITY_DISCLOSURE,
+    timezone: LIVE_ACTIVITY_TIMEZONE,
+    serverNow: now,
+    ...(view.stale ? { stale: true } : {}),
+    counters: view.state.counters,
     events,
-    config: { intervalMinSec: cfg.intervalMinSec, intervalMaxSec: cfg.intervalMaxSec },
+    config: view.config,
   };
-  _cache = { at: now, data: out };
-  return out;
+}
+
+/**
+ * Return the current live-activity snapshot, advancing the shared server state.
+ * Concurrent calls in one process share a single load (single-flight).
+ * `deps` (db, now, rnd, loaders) is for tests; production calls it bare.
+ * @returns {Promise<{enabled:boolean, counters:object|null, events:Array, config:object|null}>}
+ */
+export async function getLiveActivitySnapshot(deps = {}) {
+  const now = deps.now ?? Date.now();
+  if (!(_cache.view && now - _cache.at < CACHE_MS)) {
+    if (!_inflight) {
+      _inflight = loadView(deps, now)
+        .then((view) => { _cache = { at: now, view }; return view; })
+        .finally(() => { _inflight = null; });
+    }
+    await _inflight;
+  }
+  return serve(_cache.view, now);
 }
