@@ -22,17 +22,18 @@ const STATE_STYLE = {
   invalid: { label: "Invalide", cls: "bg-red-50 text-red-700 border-red-200" },
 };
 
-function SchedulePreview({ journeyId, versionId }) {
+function SchedulePreview({ journeyId, versionId, initialProfile, initialAnchor }) {
   const now = localParts(Date.now(), CHAT_TIMEZONE);
   const [profiles, setProfiles] = useState([]);
-  const [form, setForm] = useState({ demoAffiliateId: "", anchorDate: now.date, atDate: now.date, atTime: now.time, locale: "ar" });
+  // Prefilled from /admin/demo-chat/assignments links (?profile=&anchor=); validated server-side.
+  const [form, setForm] = useState({ demoAffiliateId: initialProfile || "", anchorDate: /^\d{4}-\d{2}-\d{2}$/.test(initialAnchor || "") ? initialAnchor : now.date, atDate: now.date, atTime: now.time, locale: "ar" });
   const [res, setRes] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   useEffect(() => {
-    api("/api/admin/demo/profiles?status=all").then((d) => { setProfiles(d.profiles || []); if (d.profiles?.[0]) set("demoAffiliateId", d.profiles[0].id); }, (e) => setError(e.message));
-  }, []);
+    api("/api/admin/demo/profiles?status=all").then((d) => { setProfiles(d.profiles || []); if (d.profiles?.[0] && !(d.profiles || []).some((p) => p.id === initialProfile)) set("demoAffiliateId", d.profiles[0].id); }, (e) => setError(e.message));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- initial prefill only
   const run = async (e) => {
     e.preventDefault(); setBusy(true); setError(null);
     try { setRes(await api("/api/admin/demo-chat/preview/schedule", "POST", { journeyId, versionId, ...form })); }
@@ -92,7 +93,8 @@ function SchedulePreview({ journeyId, versionId }) {
 
 export default function DemoChatPreviewPage() {
   const { id } = useParams();
-  const versionId = useSearchParams().get("version") || undefined;
+  const sp = useSearchParams();
+  const versionId = sp.get("version") || undefined;
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [onlyFilled, setOnlyFilled] = useState(true);
@@ -114,7 +116,7 @@ export default function DemoChatPreviewPage() {
         <Info className="w-4 h-4 mt-0.5 shrink-0" />
         <p>{data.disclosure} Heures affichées : fuseau {data.timezone}. Exemples utilisés : {"{amount}"} = {data.sampleValues.amount}, {"{orders}"} = {data.sampleValues.orders}.</p>
       </div>
-      <SchedulePreview journeyId={id} versionId={versionId} />
+      <SchedulePreview journeyId={id} versionId={versionId} initialProfile={sp.get("profile") || ""} initialAnchor={sp.get("anchor") || ""} />
       <h2 className="text-sm font-bold text-gray-900 pt-2">Chronologie complète (valeurs d'exemple)</h2>
       <label className="text-xs text-gray-600 flex items-center gap-2"><input type="checkbox" checked={onlyFilled} onChange={(e) => setOnlyFilled(e.target.checked)} /> Masquer les jours sans message</label>
       {days.map((d) => (

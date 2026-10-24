@@ -34,7 +34,7 @@ export default function DemoChatAuditPage() {
       <h1 className="text-lg font-black text-gray-900 flex items-center gap-2">Journal d'audit — chat démo <DemoBadge /></h1>
       <p className="text-xs text-gray-500">Lecture seule : les entrées ne peuvent être ni modifiées ni supprimées.</p>
       <select className={`${field} max-w-xs`} value={entityType} onChange={(e) => setEntityType(e.target.value)}>
-        <option value="">Tous les éléments</option><option value="journey">Parcours</option><option value="step">Étapes</option><option value="version">Versions</option><option value="asset">Médias</option>
+        <option value="">Tous les éléments</option><option value="journey">Parcours</option><option value="step">Étapes</option><option value="version">Versions</option><option value="asset">Médias</option><option value="assignment">Attributions</option><option value="config">Interrupteur global</option>
       </select>
       <ErrorBox error={error} />
       <div className="rounded-2xl border border-gray-100 bg-white divide-y divide-gray-50">

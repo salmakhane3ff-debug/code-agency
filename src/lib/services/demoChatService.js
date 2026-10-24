@@ -21,8 +21,10 @@
  *     and recorded with an audit row; a database failure removes the stored
  *     object again. Assets used by any step, version or message are never
  *     deleted.
- *   • Nothing here assigns journeys to profiles or enables the chat: both gates
- *     (env + protected setting) stay off — see demoChatGate.js.
+ *   • Nothing here assigns journeys to profiles or enables the chat: that is
+ *     demoChatAssignmentService.js (Phase 3C-9B), the only writer of the
+ *     protected "demo-chat-config" row. Both gates ship off — see demoChatGate.js.
+ *   • A journey used by an ENABLED assignment cannot be archived (409 IN_USE).
  * All access goes through the demo DB seam (getDemoDb) and touches only the
  * demo_chat_* tables and the reserved "demo-chat-config" settings row (read).
  * ─────────────────────────────────────────────────────────────────────────────
@@ -66,6 +68,10 @@ export const ACTIONS = Object.freeze({
   STEP_CREATE: 'STEP_CREATE', STEP_UPDATE: 'STEP_UPDATE', STEP_DELETE: 'STEP_DELETE', STEPS_REORDER: 'STEPS_REORDER',
   VERSION_PUBLISH: 'VERSION_PUBLISH',
   ASSET_UPLOAD: 'ASSET_UPLOAD', ASSET_DELETE: 'ASSET_DELETE',
+  // Phase 3C-9B — demoChatAssignmentService.js
+  ASSIGNMENT_CREATE: 'ASSIGNMENT_CREATE', ASSIGNMENT_UPDATE: 'ASSIGNMENT_UPDATE',
+  ASSIGNMENT_ENABLE: 'ASSIGNMENT_ENABLE', ASSIGNMENT_DISABLE: 'ASSIGNMENT_DISABLE',
+  CHAT_ENABLE: 'CHAT_ENABLE', CHAT_DISABLE: 'CHAT_DISABLE',
 });
 export const PREVIEW_DISCLOSURE = 'Simulation — aperçu administrateur. Les valeurs de gains affichées sont des exemples, pas des données réelles ni démo.';
 
@@ -97,8 +103,8 @@ async function assertStepAsset(tx, step) {
 const orderSteps = (a, b) => a.day - b.day || (a.time < b.time ? -1 : a.time > b.time ? 1 : 0) || a.position - b.position;
 export const hashSteps = (canonical) => createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
 
-/** Insert-only audit write — the ONLY way this module touches the audit table. */
-async function writeAudit(tx, { action, entityType, entityId, actorId, before = null, after = null, reason = null, at }) {
+/** Insert-only audit write — the ONLY way the demo-chat services touch the audit table. */
+export async function writeAudit(tx, { action, entityType, entityId, actorId, before = null, after = null, reason = null, at }) {
   await tx.demoChatAuditLog.create({
     data: { action, entityType, entityId, actorType: 'ADMIN', actorId: actorId ?? null, before, after, reason, createdAt: new Date(at) },
   });
@@ -237,6 +243,11 @@ export async function updateJourney(id, body, { actorId = null, now = Date.now()
       const row = await lockJourney(tx, id, expected, { requireDraft: false });
       const target = action === 'archive' ? 'archived' : 'draft';
       if (row.status === target) throw err(409, 'NO_CHANGES', action === 'archive' ? 'Déjà archivé.' : 'Déjà actif.');
+      if (action === 'archive') {
+        // Assignment writes lock the journey FOR SHARE, so this count cannot race an enable.
+        const inUse = await tx.demoChatAssignment.count({ where: { enabled: true, version: { journeyId: id } } });
+        if (inUse > 0) throw err(409, 'IN_USE', `Parcours utilisé par ${inUse} attribution(s) active(s) : désactivez-les avant d'archiver.`);
+      }
       await tx.demoChatJourney.update({ where: { id }, data: { status: target, updatedAt: new Date(now) } });
       await writeAudit(tx, { action: action === 'archive' ? ACTIONS.JOURNEY_ARCHIVE : ACTIONS.JOURNEY_UNARCHIVE, entityType: 'journey', entityId: id, actorId, before: { status: row.status }, after: { status: target }, at: now });
     });
@@ -665,7 +676,7 @@ export async function listAudit({ entityType, entityId, before, limit = 50 } = {
   const db = getDemoDb();
   const take = Math.min(Math.max(Number.parseInt(limit, 10) || 50, 1), 200);
   const where = {};
-  if (entityType) { if (!['journey', 'step', 'version', 'asset', 'assignment'].includes(entityType)) throw err(400, 'VALIDATION', 'entityType invalide.', 'entityType'); where.entityType = entityType; }
+  if (entityType) { if (!['journey', 'step', 'version', 'asset', 'assignment', 'config'].includes(entityType)) throw err(400, 'VALIDATION', 'entityType invalide.', 'entityType'); where.entityType = entityType; }
   if (entityId) { requireId(entityId, 'Élément'); where.entityId = entityId; }
   if (before) { const d = Date.parse(before); if (Number.isNaN(d)) throw err(400, 'VALIDATION', 'Curseur invalide.', 'before'); where.createdAt = { lt: new Date(d) }; }
   const rows = await db.demoChatAuditLog.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: take + 1 });
@@ -677,6 +688,14 @@ export async function listAudit({ entityType, entityId, before, limit = 50 } = {
 }
 
 export async function getChatStatus() {
-  const gates = await readDemoChatGates(getDemoDb());
-  return { ...gates, phase: '3C-3', note: "Création de parcours et de médias uniquement : aucune attribution aux profils ni activation dans cette phase." };
+  const db = getDemoDb();
+  const gates = await readDemoChatGates(db);
+  const [assignments, enabledAssignments] = await Promise.all([
+    db.demoChatAssignment.count(),
+    db.demoChatAssignment.count({ where: { enabled: true } }),
+  ]);
+  return {
+    ...gates, assignments, enabledAssignments, phase: '3C-9B',
+    note: "Attributions et interrupteur global : page « Attributions ». Le chat n'est visible que si la variable serveur ET le paramètre protégé sont activés.",
+  };
 }

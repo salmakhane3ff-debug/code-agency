@@ -23,7 +23,7 @@ approved read-only comparison — see `prisma/migrations/README.md` (no database
 | `demo_chat_assets` | media library (3C-3): images + voice notes |
 | `demo_chat_version_assets` | assets frozen into a published version (3C-3) |
 | `demo_sim_day_coverage` + settings `demo-sim-participants:*` | simulation coverage evidence (3C-5) |
-| `demo_chat_assignments` | profile → published version (no admin workflow yet: Phase 3C-9B) |
+| `demo_chat_assignments` | profile → published version, managed on `/admin/demo-chat/assignments` (Phase 3C-9B) |
 | `demo_chat_messages` | materialized messages (3C-6), created lazily by the affiliate feed (3C-7) |
 | `demo_chat_viewer_states` | not written yet |
 
@@ -254,6 +254,41 @@ above Live Activity (`src/components/DemoMiniChat.jsx`, helpers `src/lib/demoMin
   - A "today" earnings message first materialized > 15 min after its time is stored unavailable (3C-6 rule) —
     with lazy materialization this happens when nobody opens the feed around that time.
 
+## Assignments and global switch (Phase 3C-9B — admin only)
+Page `/admin/demo-chat/assignments` (link « Attributions » on `/admin/demo-chat`). Service
+`src/lib/services/demoChatAssignmentService.js`; handlers `src/lib/demoChatAssignmentRoutes.js`.
+
+| Endpoint (all `withAdminAuth`, `private, no-store`) | Body | Effect |
+|---|---|---|
+| `GET /api/admin/demo-chat/assignments?q=&status=active\|all` | – | demo profiles + current assignment, assignable versions (non-archived journeys), gates, Casablanca anchor range |
+| `PUT /api/admin/demo-chat/assignments/:profileId` | `{ versionId, anchorDate?, expectedUpdatedAt? }` | create (201, **disabled**) or reassign |
+| `PATCH /api/admin/demo-chat/assignments/:profileId` | `{ enabled, expectedUpdatedAt }` | enable / disable one conversation |
+| `GET` / `PATCH /api/admin/demo-chat/config` | `{ enabled: true, confirm: "ACTIVER" }` \| `{ enabled: false }` | global protected switch |
+
+- **Rules** — one assignment per demo profile; created disabled. Assigning requires an active profile, an
+  existing published version of a **non-archived** journey and a day 1 (Casablanca calendar) within
+  today − 365 … today + 60 (default: today). `expectedUpdatedAt` is required once an assignment exists
+  (409 `STALE` otherwise); a concurrent first creation loses with 409 `CONFLICT`.
+- **Reassignment** (other version or day 1) → `revision + 1`, assignment **disabled**, `enabledAt` cleared.
+  Earlier-revision messages stay stored but are hidden (the feed shows the current revision only).
+- **Enable** requires the profile active and the journey not archived; **disable** is always allowed.
+  Unchanged requests return `{ unchanged: true }` and write no audit row; same version + day 1 → 409 `NO_CHANGES`.
+- **Global switch** — this service is the **only** writer of `demo-chat-config` (the generic `/api/setting`
+  still refuses it). Enabling requires `DEMO_CHAT_ENABLED === 'true'` (409 `ENV_GATE_OFF` otherwise) **and**
+  the typed confirmation `ACTIVER`; disabling is always possible, even with the env switch off.
+- **Audit** (insert-only, `writeAudit`): `ASSIGNMENT_CREATE`, `ASSIGNMENT_UPDATE` (before/after, reason),
+  `ASSIGNMENT_ENABLE`, `ASSIGNMENT_DISABLE` (entity `assignment`), `CHAT_ENABLE`, `CHAT_DISABLE` (entity `config`).
+- **Archiving** a journey used by an **enabled** assignment → 409 `IN_USE` (disable first).
+- **Locks** — profile `FOR SHARE` → journey `FOR SHARE` → assignment `FOR UPDATE` (archive takes the journey
+  `FOR UPDATE`; the materializer the assignment `FOR SHARE`), so enable/archive/materialize cannot race.
+- **UI** — French admin UI (LTR); profile / journey names render with `dir="auto"` (Arabic names RTL).
+  Search + active/all filter, assign/change dialog with the reassignment warning, enable/disable, global
+  switch with typed confirmation (disabled while the env switch is off), link to the schedule preview
+  (prefilled profile + day 1), loading / empty / error + retry, stale-update reload.
+- **Not exposed** to affiliate or public routes (only the three admin route files import the handlers).
+- **Limits** — verified with in-memory fakes (no PostgreSQL run of these routes); no bulk assignment; no
+  unassign/delete (disable instead; messages reference the assignment).
+
 ## Deployment prerequisites (voice notes)
 1. Install ffmpeg (≥ 4, with the built-in `aac` encoder — present in standard builds; ffmpeg 6.1.1 verified in
    Development) on every server that handles admin uploads. ffprobe (same package) is optional but recommended.
@@ -268,6 +303,7 @@ Admin (all `withAdminAuth`): `/api/admin/demo-chat/journeys` (GET, POST) · `/jo
 `/journeys/:id/publish` (POST) · `/journeys/:id/versions[/:versionId]` (GET) ·
 `/preview` (POST) · `/audit` (GET) · `/status` (GET) ·
 `/assets` (GET, POST multipart `kind` + `file`) · `/assets/:id` (DELETE).
+`/assignments` (GET) · `/assignments/:profileId` (PUT, PATCH) · `/config` (GET, PATCH) — Phase 3C-9B.
 Affiliate (`withAffiliateAuth`, gated): `/api/affiliate/demo-chat` (GET).
 
 ## Audit log — limits
@@ -280,6 +316,7 @@ Affiliate (`withAffiliateAuth`, gated): `/api/affiliate/demo-chat` (GET).
 
 ## Tests
 `node scripts/demoChat.test.mjs`, `node scripts/demoChatMedia.test.mjs`,
-`node scripts/demoChatMessages.test.mjs` and `node scripts/demoChatFeed.test.mjs` (no database, no network,
+`node scripts/demoChatMessages.test.mjs`, `node scripts/demoChatFeed.test.mjs` and
+`node scripts/demoChatAssignments.test.mjs` (no database, no network,
 injected ffprobe). The SQL constraints, foreign keys and triggers were verified
 separately against a temporary PostgreSQL 16 instance in Phase 3C-1 (TRUNCATE guard: static checks only).

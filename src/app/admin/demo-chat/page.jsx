@@ -3,11 +3,12 @@
 /**
  * /admin/demo-chat — scripted DEMO chat journeys (Phase 3C-2, authoring only).
  * Simulation: no AI, no WhatsApp/SMS, never real affiliates, orders or money.
- * Journeys are not assigned to profiles and the chat stays disabled (two gates).
+ * Assignments and the global switch live on /admin/demo-chat/assignments (Phase 3C-9B);
+ * the chat stays disabled unless both gates are on.
  */
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Loader2, Plus, ChevronRight, ShieldOff, History, Images } from "lucide-react";
+import { Loader2, Plus, ChevronRight, ShieldOff, History, Images, Users } from "lucide-react";
 import { validateJourneyInput } from "@/lib/demoChatValidation";
 import { api, field, DemoBadge, SimulationBadge, ErrorBox, STATUS_LABEL, fmtDate } from "./ui";
 
@@ -17,7 +18,7 @@ function GateBanner({ status }) {
     <div className="flex items-start gap-3 p-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-900 text-xs">
       <ShieldOff className="w-4 h-4 mt-0.5 shrink-0" />
       <div className="space-y-1">
-        <p className="font-bold">Chat démo désactivé{status.enabled ? " (état inattendu : vérifiez la configuration)" : ""}</p>
+        <p className="font-bold">{status.enabled ? `Mini Chat activé — ${status.enabledAssignments ?? 0} conversation(s) activée(s)` : "Chat démo désactivé"}</p>
         <p>Variable serveur DEMO_CHAT_ENABLED : <b>{status.env ? "true" : "false"}</b> · Paramètre protégé « demo-chat-config » : <b>{status.setting ? "activé" : "désactivé"}</b>. Les deux sont requis.</p>
         <p>{status.note}</p>
       </div>
@@ -54,6 +55,7 @@ export default function DemoChatPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-lg font-black text-gray-900 flex items-center gap-2">💬 Chat démo — parcours <DemoBadge /> <SimulationBadge /></h1>
         <div className="flex items-center gap-4">
+          <Link href="/admin/demo-chat/assignments" className="text-xs font-bold text-gray-600 hover:text-gray-900 flex items-center gap-1"><Users className="w-4 h-4" /> Attributions</Link>
           <Link href="/admin/demo-chat/assets" className="text-xs font-bold text-gray-600 hover:text-gray-900 flex items-center gap-1"><Images className="w-4 h-4" /> Médias</Link>
           <Link href="/admin/demo-chat/audit" className="text-xs font-bold text-gray-600 hover:text-gray-900 flex items-center gap-1"><History className="w-4 h-4" /> Journal d'audit</Link>
         </div>
