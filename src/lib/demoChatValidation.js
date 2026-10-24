@@ -9,13 +9,15 @@
  *   • text steps carry no placeholders;
  *   • no hand-typed amounts or order counts in ANY step text — figures are
  *     only ever filled in from simulated demo data at display time;
- *   • image / audio steps are not authorable until asset upload (Phase 3C-3).
+ *   • image / audio steps (Phase 3C-3) reference an uploaded DemoChatAsset of
+ *     the same kind and may carry an optional caption (same text rules).
  * Returns { ok, value } / { ok: false, field, error }.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
 export const STEP_TYPES = ['text', 'image', 'audio', 'earnings'];
-export const AUTHORABLE_STEP_TYPES = ['text', 'earnings']; // image/audio → Phase 3C-3
+export const AUTHORABLE_STEP_TYPES = ['text', 'earnings', 'image', 'audio'];
+export const MEDIA_STEP_TYPES = ['image', 'audio'];
 export const EARNINGS_PERIODS = ['today', 'yesterday', 'week'];
 export const EARNINGS_METRICS = ['commission', 'orders', 'revenue'];
 export const PLACEHOLDERS = ['{amount}', '{orders}', '{period}'];
@@ -23,7 +25,17 @@ export const JOURNEY_DAYS = 30;
 export const TODAY_SUMMARY_FROM = '12:00'; // Casablanca: today's summary never before noon
 export const MAX_STEPS = 300;
 export const MAX_TEXT = 1000;
-export const MEDIA_DEFERRED_MSG = 'Images et audio : disponibles avec le téléversement des médias (phase 3C-3).';
+
+// Media assets (Phase 3C-3). Server checks the ACTUAL bytes (src/lib/demoChatMedia.js);
+// these constants are shared with the admin UI. Audio limits = DB CHECK on demo_chat_assets.
+export const ASSET_KINDS = ['image', 'audio'];
+export const IMAGE_MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // same cap as uploadSecurity.IMAGE_MAX_BYTES
+export const IMAGE_INPUT_FORMATS = ['jpeg', 'png', 'webp']; // re-encoded to WebP; GIF/SVG/HEIC rejected
+export const AUDIO_MAX_BYTES = 5 * 1024 * 1024;  // 5 MiB = 5 242 880 bytes
+export const AUDIO_MAX_DURATION_SEC = 180;       // 3 minutes
+export const AUDIO_MIN_DURATION_SEC = 0.5;
+export const AUDIO_FORMATS = ['mp3', 'm4a', 'ogg']; // MP3, AAC in MP4/M4A, Ogg Opus/Vorbis
+export const MEDIA_HINT = 'Images : JPG, PNG ou WEBP (10 Mo max, converties en WEBP). Audio : MP3, M4A ou OGG (5 Mo et 3 minutes max, converti en M4A/AAC).';
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const TIME_RE = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
@@ -84,7 +96,7 @@ export function validateJourneyInput(body, { partial = false } = {}) {
  */
 export function validateStepInput(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return fail(null, 'Données invalides');
-  const allowed = ['day', 'time', 'position', 'type', 'text', 'earningsPeriod', 'metric'];
+  const allowed = ['day', 'time', 'position', 'type', 'text', 'earningsPeriod', 'metric', 'assetId'];
   const unknown = Object.keys(body).filter((k) => !allowed.includes(k));
   if (unknown.length) return fail(unknown[0], `Champ non modifiable : ${unknown[0]}`);
 
@@ -93,21 +105,29 @@ export function validateStepInput(body) {
   if (!Number.isInteger(day) || day < 1 || day > JOURNEY_DAYS) return fail('day', `Jour : entier de 1 à ${JOURNEY_DAYS}.`);
   if (typeof time !== 'string' || !TIME_RE.test(time)) return fail('time', 'Heure : format HH:MM (00:00 à 23:59, heure de Casablanca).');
   if (!Number.isInteger(position) || position < 0 || position > 99) return fail('position', 'Ordre : entier de 0 à 99.');
-  if (!STEP_TYPES.includes(type)) return fail('type', 'Type : text ou earnings.');
-  if (!AUTHORABLE_STEP_TYPES.includes(type)) return fail('type', MEDIA_DEFERRED_MSG);
+  if (!STEP_TYPES.includes(type) || !AUTHORABLE_STEP_TYPES.includes(type)) return fail('type', 'Type : text, earnings, image ou audio.');
 
   const text = cleanText(body.text);
-  if (!text) return fail('text', 'Le message ne peut pas être vide.');
   if (text.length > MAX_TEXT) return fail('text', `Message : ${MAX_TEXT} caractères maximum.`);
   if (hasHandTypedAmount(text)) {
     return fail('text', 'Montants et nombres de commandes saisis à la main interdits : utilisez {amount} / {orders} (valeurs simulées).');
   }
 
+  if (MEDIA_STEP_TYPES.includes(type)) {
+    if (!isValidChatId(body.assetId)) return fail('assetId', type === 'image' ? 'Choisissez une image de la bibliothèque.' : 'Choisissez une note vocale de la bibliothèque.');
+    if (body.earningsPeriod != null || body.metric != null) return fail('earningsPeriod', 'Période et indicateur : réservés aux messages de gains.');
+    if (text) { const pe = placeholderError(text, []); if (pe) return fail('text', pe); }
+    return { ok: true, value: { day, time, position, type, text: text || null, earningsPeriod: null, metric: null, assetId: body.assetId } };
+  }
+
+  if (body.assetId != null) return fail('assetId', 'Seuls les messages image ou audio utilisent un média.');
+  if (!text) return fail('text', 'Le message ne peut pas être vide.');
+
   if (type === 'text') {
     if (body.earningsPeriod != null || body.metric != null) return fail('earningsPeriod', 'Période et indicateur : réservés aux messages de gains.');
     const pe = placeholderError(text, []);
     if (pe) return fail('text', pe);
-    return { ok: true, value: { day, time, position, type, text, earningsPeriod: null, metric: null } };
+    return { ok: true, value: { day, time, position, type, text, earningsPeriod: null, metric: null, assetId: null } };
   }
 
   // earnings
@@ -119,7 +139,7 @@ export function validateStepInput(body) {
   if (pe) return fail('text', pe);
   const needed = metric === 'orders' ? '{orders}' : '{amount}';
   if (!text.includes(needed)) return fail('text', `Le message doit contenir ${needed} (indicateur « ${metric} »).`);
-  return { ok: true, value: { day, time, position, type, text, earningsPeriod, metric } };
+  return { ok: true, value: { day, time, position, type, text, earningsPeriod, metric, assetId: null } };
 }
 
 /** Reorder payload: [{ id, position }] (positions 0..99, ids unique). */
@@ -160,7 +180,7 @@ export function validateForPublish(steps) {
   if (steps.length > MAX_STEPS) return fail('steps', `${MAX_STEPS} étapes maximum.`);
   const slots = new Set();
   for (const s of steps) {
-    const v = validateStepInput({ day: s.day, time: s.time, position: s.position, type: s.type, text: s.text, earningsPeriod: s.earningsPeriod, metric: s.metric });
+    const v = validateStepInput({ day: s.day, time: s.time, position: s.position, type: s.type, text: s.text, earningsPeriod: s.earningsPeriod, metric: s.metric, assetId: s.assetId });
     if (!v.ok) return fail('steps', `Jour ${s.day} ${s.time} : ${v.error}`);
     const k = `${s.day}|${s.time}|${s.position ?? 0}`;
     if (slots.has(k)) return fail('steps', `Jour ${s.day} ${s.time} : deux étapes au même emplacement.`);

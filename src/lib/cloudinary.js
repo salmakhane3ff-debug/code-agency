@@ -214,12 +214,13 @@ export async function uploadBuffer({ buffer, folder, resourceType = "image", pub
  * @param {string} opts.folder         Cloudinary folder (e.g. 'shopgold/uploads')
  * @param {'image'|'video'} [opts.resourceType='image']
  * @param {string} [opts.subdir='']    local sub-folder under public/uploads (e.g. 'receipts')
+ * @param {string} [opts.contentType]  explicit Content-Type for R2 (default: from the filename extension)
  * @returns {Promise<{ storage:'local'|'cloudinary', url:string, filename?:string,
  *                     publicId?:string, resourceType?:string, width?:number,
  *                     height?:number, bytes?:number, format?:string }>}
  */
 export async function saveMedia(buffer, opts = {}) {
-  const { filename, folder, resourceType = "image", subdir = "", deterministic = false, category } = opts;
+  const { filename, folder, resourceType = "image", subdir = "", deterministic = false, category, contentType } = opts;
   const mode = storageMode();
 
   // ── R2 (production backend) ──────────────────────────────────────────────
@@ -235,6 +236,7 @@ export async function saveMedia(buffer, opts = {}) {
       category: category || categoryFor(folder, resourceType),
       resourceType,
       deterministic,
+      contentType,
     });
   }
 

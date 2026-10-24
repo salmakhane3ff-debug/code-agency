@@ -50,7 +50,7 @@ const known = (code, msg = code) => Object.assign(new Error(msg), { code, name: 
 function makeDb() {
   let seq = 1;
   const nid = () => `id_${String(seq++).padStart(4, "0")}`;
-  const t = { demoChatJourney: [], demoChatJourneyStep: [], demoChatJourneyVersion: [], demoChatVersionAsset: [], demoChatAuditLog: [], setting: [] };
+  const t = { demoChatJourney: [], demoChatJourneyStep: [], demoChatJourneyVersion: [], demoChatVersionAsset: [], demoChatAuditLog: [], demoChatAsset: [], setting: [] };
   const writes = [];
   const fx = { failAuditOnce: false };
   const match = (row, where = {}) => Object.entries(where).every(([k, c]) => {
@@ -172,8 +172,9 @@ console.log("\n1. Validation (mirrors 20261023 CHECK constraints)");
     ["today summary at 12:00", { ...earn, time: "12:00", earningsPeriod: "today" }, true],
   ];
   for (const [name, input, expected] of cases) ok(`${name} → ${expected ? "accepted" : "rejected"}`, V.validateStepInput(input).ok === expected);
-  ok("image / audio deferred to 3C-3", ["image", "audio"].every((type) => V.validateStepInput({ ...base, type }).error === V.MEDIA_DEFERRED_MSG));
-  ok("ids, journeyId, assetId cannot be set", ["id", "journeyId", "assetId"].every((k) => V.validateStepInput({ ...base, [k]: "x" }).field === k));
+  ok("image / audio steps require an asset id (3C-3)", ["image", "audio"].every((type) => V.validateStepInput({ ...base, type }).field === "assetId" && V.validateStepInput({ ...base, type, assetId: "a1" }).ok));
+  ok("ids and journeyId cannot be set; assetId only on media steps", ["id", "journeyId"].every((k) => V.validateStepInput({ ...base, [k]: "x" }).field === k)
+    && V.validateStepInput({ ...base, assetId: "a1" }).field === "assetId");
   ok("text over 1000 chars rejected", !V.validateStepInput({ ...base, text: "a".repeat(1001) }).ok);
   ok("journey name 2..80, description ≤ 500, unknown fields rejected",
     !V.validateJourneyInput({ name: "A" }).ok && V.validateJourneyInput({ name: "  Mon   parcours " }).value.name === "Mon parcours"
@@ -251,7 +252,8 @@ console.log("\n4. Steps on drafts");
   r = await svc.createStep(id, { expectedUpdatedAt: r.journey.updatedAt, day: 1, time: "09:00", position: 1, type: "text", text: "Deuxième message" }, ctx());
   r = await svc.createStep(id, { expectedUpdatedAt: r.journey.updatedAt, day: 2, time: "12:30", type: "earnings", text: "Bravo {amount} {period}", earningsPeriod: "today", metric: "commission" }, ctx());
   ok("steps ordered by day, time, position", r.steps.map((s) => `${s.day}-${s.time}-${s.position}`).join(",") === "1-09:00-0,1-09:00-1,2-12:30-0");
-  ok("media step via API → 400 (deferred)", (await rejects(svc.createStep(id, { expectedUpdatedAt: r.journey.updatedAt, day: 3, time: "09:00", type: "image", text: "x" }, ctx()))).field === "type");
+  ok("media step without asset → 400; unknown asset → 404", (await rejects(svc.createStep(id, { expectedUpdatedAt: r.journey.updatedAt, day: 3, time: "09:00", type: "image", text: "x" }, ctx()))).field === "assetId"
+    && (await rejects(svc.createStep(id, { expectedUpdatedAt: r.journey.updatedAt, day: 3, time: "09:00", type: "image", assetId: "nope" }, ctx()))).code === "ASSET_NOT_FOUND");
   ok("hand-typed amount via API → 400", (await rejects(svc.createStep(id, { expectedUpdatedAt: r.journey.updatedAt, day: 3, time: "09:00", type: "text", text: "J'ai gagné 500 MAD" }, ctx()))).field === "text");
   ok("assetId cannot be injected", (await rejects(svc.createStep(id, { expectedUpdatedAt: r.journey.updatedAt, day: 3, time: "09:00", type: "text", text: "x", assetId: "a1" }, ctx()))).field === "assetId");
 
@@ -395,7 +397,7 @@ console.log("\n9. Admin-only routes");
   const routes = [];
   const walk = (dir) => { for (const f of readdirSync(dir)) { const p = join(dir, f); if (statSync(p).isDirectory()) walk(p); else if (f === "route.js") routes.push(p); } };
   walk("src/app/api/admin/demo-chat");
-  ok("10 demo-chat route files", routes.length === 10);
+  ok("12 demo-chat route files", routes.length === 12);
   for (const p of routes) {
     const s = readFileSync(p, "utf8");
     const methods = [...s.matchAll(/export const (GET|POST|PUT|PATCH|DELETE) = (\w+)\(/g)];

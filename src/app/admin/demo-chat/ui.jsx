@@ -26,3 +26,13 @@ export const TYPE_LABEL = { text: "Texte", earnings: "Gains", image: "Image", au
 export const PERIOD_LABEL = { today: "Aujourd'hui", yesterday: "Hier", week: "Semaine" };
 export const METRIC_LABEL = { commission: "Commission (MAD)", orders: "Commandes (nombre)", revenue: "Chiffre d'affaires (MAD)" };
 export const fmtDate = (s) => (s ? new Date(s).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" }) : "—");
+
+export const fmtBytes = (n) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} Mo` : `${Math.max(1, Math.round(n / 1024))} Ko`);
+export const fmtDur = (s) => (s == null ? "" : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`);
+
+/** Image thumbnail or audio player for a media asset. */
+export function AssetThumb({ asset, small = false }) {
+  if (!asset) return <span className="text-[11px] text-red-600">Média manquant</span>;
+  if (asset.kind === "image") return <img src={asset.url} alt="" className={`${small ? "w-16 h-16" : "w-full h-32"} object-cover rounded-lg bg-gray-100`} />;
+  return <audio controls preload="none" src={asset.url} className="w-full max-w-xs" />;
+}

@@ -2,28 +2,30 @@
 
 /**
  * /admin/demo-chat/:id — edit one DEMO chat journey (Phase 3C-2): header,
- * draft steps (text / earnings; image & audio arrive with asset upload in
- * 3C-3), publish as an immutable version, version history, preview links.
+ * draft steps (text, earnings, image and voice note from the media library),
+ * publish as an immutable version, version history, preview links.
  * Every write sends the journey's updatedAt; a 409 means someone else edited it.
  */
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Loader2, ArrowLeft, Save, Trash2, Archive, ArchiveRestore, Send, Eye, Pencil, X, Plus } from "lucide-react";
+import { Loader2, ArrowLeft, Save, Trash2, Archive, ArchiveRestore, Send, Eye, Pencil, X, Plus, Images } from "lucide-react";
 import {
   validateJourneyInput, validateStepInput, EARNINGS_PERIODS, EARNINGS_METRICS, JOURNEY_DAYS,
-  MEDIA_DEFERRED_MSG, PLACEHOLDERS,
+  MEDIA_HINT, PLACEHOLDERS, MEDIA_STEP_TYPES,
 } from "@/lib/demoChatValidation";
-import { api, field, DemoBadge, SimulationBadge, ErrorBox, STATUS_LABEL, TYPE_LABEL, PERIOD_LABEL, METRIC_LABEL, fmtDate } from "../ui";
+import { api, field, DemoBadge, SimulationBadge, ErrorBox, STATUS_LABEL, TYPE_LABEL, PERIOD_LABEL, METRIC_LABEL, fmtDate, fmtDur, AssetThumb } from "../ui";
 
-const EMPTY_STEP = { day: 1, time: "09:00", position: 0, type: "text", text: "", earningsPeriod: "yesterday", metric: "commission" };
+const EMPTY_STEP = { day: 1, time: "09:00", position: 0, type: "text", text: "", earningsPeriod: "yesterday", metric: "commission", assetId: "" };
 
 const toPayload = (f) => {
   const base = { day: Number(f.day), time: f.time, position: Number(f.position) || 0, type: f.type, text: f.text };
-  return f.type === "earnings" ? { ...base, earningsPeriod: f.earningsPeriod, metric: f.metric } : { ...base, earningsPeriod: null, metric: null };
+  if (f.type === "earnings") return { ...base, earningsPeriod: f.earningsPeriod, metric: f.metric, assetId: null };
+  if (MEDIA_STEP_TYPES.includes(f.type)) return { ...base, earningsPeriod: null, metric: null, assetId: f.assetId || null };
+  return { ...base, earningsPeriod: null, metric: null, assetId: null };
 };
 
-function StepForm({ initial, readOnly, onSubmit, onCancel, submitLabel }) {
+function StepForm({ initial, readOnly, onSubmit, onCancel, submitLabel, library = [] }) {
   const [f, setF] = useState({ ...EMPTY_STEP, ...initial });
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -53,8 +55,8 @@ function StepForm({ initial, readOnly, onSubmit, onCancel, submitLabel }) {
           <select className={field} value={f.type} onChange={(e) => set("type", e.target.value)} disabled={readOnly}>
             <option value="text">Texte</option>
             <option value="earnings">Gains (valeurs simulées)</option>
-            <option value="image" disabled>Image — phase 3C-3</option>
-            <option value="audio" disabled>Audio — phase 3C-3</option>
+            <option value="image">Image (bibliothèque)</option>
+            <option value="audio">Note vocale (bibliothèque)</option>
           </select>
         </label>
       </div>
@@ -72,12 +74,26 @@ function StepForm({ initial, readOnly, onSubmit, onCancel, submitLabel }) {
           </label>
         </div>
       )}
-      <textarea className={field} rows={3} value={f.text} onChange={(e) => set("text", e.target.value)} disabled={readOnly}
-        placeholder={f.type === "earnings" ? `Ex. « Bravo, {amount} de commission {period} ! » — variables : ${PLACEHOLDERS.join(" ")}` : "Message texte (sans montant ni nombre de commandes)"} />
+      {MEDIA_STEP_TYPES.includes(f.type) && (
+        <div className="space-y-2">
+          <label className="text-[11px] text-gray-500 block">{f.type === "image" ? "Image" : "Note vocale"}
+            <select className={field} value={f.assetId || ""} onChange={(e) => set("assetId", e.target.value)} disabled={readOnly}>
+              <option value="">— Choisir dans la bibliothèque —</option>
+              {library.filter((a) => a.kind === f.type).map((a) => (
+                <option key={a.id} value={a.id}>{a.kind === "image" ? `Image ${a.width}×${a.height}` : `Audio ${fmtDur(a.durationSec)}`} · {fmtDate(a.createdAt)}</option>
+              ))}
+            </select>
+          </label>
+          {f.assetId && <AssetThumb asset={library.find((a) => a.id === f.assetId)} small />}
+          <Link href="/admin/demo-chat/assets" className="text-[11px] font-bold text-indigo-700">Gérer la bibliothèque de médias →</Link>
+        </div>
+      )}
+      <textarea className={field} rows={3} value={f.text || ""} onChange={(e) => set("text", e.target.value)} disabled={readOnly}
+        placeholder={f.type === "earnings" ? `Ex. « Bravo, {amount} de commission {period} ! » — variables : ${PLACEHOLDERS.join(" ")}` : MEDIA_STEP_TYPES.includes(f.type) ? "Légende (optionnelle, sans montant ni nombre de commandes)" : "Message texte (sans montant ni nombre de commandes)"} />
       <p className="text-[11px] text-gray-400">
         {f.type === "earnings"
           ? `Variables autorisées : ${PLACEHOLDERS.join(" ")} — ${f.metric === "orders" ? "{orders}" : "{amount}"} obligatoire. Les valeurs viennent de la simulation, jamais saisies à la main.`
-          : "Aucun montant ni nombre de commandes saisi à la main."} {MEDIA_DEFERRED_MSG}
+          : "Aucun montant ni nombre de commandes saisi à la main."} {MEDIA_HINT}
       </p>
       {!readOnly && (
         <div className="flex gap-2">
@@ -101,6 +117,9 @@ export default function DemoChatJourneyPage() {
   const [editing, setEditing] = useState(null);
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [library, setLibrary] = useState([]);
+
+  useEffect(() => { api("/api/admin/demo-chat/assets").then((d) => setLibrary(d.assets), () => setLibrary([])); }, []);
 
   const load = async () => {
     try {
@@ -169,6 +188,7 @@ export default function DemoChatJourneyPage() {
             : <button type="button" disabled={busy} onClick={() => archive("unarchive")} className="px-3 py-1.5 border border-gray-200 text-xs font-bold rounded-lg flex items-center gap-1"><ArchiveRestore className="w-3.5 h-3.5" /> Réactiver</button>}
           {versions.length === 0 && <button type="button" disabled={busy} onClick={remove} className="px-3 py-1.5 border border-red-200 text-red-700 text-xs font-bold rounded-lg flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" /> Supprimer</button>}
           <Link href={`/admin/demo-chat/${id}/preview`} className="px-3 py-1.5 border border-gray-200 text-xs font-bold rounded-lg flex items-center gap-1"><Eye className="w-3.5 h-3.5" /> Aperçu du brouillon</Link>
+          <Link href="/admin/demo-chat/assets" className="px-3 py-1.5 border border-gray-200 text-xs font-bold rounded-lg flex items-center gap-1"><Images className="w-3.5 h-3.5" /> Médias</Link>
         </div>
       </form>
 
@@ -181,18 +201,19 @@ export default function DemoChatJourneyPage() {
           </div>
         </div>
         {!hasUnpublishedChanges && steps.length > 0 && <p className="text-[11px] text-gray-400">Aucun changement depuis la dernière version publiée.</p>}
-        {adding && <StepForm initial={{}} onSubmit={addStep} onCancel={() => setAdding(false)} submitLabel="Ajouter l'étape" />}
+        {adding && <StepForm initial={{}} library={library} onSubmit={addStep} onCancel={() => setAdding(false)} submitLabel="Ajouter l'étape" />}
         {byDay.length === 0 && !adding && <p className="text-sm text-gray-500">Aucune étape.</p>}
         {byDay.map(([day, list]) => (
           <div key={day} className="space-y-2">
             <p className="text-[11px] font-black text-gray-500 uppercase">Jour {day}</p>
             {list.map((s) => editing === s.id
-              ? <StepForm key={s.id} initial={{ ...s, earningsPeriod: s.earningsPeriod || "yesterday", metric: s.metric || "commission" }} onSubmit={(p) => saveStep(s.id, p)} onCancel={() => setEditing(null)} submitLabel="Enregistrer" />
+              ? <StepForm key={s.id} library={library} initial={{ ...s, text: s.text || "", assetId: s.assetId || "", earningsPeriod: s.earningsPeriod || "yesterday", metric: s.metric || "commission" }} onSubmit={(p) => saveStep(s.id, p)} onCancel={() => setEditing(null)} submitLabel="Enregistrer" />
               : (
                 <div key={s.id} className="flex items-start justify-between gap-3 p-3 rounded-xl border border-gray-100">
                   <div className="min-w-0">
                     <p className="text-[11px] text-gray-500">{s.time} · {TYPE_LABEL[s.type]}{s.position ? ` · ordre ${s.position}` : ""}{s.type === "earnings" ? ` · ${PERIOD_LABEL[s.earningsPeriod]} · ${METRIC_LABEL[s.metric]}` : ""}</p>
-                    <p className="text-sm text-gray-900 whitespace-pre-wrap break-words">{s.text}</p>
+                    {s.assetId && <div className="my-1"><AssetThumb asset={data.assets?.[s.assetId]} small /></div>}
+                    {s.text && <p className="text-sm text-gray-900 whitespace-pre-wrap break-words">{s.text}</p>}
                   </div>
                   {!readOnly && (
                     <div className="flex gap-1 shrink-0">

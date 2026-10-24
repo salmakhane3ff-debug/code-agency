@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { Loader2, ArrowLeft, Info } from "lucide-react";
-import { api, DemoBadge, SimulationBadge, ErrorBox, TYPE_LABEL } from "../../ui";
+import { api, DemoBadge, SimulationBadge, ErrorBox, TYPE_LABEL, AssetThumb } from "../../ui";
 
 export default function DemoChatPreviewPage() {
   const { id } = useParams();
@@ -42,7 +42,8 @@ export default function DemoChatPreviewPage() {
           {d.messages.length === 0 && <p className="text-xs text-gray-400">—</p>}
           {d.messages.map((m) => (
             <div key={m.id} className="max-w-md p-3 rounded-2xl rounded-tl-sm bg-white border border-gray-100 shadow-sm">
-              <p className="text-sm text-gray-900 whitespace-pre-wrap break-words">{m.text}</p>
+              {m.asset && <div className="mb-1"><AssetThumb asset={m.asset} /></div>}
+              {m.text && <p className="text-sm text-gray-900 whitespace-pre-wrap break-words">{m.text}</p>}
               <p className="mt-1 text-[10px] text-gray-400">{m.time} · {TYPE_LABEL[m.type]}{m.usesSampleValues ? " · valeurs d'exemple" : ""}</p>
             </div>
           ))}
