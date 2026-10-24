@@ -8,6 +8,8 @@ import { ShoppingCart, Clock, Heart } from "lucide-react";
 import { Button } from "@heroui/react";
 import { useCart } from "@/hooks/useCart";
 import { useLanguage } from "@/context/LanguageContext";
+import { isProductLocked } from "@/lib/productLock";
+import { LockableLink, LockedOverlay } from "./ProductLock";
 import { useDiscountRules } from "@/hooks/useDiscountRules";
 import { fetchCached } from "@/lib/dataCache";
 
@@ -214,6 +216,8 @@ function StyleOne() {
                             : rawCol?.title || rawCol?.name || null;
 
           const discountRule = getDiscount(product);
+          // Locked by the admin: still shown (image, name, price + lock), never a link.
+          const locked       = isProductLocked(product);
 
           return (
             <div
@@ -221,7 +225,7 @@ function StyleOne() {
               className="bg-white rounded-3xl glass-card border !border-purple-50 p-2 flex flex-col shadow-sm hover:shadow-md transition-all duration-300"
             >
               {/* Image */}
-              <a href={productHref} onClick={(e) => navigateProduct(product, e)}>
+              <LockableLink anchor locked={locked} href={productHref} onClick={(e) => navigateProduct(product, e)}>
                 <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-gray-100 to-gray-200 mb-3 aspect-square">
                   {/* PERF: <Image fill> replaces raw <img>.
                            - fill: fills the positioned aspect-square container (no CLS)
@@ -238,6 +242,7 @@ function StyleOne() {
                     fetchPriority={isAboveFold ? "high" : "auto"}
                     quality={80}
                   />
+                  {locked && <LockedOverlay />}
                   {!!product.productLabel && (
                     <div className="absolute top-2 start-2">
                       <ProductLabel label={product.productLabel} />
@@ -266,16 +271,16 @@ function StyleOne() {
                     <Heart className={`w-3.5 h-3.5 ${isInWishlist(product._id) ? "fill-current" : ""}`} />
                   </button>
                 </div>
-              </a>
+              </LockableLink>
 
               {/* Info */}
               <div className="px-2 pb-2 flex flex-col flex-1">
 
-                <a href={productHref} onClick={(e) => navigateProduct(product, e)}>
+                <LockableLink anchor locked={locked} href={productHref} onClick={(e) => navigateProduct(product, e)}>
                   <h2 className="text-sm font-bold text-gray-900 line-clamp-1 leading-tight">
                     {product.title}
                   </h2>
-                </a>
+                </LockableLink>
 
                 {product.shortDescription && (
                   <p className="text-xs text-gray-600 line-clamp-1 my-1 leading-normal">

@@ -13,6 +13,24 @@ import { destroyManyByUrls, diffRemovedUrls } from '../mediaCleanup.js';
 import { isMediaUrlReferenced } from '../mediaReferences.js';
 import { encodeCursor, decodeCursor, clampLimit, normalizeFilters } from '../productFeed.js';
 import { searchParam } from "../productSearch.js";
+import { isProductLocked, lockedProductView } from '../productLock.js';
+
+/**
+ * Public list row. A LOCKED product (admin lock) keeps only what the storefront
+ * grids show — image, name, price, lock flag — plus the collection/date/status
+ * fields the grids filter and sort by. Open products are returned unchanged.
+ */
+function publicListProduct(p, storeSettings) {
+  const mapped = mapProduct(p, storeSettings);
+  if (!isProductLocked(mapped)) return mapped;
+  return {
+    ...lockedProductView(mapped),
+    collections: mapped.collections,
+    createdAt:   mapped.createdAt,
+    status:      mapped.status,
+    isActive:    mapped.isActive,
+  };
+}
 
 // ── Known Prisma product columns ──────────────────────────────────────────────
 // This explicit whitelist prevents Prisma from throwing "Unknown argument"
@@ -140,6 +158,7 @@ export async function getAllProducts(statusFilter) {
     allowCOD: true, allowPrepaid: true,
     conversionEnabled: true, conversionSold: true, conversionStock: true,
     bundles: true,
+    isLocked: true,   // grids show a lock icon; locked products cannot be opened or bought
     createdAt: true,
   };
 
@@ -148,7 +167,9 @@ export async function getAllProducts(statusFilter) {
     getStoreSettings(),
   ]);
 
-  return products.map((p) => mapProduct(p, storeSettings));
+  // Public reads trim LOCKED products to their grid fields; admin reads (`all`, …) stay full.
+  const isPublicList = !statusFilter || statusFilter === 'Active';
+  return products.map((p) => (isPublicList ? publicListProduct(p, storeSettings) : mapProduct(p, storeSettings)));
 }
 
 // ── Products feed: keyset (cursor) pagination ─────────────────────────────────
@@ -189,7 +210,7 @@ const FEED_COLUMNS = `
     "limitedTimeDeal",
     "allowCOD", "allowPrepaid",
     "conversionEnabled", "conversionSold", "conversionStock",
-    bundles, "createdAt"`;
+    bundles, "isLocked", "createdAt"`;
 
 // The collection test mirrors the old JS filter exactly:
 //   p.collections.some((c) => c.toLowerCase() === collection.toLowerCase())
@@ -263,7 +284,7 @@ export async function getProductsPage({ cursor = null, limit, collection = null,
   const page    = hasMore ? rows.slice(0, size) : rows;
 
   return {
-    items:      page.map((p) => mapProduct(p, storeSettings)),
+    items:      page.map((p) => publicListProduct(p, storeSettings)),
     nextCursor: hasMore && page.length ? encodeCursor(page[page.length - 1]) : null,
     hasMore,
     total:      totalRows ? (totalRows[0]?.total ?? null) : null,
@@ -295,6 +316,7 @@ export async function getProductsByIds(ids) {
     allowCOD: true, allowPrepaid: true,
     conversionEnabled: true, conversionSold: true, conversionStock: true,
     bundles: true,
+    isLocked: true,   // grids show a lock icon; locked products cannot be opened or bought
     createdAt: true,
   };
 
@@ -303,7 +325,7 @@ export async function getProductsByIds(ids) {
     getStoreSettings(),
   ]);
 
-  return products.map((p) => mapProduct(p, storeSettings));
+  return products.map((p) => publicListProduct(p, storeSettings));
 }
 
 /**

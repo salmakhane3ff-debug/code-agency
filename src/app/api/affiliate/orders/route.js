@@ -1,6 +1,7 @@
 /**
  * GET  /api/affiliate/orders          → affiliate's order list
- * PUT  /api/affiliate/orders          → update order status (confirmed|cancelled)
+ * PUT  /api/affiliate/orders          → update OWN order status (confirmed|cancelled);
+ *                                        delivered/cancelled orders are locked
  */
 
 import { withAffiliateAuth }                    from '@/lib/middleware/withAffiliateAuth';
@@ -19,21 +20,31 @@ async function getHandler(req, _ctx, decoded) {
   }
 }
 
-async function putHandler(req, _ctx, _decoded) {
+// Service error code → HTTP status. Ownership/eligibility live in the service.
+const PUT_ERROR_STATUS = {
+  INVALID_ID:      400,
+  INVALID_STATUS:  400,
+  ORDER_NOT_FOUND: 404, // also returned for another affiliate's order
+  ORDER_LOCKED:    409, // delivered / cancelled / unknown status
+};
+
+async function putHandler(req, _ctx, decoded) {
   try {
-    const { id, status } = await req.json();
+    // Malformed JSON or a non-object body (null, array, string) → 400, not 500.
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return Response.json({ error: 'Requête invalide' }, { status: 400 });
+    }
+    const { id, status } = body;
 
     if (!id) return Response.json({ error: 'id requis' }, { status: 400 });
 
-    // Affiliate can only mark confirmed or cancelled
-    const allowed = ['confirmed', 'cancelled'];
-    if (!allowed.includes(status)) {
-      return Response.json({ error: 'Statut non autorisé' }, { status: 400 });
-    }
-
-    const order = await updateAffiliateOrderStatus(id, status);
+    // Affiliate can only mark their OWN, still-editable orders confirmed or cancelled
+    const order = await updateAffiliateOrderStatus(id, status, { affiliateId: decoded.affiliateId });
     return Response.json(order);
   } catch (err) {
+    const httpStatus = PUT_ERROR_STATUS[err?.code];
+    if (httpStatus) return Response.json({ error: err.message }, { status: httpStatus });
     console.error('Affiliate orders PUT error:', err);
     return Response.json({ error: 'Erreur serveur' }, { status: 500 });
   }

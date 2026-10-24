@@ -24,10 +24,13 @@ const MIME_TYPES = {
   avi:  'video/x-msvideo',
   mkv:  'video/x-matroska',
   ogg:  'video/ogg',
+  m4a:  'audio/mp4',
   pdf:  'application/pdf',
 };
 
 const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'avi', 'mkv', 'ogg']);
+// Byte-range (206) support: videos + Mini Chat voice notes (Safari needs ranges for <audio>).
+const RANGE_EXTS = new Set([...VIDEO_EXTS, 'm4a']);
 
 export async function GET(request, { params }) {
   try {
@@ -50,7 +53,7 @@ export async function GET(request, { params }) {
 
     const ext = fileName.split('.').pop()?.toLowerCase() || '';
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-    const isVideo = VIDEO_EXTS.has(ext);
+    const supportsRange = RANGE_EXTS.has(ext);
 
     const stat = statSync(filePath);
     const fileSize = stat.size;
@@ -58,7 +61,7 @@ export async function GET(request, { params }) {
     // ── Range request (video streaming / seeking) ─────────────────────────────
     const rangeHeader = request.headers.get('range');
 
-    if (isVideo && rangeHeader) {
+    if (supportsRange && rangeHeader) {
       const [startStr, endStr] = rangeHeader.replace('bytes=', '').split('-');
       const start = parseInt(startStr, 10);
       const end   = endStr ? parseInt(endStr, 10) : Math.min(start + 1024 * 1024 - 1, fileSize - 1);

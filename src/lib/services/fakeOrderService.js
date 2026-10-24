@@ -150,8 +150,9 @@ export async function createFakeOrder(config, deps = {}) {
     now = () => new Date(),
   } = deps;
 
-  // 1. Pick a REAL, active product (respecting all / selected).
-  const where = { isActive: true };
+  // 1. Pick a REAL, active product (respecting all / selected). Never a product
+  //    the admin LOCKED: nobody can buy it, so no (fake) sale or commission either.
+  const where = { isActive: true, isLocked: false };
   if (config.productMode === 'selected' && Array.isArray(config.productIds) && config.productIds.length) {
     where.id = { in: config.productIds };
   }

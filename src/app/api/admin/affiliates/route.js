@@ -13,6 +13,8 @@ import {
   adminDeleteAffiliate,
 } from '@/lib/services/affiliateSystemService';
 import { withAdminAuth } from '@/lib/middleware/withAdminAuth';
+import { AFFILIATE_HAS_HISTORY } from '@/lib/affiliateDeletion';
+import { INVALID_GOAL } from '@/lib/affiliateGoals';
 
 async function getHandler() {
   try {
@@ -42,6 +44,9 @@ async function postHandler(req) {
     if (err.code === 'PARENT_NOT_FOUND') {
       return Response.json({ error: 'Affilié parent introuvable' }, { status: 400 });
     }
+    if (err.code === INVALID_GOAL) {
+      return Response.json({ error: err.message }, { status: 400 });
+    }
     console.error('Admin affiliates POST error:', err);
     return Response.json({ error: 'Erreur serveur' }, { status: 500 });
   }
@@ -58,6 +63,9 @@ async function putHandler(req) {
     const affiliate = await adminUpdateAffiliate(affiliateId, data);
     return Response.json(affiliate);
   } catch (err) {
+    if (err?.code === INVALID_GOAL) {
+      return Response.json({ error: err.message }, { status: 400 });
+    }
     console.error('Admin affiliates PUT error:', err);
     return Response.json({ error: 'Erreur serveur' }, { status: 500 });
   }
@@ -75,6 +83,10 @@ async function deleteHandler(req) {
 
     return Response.json({ ok: true, id: affiliateId });
   } catch (err) {
+    // Referenced by points/orders/payouts → clear 409, never the raw DB error.
+    if (err?.code === AFFILIATE_HAS_HISTORY) {
+      return Response.json({ error: err.message, code: err.code }, { status: 409 });
+    }
     console.error('Admin affiliates DELETE error:', err);
     return Response.json({ error: 'Erreur serveur' }, { status: 500 });
   }

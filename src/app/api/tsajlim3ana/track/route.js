@@ -4,7 +4,7 @@
  * Records WhatsApp-CTA clicks / logins under source="tsajlim3ana" in the
  * recruitment-landing settings row (no PII). Never throws to the client.
  */
-import { getSettings, upsertSettings } from "@/lib/services/settingsService";
+import { incrementSettingsCounter } from "@/lib/settingsMerge";
 import { rateLimit } from "@/lib/rateLimit";
 
 export const dynamic = "force-dynamic";
@@ -26,10 +26,9 @@ export async function POST(req) {
     if (body?.source !== "tsajlim3ana" || !ALLOWED.has(event)) {
       return Response.json({ ok: true }); // ignore anything unexpected, silently
     }
-    const current = (await getSettings("recruitment-landing").catch(() => null)) || {};
-    const stats = (current.stats && typeof current.stats === "object") ? current.stats : {};
-    stats[event] = (Number(stats[event]) || 0) + 1;
-    await upsertSettings("recruitment-landing", { ...current, stats }).catch(() => {});
+    // Atomic in-place +1 on stats[event]: never rewrites the admin's landing
+    // config (a read-modify-write here could undo a concurrent admin save).
+    await incrementSettingsCounter("recruitment-landing", "stats", event).catch(() => {});
     return Response.json({ ok: true });
   } catch {
     return Response.json({ ok: true }); // tracking must never surface an error

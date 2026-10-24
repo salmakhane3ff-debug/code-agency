@@ -324,9 +324,12 @@ and touch no existing column, constraint, or index.
 2. Apply migrations:
    - `20260720_ugc_module` — enum + 3 tables (submissions, history, earnings).
    - `20260721_ugc_audit_notifications` — settings history + admin notifications.
-   ```
-   npx prisma migrate deploy
-   ```
+   Both are now archived unchanged in `prisma/migrations_archive/`; since Phase 3C-9A the active chain is
+   the squashed `20261025000000_baseline`, which contains these tables (see `prisma/migrations/README.md`).
+   - **Fresh (empty) database:** `npx prisma migrate deploy`.
+   - **Existing database:** do NOT run the baseline; baseline it once with
+     `npx prisma migrate resolve --applied 20261025000000_baseline` after an approved read-only
+     schema/history comparison (procedure in that README). No database has been baselined by the repository.
 3. `npx prisma generate` and redeploy the web app.
 4. The module ships **off**: `enabled` and `earningsEngineEnabled` both default to `false`.
    Nothing is visible and nothing generates until an admin opts in.

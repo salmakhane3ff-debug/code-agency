@@ -51,6 +51,10 @@
   "product_trust_best_price": "Meilleur Prix Garanti",
   "product_trust_verified": "Vérifié et Sécurisé",
   "product_details_section": "Détails du produit",
+  "product_locked": "Verrouillé",
+  "product_locked_message": "Ce produit est momentanément verrouillé : il ne peut pas être consulté ni commandé.",
+  "product_locked_back": "Voir les autres produits",
+  "product_locked_cart": "Ce produit est verrouillé et ne peut pas être ajouté au panier.",
 
   "cart_title": "Votre panier",
   "cart_empty": "Votre panier est vide",

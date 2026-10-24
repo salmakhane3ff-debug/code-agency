@@ -13,13 +13,15 @@ advisory lock guarantees only one instance ticks at a time.
 
 ## 1. Apply the migration (additive — safe)
 
-`prisma/migrations/20260724_fake_orders_engine` only adds columns/tables with
-`IF NOT EXISTS` + a guarded FK. It touches no existing column, constraint or value.
+`20260724_fake_orders_engine` (now archived unchanged in `prisma/migrations_archive/`) only adds
+columns/tables with `IF NOT EXISTS` + a guarded FK. It touches no existing column, constraint or value.
 
-```
-npx prisma migrate deploy
-npx prisma generate
-```
+Since Phase 3C-9A the active chain is a single squashed baseline (`20261025000000_baseline`), which
+already contains this engine's tables — see `prisma/migrations/README.md`:
+- **Fresh (empty) database:** `npx prisma migrate deploy`, then `npx prisma generate`.
+- **Existing database:** do NOT run the baseline. It must first be baselined once with
+  `npx prisma migrate resolve --applied 20261025000000_baseline`, only after an approved read-only
+  schema/history comparison (procedure in that README). No database has been baselined by the repository.
 
 Then redeploy the web app.
 

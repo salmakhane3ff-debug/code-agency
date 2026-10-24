@@ -105,7 +105,7 @@ function AffiliateForm({ initial, onSave, onClose, saving, affiliates = [] }) {
         </div>
       )}
 
-      {/* Per-affiliate objectives — shown on create AND edit. Empty = dashboard fallback. */}
+      {/* Per-affiliate objectives — shown on create AND edit. Empty = dashboard fallback, 0 = hidden. */}
       <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-semibold text-gray-600 mb-1.5">Objectif commandes</label>
@@ -117,6 +117,7 @@ function AffiliateForm({ initial, onSave, onClose, saving, affiliates = [] }) {
               placeholder="5"
               className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:border-gray-400"
             />
+            <p className="text-[11px] text-gray-400 mt-1">0 = masqué · vide = par défaut</p>
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-600 mb-1.5">Objectif parrainages valides</label>
@@ -128,6 +129,7 @@ function AffiliateForm({ initial, onSave, onClose, saving, affiliates = [] }) {
               placeholder="auto"
               className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:border-gray-400"
             />
+            <p className="text-[11px] text-gray-400 mt-1">0 = masqué · vide = auto</p>
           </div>
         </div>
 
@@ -218,10 +220,14 @@ function TeamBonusConfigPanel() {
       const r = await fetch("/api/admin/team-bonus-config", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
+        // Every field of the form is sent (the server merges and validates):
+        // an empty optional field is left out, so its stored value is kept.
         body:    JSON.stringify({
           requiredActiveAffiliates: Number(cfg.requiredActiveAffiliates),
           bonusAmount:              Number(cfg.bonusAmount),
           commissionTiers:          cfg.commissionTiers,
+          ...(cfg.ugcGoal === "" || cfg.ugcGoal == null ? {} : { ugcGoal: Number(cfg.ugcGoal) }),
+          ...(cfg.securityDepositAmount === "" || cfg.securityDepositAmount == null ? {} : { securityDepositAmount: Number(cfg.securityDepositAmount) }),
         }),
       });
       const d = await r.json();
@@ -293,12 +299,12 @@ function TeamBonusConfigPanel() {
             </label>
             <input
               type="number"
-              min={1}
+              min={0}
               value={cfg.ugcGoal ?? 5}
               onChange={(e) => setField("ugcGoal", e.target.value)}
               className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:border-gray-400"
             />
-            <p className="text-xs text-gray-400 mt-1">Vidéos UGC validées visées (progression affilié)</p>
+            <p className="text-xs text-gray-400 mt-1">Vidéos UGC validées visées (progression affilié) · 0 = masqué</p>
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-600 mb-1.5">
@@ -456,9 +462,9 @@ function DemoManagementPanel() {
       });
       const d = await r.json();
       if (!r.ok) { setMsg({ type: 'err', text: d.error || 'Erreur' }); return; }
-      setMsg({ type: 'ok', text: busyKey === 'generate' ? `${d.generated} affiliés générés ✓`
+      setMsg({ type: 'ok', text: busyKey === 'generate' ? `${d.generated} profils actifs ✓ (${d.created ?? 0} créés, ${d.reactivated ?? 0} réactivés, ${d.deactivated ?? 0} masqués)`
                                 : busyKey === 'simulate' ? `Tick effectué : +${d.orders ?? 0} commande(s) ✓`
-                                : 'Compétition réinitialisée ✓' });
+                                : `Nouveau cycle #${d.cycle ?? '—'} ✓ (cycle #${d.archived ?? '—'} archivé)` });
       await fetchInfo();
     } catch { setMsg({ type: 'err', text: 'Erreur réseau' }); }
     finally { setBusy(null); setTimeout(() => setMsg(null), 3500); }
@@ -488,7 +494,7 @@ function DemoManagementPanel() {
         <Trophy className="w-5 h-5 text-indigo-600" />
         <div>
           <h2 className="text-sm font-bold text-gray-900">Système de Compétition Démo</h2>
-          <p className="text-xs text-gray-500">Gérez les affiliés fictifs et les cycles de compétition</p>
+          <p className="text-xs text-gray-500">Gérez les affiliés fictifs et les cycles de compétition · <a href="/admin/demo-profiles" className="font-semibold text-indigo-600 hover:underline">Gérer les profils démo →</a></p>
         </div>
         {s && (
           <button
@@ -604,6 +610,7 @@ function DemoManagementPanel() {
               {/* Generate */}
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-gray-600">Générer des affiliés</label>
+                <p className="text-[10px] text-gray-400">Profils existants conservés (même identité) · complète ou masque jusqu'au nombre choisi</p>
                 <div className="flex gap-2">
                   <input
                     type="number" min={10} max={100}
@@ -658,7 +665,7 @@ function DemoManagementPanel() {
                 <button
                   type="button"
                   onClick={() => {
-                    if (!confirm('Réinitialiser toute la compétition ? Les stats seront remises à zéro.')) return;
+                    if (!confirm('Démarrer un nouveau cycle ? Le classement actuel est archivé, les scores repartent à zéro. L\'historique est conservé.')) return;
                     post('/api/admin/demo/reset', null, 'reset');
                   }}
                   disabled={!!busy}
@@ -667,7 +674,43 @@ function DemoManagementPanel() {
                   {busy === 'reset' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
                   Nouveau cycle
                 </button>
+                <p className="text-[10px] text-gray-400">Automatique tous les 30 jours · historique conservé</p>
               </div>
+            </div>
+
+            {/* Archived cycles (kept across resets; deleted only explicitly) */}
+            <div className="rounded-xl border border-gray-100 bg-gray-50 p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold text-gray-600">Historique des cycles ({(info?.history || []).length})</p>
+                <button
+                  type="button"
+                  disabled={!!busy || !(info?.history || []).length}
+                  onClick={async () => {
+                    if (!confirm('Supprimer DÉFINITIVEMENT l\'historique des cycles et l\'historique des gains démo ?')) return;
+                    if (prompt('Tapez SUPPRIMER pour confirmer') !== 'SUPPRIMER') return;
+                    setBusy('history'); setMsg(null);
+                    try {
+                      const r = await fetch('/api/admin/demo/history', {
+                        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ confirm: 'DELETE_HISTORY' }),
+                      });
+                      const d = await r.json();
+                      setMsg(r.ok ? { type: 'ok', text: `Historique supprimé (${d.deletedCycles} cycle(s))` } : { type: 'err', text: d.error || 'Erreur' });
+                      await fetchInfo();
+                    } catch { setMsg({ type: 'err', text: 'Erreur réseau' }); }
+                    finally { setBusy(null); }
+                  }}
+                  className="text-[11px] font-bold text-red-600 hover:text-red-700 disabled:opacity-40"
+                >
+                  Supprimer l'historique
+                </button>
+              </div>
+              {(info?.history || []).slice(0, 5).map((h) => (
+                <p key={h.cycleNum} className="text-[11px] text-gray-500">
+                  #{h.cycleNum} · {new Date(h.startDate).toLocaleDateString('fr-FR')} → {new Date(h.endDate).toLocaleDateString('fr-FR')}
+                  {' '}· {h.reason === 'manual' ? 'manuel' : 'auto'} · 🥇 {h.top?.[0]?.name ?? '—'}
+                </p>
+              ))}
             </div>
 
             {/* Feedback */}
@@ -1344,7 +1387,8 @@ function RecruitmentLandingPanel() {
           })(),
           videos: cfg.videos,
           testimonials: cfg.testimonials,
-          ...(cfg.stats ? { stats: cfg.stats } : {}),
+          // `stats` (tracking counters) is intentionally not sent: the save merges,
+          // so the live counters are kept instead of a stale copy overwriting them.
         }),
       });
       setMsg(res.ok ? { ok: true, t: "Enregistré." } : { ok: false, t: "Échec." });
@@ -1730,6 +1774,81 @@ function RecruitmentLandingPanel() {
   );
 }
 
+// ── 👁 Affiliate dashboard visibility (display only) ──────────────────────────
+// Each toggle saves on its own (partial, merged server-side). Hiding a bar only
+// hides its card/widget, tab and mobile entry — APIs and eligibility unchanged.
+const DASHBOARD_TOGGLES = [
+  { key: "depositBarEnabled", label: "💰 Dépôt de solde", hint: "Carte de la vue d'ensemble, onglet et entrée du menu mobile" },
+  { key: "boosterBarEnabled", label: "🚀 Booster", hint: "Widget de la vue d'ensemble, onglet et entrée du menu mobile" },
+];
+
+function AffiliateDashboardVisibilityPanel() {
+  const [cfg,     setCfg]     = useState({ depositBarEnabled: true, boosterBarEnabled: true });
+  const [loading, setLoading] = useState(true);
+  const [busyKey, setBusyKey] = useState(null);
+  const [msg,     setMsg]     = useState(null);
+
+  useEffect(() => {
+    fetch("/api/admin/affiliate-dashboard-config")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d) setCfg({ depositBarEnabled: d.depositBarEnabled !== false, boosterBarEnabled: d.boosterBarEnabled !== false }); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const toggle = async (key, value) => {
+    const prev = cfg[key];
+    setCfg((c) => ({ ...c, [key]: value }));
+    setBusyKey(key); setMsg(null);
+    try {
+      const res = await fetch("/api/admin/affiliate-dashboard-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [key]: value }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d?.error || "Échec.");
+      setCfg((c) => ({ ...c, [key]: d[key] !== false }));
+      setMsg({ ok: true, t: "Enregistré." });
+    } catch (e) {
+      setCfg((c) => ({ ...c, [key]: prev }));
+      setMsg({ ok: false, t: e?.message || "Échec." });
+    } finally { setBusyKey(null); }
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden mt-6">
+      <div className="flex items-center gap-3 px-5 py-4 border-b border-gray-100 bg-indigo-50">
+        <span className="text-lg">👁</span>
+        <div>
+          <h2 className="text-sm font-bold text-gray-900">Visibilité du dashboard affilié</h2>
+          <p className="text-[11px] text-gray-500">Affichage uniquement — les fonctionnalités et règles restent inchangées.</p>
+        </div>
+      </div>
+      <div className="p-5 space-y-3">
+        {loading ? (
+          <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>
+        ) : (
+          <>
+            {msg && <div className={`text-xs px-3 py-2 rounded-lg ${msg.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>{msg.t}</div>}
+            {DASHBOARD_TOGGLES.map(({ key, label, hint }) => (
+              <label key={key} className="flex items-start gap-3 text-sm text-gray-700">
+                <input type="checkbox" className="mt-1" checked={cfg[key]} disabled={busyKey === key}
+                  onChange={(e) => toggle(key, e.target.checked)} />
+                <span>
+                  <span className="font-semibold">Afficher {label}</span>
+                  {busyKey === key && <Loader2 className="inline w-3.5 h-3.5 ml-2 animate-spin text-gray-400" />}
+                  <span className="block text-[11px] text-gray-400">{hint}</span>
+                </span>
+              </label>
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── 🚀 Starter Boosters (packages + card-purchase validation) ──────────────────
 function BoosterAdminPanel() {
   const SIM_DEFAULTS = { enabled: true, tickIntervalSec: 900, minPerTick: 1, maxPerTick: 2, dailyMin: 0, dailyMax: 0 };
@@ -2043,12 +2162,17 @@ export default function AdminAffiliatesPage() {
 
   const handleDelete = async (id) => {
     if (!confirm("Supprimer cet affilié ?")) return;
+    setError(null);
     try {
-      await fetch("/api/admin/affiliates", {
+      const res = await fetch("/api/admin/affiliates", {
         method:  "DELETE",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ id }),
       });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Erreur suppression");
+      }
       await fetchAffiliates();
     } catch {
       setError("Erreur suppression");
@@ -2182,6 +2306,8 @@ export default function AdminAffiliatesPage() {
       <FakeOrdersPanel />
 
       <SupportSettingsPanel />
+
+      <AffiliateDashboardVisibilityPanel />
 
       <BoosterAdminPanel />
 

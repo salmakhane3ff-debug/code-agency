@@ -13,6 +13,36 @@ import {
   upsertDeliverySettings,
 } from '../services/settingsService.js';
 import { badRequest, serverError } from '../utils/apiResponse.js';
+import { REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID } from '../rewards.js';
+import { mergeSettings } from '../settingsMerge.js';
+import { AFFILIATE_DASHBOARD_SETTING_ID } from '../affiliateDashboardConfig.js';
+import { CYCLE_ARCHIVE_PREFIX } from '../demoCompetitionCycle.js';
+import { PROFILE_META_PREFIX } from '../demoProfileValidation.js';
+import { DEMO_CHAT_SETTING_ID } from '../demoChatGate.js';
+import { SIM_PARTICIPANTS_PREFIX } from '../demoSimCoverage.js';
+
+/**
+ * Settings rows that have their own service and must never be written raw:
+ * 'rewards-config' is saved only through rewardsService.saveRewardsConfig,
+ * which runs the launch baseline under a table lock, manages the launch
+ * timestamps and writes the audit log. A raw write would bypass all three.
+ * 'rewards-reconcile-state' holds reconcile's resume cursors (system-managed).
+ */
+const RESERVED_SETTING_TYPES = new Set([
+  REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID,
+  // Validated + merged by their dedicated admin routes
+  // (/api/admin/team-bonus-config, /api/admin/affiliate-dashboard-config).
+  'team-bonus-config', AFFILIATE_DASHBOARD_SETTING_ID,
+  // Demo chat gate 2 (Phase 3C): never writable through the generic settings route.
+  DEMO_CHAT_SETTING_ID,
+]);
+
+/**
+ * Rows saved as a PARTIAL update (atomic top-level JSONB merge) instead of a
+ * whole-row replace: keys the admin form does not send — e.g. the landing's
+ * tracking counters written concurrently by /api/tsajlim3ana/track — are kept.
+ */
+const MERGE_SETTING_TYPES = new Set(['booster-packages', 'recruitment-landing']);
 
 // ── Generic settings (/api/setting) ──────────────────────────────────────────
 
@@ -57,9 +87,16 @@ export async function upsertSettingsHandler(req) {
   try {
     const { searchParams } = new URL(req.url);
     const type = searchParams.get('type') || 'store';
+    // Archived demo cycles / demo profile meta are written only by the demo services.
+    if (RESERVED_SETTING_TYPES.has(type) || type.startsWith(CYCLE_ARCHIVE_PREFIX) || type.startsWith(PROFILE_META_PREFIX)
+      || type.startsWith(SIM_PARTICIPANTS_PREFIX)) { // demo simulation coverage evidence (Phase 3C-5)
+      return badRequest('Ce paramètre se modifie uniquement depuis sa page dédiée.');
+    }
     const body = await req.json();
 
-    const saved = await upsertSettings(type, body);
+    const saved = MERGE_SETTING_TYPES.has(type)
+      ? await mergeSettings(type, body)
+      : await upsertSettings(type, body);
     return Response.json({ message: 'Saved', data: { ...saved, _id: type } });
   } catch (err) {
     console.error('Settings POST error:', err);
