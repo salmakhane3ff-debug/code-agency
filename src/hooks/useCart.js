@@ -4,6 +4,7 @@ import { useState, createContext, useContext } from 'react';
 import { useDiscountRules } from '@/hooks/useDiscountRules';
 import { fireFunnelEvent } from '@/components/tracking/FunnelTracker';
 import { trackClarity } from '@/lib/trackClarity';
+import { isProductLocked, PRODUCT_LOCKED } from '@/lib/productLock';
 
 // Create cart context for global cart drawer state
 const CartContext = createContext();
@@ -37,6 +38,12 @@ export const useCart = () => {
       if (!product || !product._id) {
         console.error("Invalid product data:", product);
         reject(new Error("Invalid product data"));
+        return;
+      }
+      // Admin product lock: a locked product can never enter the cart (the
+      // server refuses it in createOrder too). Free gifts follow the Gift System.
+      if (isProductLocked(product) && !product._isGift) {
+        reject(Object.assign(new Error("Product is locked"), { code: PRODUCT_LOCKED }));
         return;
       }
 

@@ -6,6 +6,8 @@ import { useLanguage } from "@/context/LanguageContext";
 import { useDiscountRules } from "@/hooks/useDiscountRules";
 import { fetchCached } from "@/lib/dataCache";
 import { thumbUrl }    from "@/lib/thumbnailUrl";
+import { isProductLocked } from "@/lib/productLock";
+import { LockableLink, LockedOverlay } from "@/components/Product/ProductLock";
 
 // ── Product Card ──────────────────────────────────────────────────────────────
 
@@ -27,10 +29,11 @@ function ProductCard({ product, formatPrice, getDiscount, priority = false }) {
   const discountRule = getDiscount ? getDiscount(product) : null;
   const price        = discountRule ? discountRule.effectivePrice : (product.salePrice || product.regularPrice);
   const href         = `/products/${product._id || product.id}`;
+  const locked       = isProductLocked(product);   // shown, but not a link
 
   return (
     <div className="bg-white rounded-3xl border border-purple-50 p-2 flex flex-col shadow-sm hover:shadow-md transition-all duration-300">
-      <Link href={href}>
+      <LockableLink locked={locked} href={href}>
         <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-gray-100 to-gray-200 mb-3 aspect-square">
           {/* PERF: first card in the first collection is the LCP candidate —
               load it eagerly with high fetch priority. All other cards stay lazy. */}
@@ -42,6 +45,7 @@ function ProductCard({ product, formatPrice, getDiscount, priority = false }) {
             fetchpriority={priority ? "high" : "auto"}
             decoding={priority ? "sync" : "async"}
           />
+          {locked && <LockedOverlay />}
           {product.productLabel && (
             <span className={`absolute top-2 left-2 px-1.5 py-0.5 text-[10px] font-semibold rounded-md backdrop-blur-sm ${
               product.productLabel === "New"  ? "bg-blue-500 text-white"
@@ -58,9 +62,9 @@ function ProductCard({ product, formatPrice, getDiscount, priority = false }) {
             </span>
           )}
         </div>
-      </Link>
+      </LockableLink>
       <div className="px-1 pb-1 flex flex-col flex-1">
-        <Link href={href}>
+        <LockableLink locked={locked} href={href}>
           <h3 className="text-sm font-bold text-gray-900 line-clamp-1 leading-tight mb-1">{product.title}</h3>
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-base font-bold text-gray-900">{formatPrice(price)}</span>
@@ -70,7 +74,7 @@ function ProductCard({ product, formatPrice, getDiscount, priority = false }) {
               </span>
             )}
           </div>
-        </Link>
+        </LockableLink>
       </div>
     </div>
   );

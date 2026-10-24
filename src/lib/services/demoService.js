@@ -3,6 +3,18 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * All business logic for the Demo Competition system.
  * Demo data is completely isolated from real affiliate data.
+ *
+ * Cycle + identity rules (Phase 3A):
+ *   • 30-day Casablanca cycles (src/lib/demoCompetitionCycle.js). The cycle rolls
+ *     over by itself on the first read/tick after its end — no admin click — and
+ *     the next one starts exactly at the previous end.
+ *   • Every rollover (automatic or the admin "Nouveau cycle") ARCHIVES the final
+ *     standings in a `demo-competition-cycle:<n>` settings row and keeps the
+ *     earnings history; only clearCompetitionHistory() deletes history.
+ *   • Rollover runs in ONE transaction holding a row lock on the competition row,
+ *     so concurrent requests/workers can never create duplicate cycles.
+ *   • Demo profiles are permanent rows (stable ids); generation reuses them and
+ *     never replaces the set. Ranking uses the single compareStanding rule.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -10,11 +22,17 @@ import prisma from '../prisma.js';
 import { saveMedia, destroyByUrl } from '../cloudinary.js';
 import { processDemoAvatar, DEMO_AVATAR_FOLDER, DEMO_AVATAR_GENDERS } from '../demoAvatarImage.js';
 import { businessDateKey } from '../ugcTime.js';
+import {
+  CYCLE_ARCHIVE_PREFIX, cycleWindow, isCycleDue, nextCycleWindow,
+  cycleDaysLeft, rankStandings,
+} from '../demoCompetitionCycle.js';
 
 // All demo DB access goes through `_db` (the real Prisma client in production).
 // Tests swap in an in-memory fake via __setDemoDb — proving isolation without a DB.
 let _db = prisma;
 export function __setDemoDb(db) { _db = db || prisma; }
+/** The demo DB seam, for the other demo services (profile management). */
+export function getDemoDb() { return _db; }
 
 // ── Name pools (Moroccan market), split by gender for men/women/mixed modes ─────
 const MALE_NAMES = [
@@ -38,7 +56,7 @@ const AVATAR_COLORS = [
 ];
 
 // ── Growth parameters ─────────────────────────────────────────────────────────
-const GROWTH = {
+export const GROWTH = {
   aggressive: { ordersRange: [4, 12], revenuePerOrder: [200, 500], teamGrowthChance: 0.4, cancelRate: 0.05 },
   consistent: { ordersRange: [2, 5],  revenuePerOrder: [120, 320], teamGrowthChance: 0.2, cancelRate: 0.10 },
   slow:       { ordersRange: [0, 2],  revenuePerOrder: [80,  200], teamGrowthChance: 0.1, cancelRate: 0.15 },
@@ -46,7 +64,7 @@ const GROWTH = {
 
 const SPEED_MULT = { slow: 0.4, medium: 1, fast: 2.8 };
 
-const COMMISSION_RATE = 0.05; // 5% parent earns from team
+export const COMMISSION_RATE = 0.05; // 5% parent earns from team
 const DEMO_UGC_COMMISSION = 5; // MAD per simulated UGC sale (demo-only, never a real rate)
 
 function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
@@ -158,17 +176,36 @@ export async function getDemoIdentityPool(minSize = IDENTITY_MIN) {
 
 // ── Generate demo affiliates ──────────────────────────────────────────────────
 
+/**
+ * Ensure `count` ACTIVE demo profiles. Existing profiles are permanent: they keep
+ * their id, name, username and avatar (and their stats/history). Missing ones
+ * are filled by reactivating deactivated profiles first, then by creating new
+ * ones; surplus profiles are deactivated (hidden), never deleted.
+ */
 export async function generateDemoAffiliates(count = 60, mode = 'mixed') {
-  // Clear existing demo AFFILIATES/stats/history. The avatar LIBRARY is permanent
-  // and deliberately NOT touched here (only an admin deletes avatars).
-  await _db.demoEarningsHistory.deleteMany();
-  await _db.demoStats.deleteMany();
-  await _db.demoAffiliate.deleteMany();
-
   const genderMode = ['men', 'women', 'mixed'].includes(mode) ? mode : 'mixed';
 
-  // Load the avatar library once; assign one avatar per affiliate, reused cyclically
-  // when there are fewer avatars than affiliates. Empty library → initials fallback.
+  const existing = await _db.demoAffiliate.findMany({ orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+  const active   = existing.filter((a) => a.isActive);
+  const inactive = existing.filter((a) => !a.isActive);
+
+  let reactivated = 0, deactivated = 0;
+  if (active.length > count) {
+    // Keep the oldest profiles; hide the most recent surplus.
+    for (const a of active.slice(count)) {
+      await _db.demoAffiliate.update({ where: { id: a.id }, data: { isActive: false } });
+      deactivated++;
+    }
+  }
+  let missing = Math.max(0, count - active.length);
+  for (const a of inactive) {
+    if (!missing) break;
+    await _db.demoAffiliate.update({ where: { id: a.id }, data: { isActive: true } });
+    reactivated++; missing--;
+  }
+
+  // Load the avatar library once; assign one avatar per NEW profile, reused
+  // cyclically when there are fewer avatars than profiles. Empty → initials.
   const avatars = await _db.demoAvatar.findMany({ select: { gender: true, url: true } });
   const byGender = {
     men:   avatars.filter((a) => a.gender === 'men'),
@@ -183,15 +220,18 @@ export async function generateDemoAffiliates(count = 60, mode = 'mixed') {
     return url;
   };
 
+  const usedUsernames = new Set(existing.map((a) => a.username));
   const types  = ['aggressive', 'consistent', 'consistent', 'slow']; // weighted
   const created = [];
 
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < missing; i++) {
     const gender = genderMode === 'mixed' ? pick(['men', 'women']) : genderMode;
     const first  = pick(gender === 'men' ? MALE_NAMES : FEMALE_NAMES);
     const last   = pick(LAST_NAMES);
     const name   = `${first} ${last}`;
-    const username = `demo_${first.toLowerCase()}${rand(10, 999)}`;
+    let username;
+    do { username = `demo_${first.toLowerCase()}${rand(10, 9999)}`; } while (usedUsernames.has(username));
+    usedUsernames.add(username);
 
     const affiliate = await _db.demoAffiliate.create({
       data: {
@@ -221,7 +261,7 @@ export async function generateDemoAffiliates(count = 60, mode = 'mixed') {
     created.push(affiliate.id);
   }
 
-  // Seed 7 days of history for each
+  // Seed 7 days of history for each NEW profile (existing history is kept).
   const now = new Date();
   for (const demoId of created) {
     const affiliate = await _db.demoAffiliate.findUnique({
@@ -257,40 +297,48 @@ export async function generateDemoAffiliates(count = 60, mode = 'mixed') {
   });
 
   invalidateDemoCache();
-  return { generated: count };
+  return { generated: count, created: created.length, reactivated, deactivated };
 }
 
 // ── Ensure competition row ────────────────────────────────────────────────────
 
-export async function ensureCompetition() {
-  const existing = await _db.demoCompetition.findUnique({ where: { id: 'current' } });
+export async function ensureCompetition({ db = _db, now = Date.now() } = {}) {
+  const existing = await db.demoCompetition.findUnique({ where: { id: 'current' } });
   if (existing) return existing;
 
-  const start = new Date();
-  start.setDate(1);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setMonth(end.getMonth() + 1);
-
-  return _db.demoCompetition.create({
-    data: { id: 'current', startDate: start, endDate: end, isActive: true, cycleNum: 1 },
-  });
+  // First cycle: today's Casablanca midnight → +30 local days.
+  const { start, end } = cycleWindow(now);
+  try {
+    return await db.demoCompetition.create({
+      data: { id: 'current', startDate: new Date(start), endDate: new Date(end), isActive: true, cycleNum: 1 },
+    });
+  } catch (err) {
+    if (err?.code !== 'P2002') throw err; // another request created it first
+    return db.demoCompetition.findUnique({ where: { id: 'current' } });
+  }
 }
 
 // ── Recalculate ranks ─────────────────────────────────────────────────────────
 
-async function recomputeRanks() {
-  const stats = await _db.demoStats.findMany({
-    orderBy: [{ totalOrders: 'desc' }, { totalRevenue: 'desc' }],
-    select:  { id: true, demoAffiliateId: true, totalRevenue: true },
-  });
+// Current standings of the ACTIVE profiles under the single ranking rule.
+export async function currentStandings(db = _db) {
+  const rows = await db.demoAffiliate.findMany({ where: { isActive: true }, include: { stats: true } });
+  return rankStandings(rows.filter((a) => a.stats).map((a) => ({
+    id: a.id, affiliate: a, stats: a.stats,
+    totalOrders: a.stats.totalOrders ?? 0, totalRevenue: a.stats.totalRevenue ?? 0,
+  })));
+}
 
-  for (let i = 0; i < stats.length; i++) {
+async function recomputeRanks() {
+  const standings = await currentStandings();
+  const ranked = new Map(standings.map((r) => [r.stats.id, r.rank]));
+  const stats = await _db.demoStats.findMany({ select: { id: true, totalRevenue: true } });
+  for (const st of stats) {
     await _db.demoStats.update({
-      where: { id: stats[i].id },
+      where: { id: st.id },
       data:  {
-        teamCommission: +(stats[i].totalRevenue * COMMISSION_RATE).toFixed(2),
-        rank: i + 1,
+        teamCommission: +((st.totalRevenue || 0) * COMMISSION_RATE).toFixed(2),
+        rank: ranked.get(st.id) ?? 0, // deactivated profiles are unranked
       },
     });
   }
@@ -440,11 +488,8 @@ export async function simulateTick() {
     create: { id: 'settings', isEnabled: true, simulationSpeed: 'medium', lastSimAt: new Date() },
   });
 
-  // Check if competition needs reset (30-day cycle)
-  const comp = await _db.demoCompetition.findUnique({ where: { id: 'current' } });
-  if (comp && new Date() >= comp.endDate) {
-    await resetCompetition(false); // silent reset
-  }
+  // 30-day cycle ended → automatic rollover (archives the standings first).
+  await advanceCompetitionIfDue();
 
   invalidateDemoCache();
   return { simulated: assigned.size, orders: ordersThisTick };
@@ -498,38 +543,116 @@ export async function runAutoSimTick(deps = {}) {
   }
 }
 
-// ── Reset competition ─────────────────────────────────────────────────────────
+// ── Cycle rollover / reset / history ──────────────────────────────────────────
 
-export async function resetCompetition(clearHistory = true) {
-  // Zero all stats (DEMO tables only — production data is never touched).
-  await _db.demoStats.updateMany({
-    data: {
-      totalOrders: 0, totalRevenue: 0, confirmedOrders: 0, cancelledOrders: 0,
-      todayOrders: 0, todayRevenue: 0, teamOrders: 0, teamRevenue: 0,
-      teamCommission: 0, rank: 0,
-      ugcTodayEarnings: 0, ugcTodaySales: 0, ugcTotalEarnings: 0, ugcTotalSales: 0,
-    },
+const ARCHIVE_FIELDS = ['totalOrders', 'totalRevenue', 'confirmedOrders', 'cancelledOrders',
+  'teamSize', 'teamCommission', 'ugcTotalSales', 'ugcTotalEarnings'];
+
+/**
+ * Close the current cycle and open the next one, atomically:
+ *   lock the competition row → (auto: re-check it is still due) → archive the
+ *   final standings → zero the demo stats → advance the cycle.
+ * Everything runs in ONE transaction, so a crash leaves no half-rolled cycle
+ * and concurrent callers serialize on the row lock (the losers see the new
+ * cycle and do nothing). Earnings history is never deleted here.
+ * @returns {Promise<null|{cycle:number, previous:number, reason:string, start:Date, end:Date}>}
+ */
+async function rollCycle({ reason, db = _db, now = Date.now() }) {
+  await ensureCompetition({ db, now });
+  const result = await db.$transaction(async (tx) => {
+    const [comp] = await tx.$queryRaw`SELECT "cycleNum", "startDate", "endDate" FROM "demo_competition" WHERE "id" = 'current' FOR UPDATE`;
+    if (!comp) return null;
+    const endMs = new Date(comp.endDate).getTime();
+    if (reason === 'auto' && !isCycleDue(endMs, now)) return null; // someone else already rolled it
+
+    const standings = await currentStandings(tx);
+    await tx.setting.create({
+      data: {
+        id: `${CYCLE_ARCHIVE_PREFIX}${comp.cycleNum}`,
+        data: {
+          cycleNum:  comp.cycleNum,
+          startDate: new Date(comp.startDate).toISOString(),
+          endDate:   new Date(comp.endDate).toISOString(),
+          closedAt:  new Date(now).toISOString(),
+          reason,                                 // 'auto' | 'manual'
+          participants: standings.length,
+          standings: standings.map((r) => ({
+            demoAffiliateId: r.id,
+            rank:        r.rank,
+            name:        r.affiliate.name,
+            username:    r.affiliate.username,
+            avatarUrl:   r.affiliate.avatarUrl ?? null,
+            avatarColor: r.affiliate.avatarColor,
+            ...Object.fromEntries(ARCHIVE_FIELDS.map((k) => [k, r.stats[k] ?? 0])),
+          })),
+        },
+      },
+    });
+
+    // Zero the scores (DEMO tables only — production data is never touched).
+    await tx.demoStats.updateMany({
+      data: {
+        totalOrders: 0, totalRevenue: 0, confirmedOrders: 0, cancelledOrders: 0,
+        todayOrders: 0, todayRevenue: 0, teamOrders: 0, teamRevenue: 0,
+        teamCommission: 0, rank: 0,
+        ugcTodayEarnings: 0, ugcTodaySales: 0, ugcTotalEarnings: 0, ugcTotalSales: 0,
+      },
+    });
+
+    // Auto: continue the 30-day grid from the old end. Manual: restart today.
+    const next = reason === 'auto' ? nextCycleWindow(endMs, now) : cycleWindow(now);
+    await tx.demoCompetition.update({
+      where: { id: 'current' },
+      data:  { startDate: new Date(next.start), endDate: new Date(next.end), isActive: true, cycleNum: comp.cycleNum + 1 },
+    });
+    return { cycle: comp.cycleNum + 1, previous: comp.cycleNum, reason, start: new Date(next.start), end: new Date(next.end) };
   });
+  if (result) invalidateDemoCache();
+  return result;
+}
 
-  if (clearHistory) {
-    await _db.demoEarningsHistory.deleteMany();
-  }
+/** Roll the cycle over if its 30 days are over (no-op otherwise). */
+export async function advanceCompetitionIfDue({ db = _db, now = Date.now() } = {}) {
+  const comp = await ensureCompetition({ db, now });
+  if (!isCycleDue(new Date(comp.endDate).getTime(), now)) return null;
+  return rollCycle({ reason: 'auto', db, now });
+}
 
-  // Advance competition cycle
-  const prev = await _db.demoCompetition.findUnique({ where: { id: 'current' } });
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 30);
+/**
+ * Admin "Nouveau cycle": archive the current standings and start a fresh
+ * 30-day cycle today. History is KEPT (only clearCompetitionHistory deletes).
+ * A legacy boolean argument is accepted and ignored.
+ */
+export async function resetCompetition(opts = {}) {
+  const { db = _db, now = Date.now() } = (opts && typeof opts === 'object') ? opts : {};
+  const res = await rollCycle({ reason: 'manual', db, now });
+  return { reset: true, cycle: res?.cycle ?? null, archived: res?.previous ?? null };
+}
 
-  await _db.demoCompetition.upsert({
-    where:  { id: 'current' },
-    update: { startDate: start, endDate: end, cycleNum: { increment: 1 } },
-    create: { id: 'current', startDate: start, endDate: end, isActive: true, cycleNum: 1 },
-  });
+/** Archived cycles, newest first (summary + top 3). */
+export async function listCompetitionHistory({ db = _db, limit = 12 } = {}) {
+  const rows = await db.setting.findMany({ where: { id: { startsWith: CYCLE_ARCHIVE_PREFIX } } });
+  return rows
+    .map((r) => r.data)
+    .filter((d) => d && Number.isFinite(d.cycleNum))
+    .sort((a, b) => b.cycleNum - a.cycleNum)
+    .slice(0, limit)
+    .map((d) => ({
+      cycleNum: d.cycleNum, startDate: d.startDate, endDate: d.endDate, closedAt: d.closedAt,
+      reason: d.reason, participants: d.participants,
+      top: (d.standings || []).slice(0, 3).map((x) => ({ rank: x.rank, name: x.name, totalOrders: x.totalOrders })),
+    }));
+}
 
+/**
+ * Explicit, separate admin action: delete the archived cycles and the demo
+ * earnings history. Never called by a reset or a rollover.
+ */
+export async function clearCompetitionHistory({ db = _db } = {}) {
+  const cycles  = await db.setting.deleteMany({ where: { id: { startsWith: CYCLE_ARCHIVE_PREFIX } } });
+  const history = await db.demoEarningsHistory.deleteMany();
   invalidateDemoCache();
-  return { reset: true, cycle: (prev?.cycleNum ?? 0) + 1 };
+  return { deletedCycles: cycles.count, deletedHistoryRows: history.count };
 }
 
 // ── Leaderboard ───────────────────────────────────────────────────────────────
@@ -539,14 +662,10 @@ export async function getLeaderboard(limit = 20) {
     return _leaderboardCache.slice(0, limit);
   }
 
-  const rows = await _db.demoAffiliate.findMany({
-    where:   { isActive: true },
-    include: { stats: true },
-    orderBy: { stats: { totalOrders: 'desc' } },
-    take:    limit,
-  });
+  // Same ranking rule as the profile view and the archived standings.
+  const standings = await currentStandings();
 
-  const data = rows.map((a, i) => ({
+  const data = standings.map(({ affiliate: a, rank }) => ({
     id:          a.id,
     name:        a.name,
     username:    a.username,
@@ -554,7 +673,7 @@ export async function getLeaderboard(limit = 20) {
     avatarUrl:   a.avatarUrl ?? null,   // persisted; UI falls back to initials when null
     gender:      a.gender ?? null,
     growthType:  a.growthType,
-    rank:        i + 1,
+    rank,
     totalOrders:     a.stats?.totalOrders     ?? 0,
     totalRevenue:    a.stats?.totalRevenue    ?? 0,
     confirmedOrders: a.stats?.confirmedOrders ?? 0,
@@ -584,6 +703,11 @@ export async function getDemoAffiliateDetails(id) {
   });
   if (!aff) return null;
 
+  // Live rank under the SAME rule as the leaderboard (0 = deactivated/unranked).
+  const standings = await currentStandings();
+  const rank = standings.find((r) => r.id === aff.id)?.rank ?? 0;
+  const comp = await ensureCompetition();
+
   const s = aff.stats;
   return {
     id:          aff.id,
@@ -593,7 +717,8 @@ export async function getDemoAffiliateDetails(id) {
     avatarUrl:   aff.avatarUrl ?? null,
     gender:      aff.gender ?? null,
     growthType:  aff.growthType,
-    rank:        s?.rank ?? 0,
+    rank,
+    cycleNum:    comp.cycleNum,
     // Main stats
     totalOrders:     s?.totalOrders     ?? 0,
     totalRevenue:    s?.totalRevenue    ?? 0,
@@ -652,12 +777,12 @@ export async function saveDemoSettings(data = {}) {
 
 // ── Competition info ──────────────────────────────────────────────────────────
 
-export async function getCompetitionInfo() {
-  const comp  = await ensureCompetition();
+export async function getCompetitionInfo({ now = Date.now() } = {}) {
+  // A finished cycle rolls over here too, so it advances even with no worker.
+  await advanceCompetitionIfDue({ now });
+  const comp  = await ensureCompetition({ now });
   const total = await _db.demoAffiliate.count({ where: { isActive: true } });
-  const now   = new Date();
-  const msLeft = comp.endDate.getTime() - now.getTime();
-  const daysLeft = Math.max(0, Math.ceil(msLeft / 86_400_000));
+  const daysLeft = cycleDaysLeft(new Date(comp.endDate).getTime(), now);
 
   return {
     startDate: comp.startDate,

@@ -282,7 +282,10 @@ export default function BoosterTab({ onRecharge }) {
         {topupAvailable > 0 && (
           <p className="text-[11px] text-gray-500">منها <strong>{fmt(topupAvailable)}</strong> رصيد مشحون (للشراء فقط)</p>
         )}
-        <button type="button" onClick={onRecharge} className="text-xs font-bold px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-500 text-gray-900">💰 شحن الرصيد</button>
+        {/* Hidden when the admin hides the deposit bar (no onRecharge passed). */}
+        {onRecharge && (
+          <button type="button" onClick={onRecharge} className="text-xs font-bold px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-500 text-gray-900">💰 شحن الرصيد</button>
+        )}
       </div>
 
       {/* Active boosters — dashboard + timeline (2 columns on desktop) */}
@@ -352,15 +355,17 @@ export default function BoosterTab({ onRecharge }) {
                   <p className="font-bold text-amber-800">رصيدك غير كافٍ.</p>
                   <p className="text-amber-700 mt-0.5">المبلغ الناقص: <strong>{fmt(selected.price - balance)}</strong></p>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className={`grid ${onRecharge ? "grid-cols-2" : "grid-cols-1"} gap-2`}>
                   <button type="button" onClick={() => buy("CARD")} disabled={busy}
                     className="flex items-center justify-center gap-1.5 py-3.5 rounded-2xl bg-gray-900 hover:bg-black text-white text-xs font-black disabled:opacity-50">
                     {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CreditCard className="w-4 h-4" />} الدفع بالبطاقة
                   </button>
-                  <button type="button" onClick={onRecharge}
-                    className="flex items-center justify-center gap-1.5 py-3.5 rounded-2xl bg-amber-400 hover:bg-amber-500 text-gray-900 text-xs font-black">
-                    <Wallet className="w-4 h-4" /> شحن الرصيد
-                  </button>
+                  {onRecharge && (
+                    <button type="button" onClick={onRecharge}
+                      className="flex items-center justify-center gap-1.5 py-3.5 rounded-2xl bg-amber-400 hover:bg-amber-500 text-gray-900 text-xs font-black">
+                      <Wallet className="w-4 h-4" /> شحن الرصيد
+                    </button>
+                  )}
                 </div>
               </div>
             )}

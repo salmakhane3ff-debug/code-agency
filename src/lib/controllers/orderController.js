@@ -42,7 +42,7 @@ export async function getOrdersHandler(req) {
 
 const ORDER_CLIENT_ERRORS = new Set([
   'EMPTY_ORDER', 'MISSING_PRODUCT_ID', 'PRODUCT_NOT_FOUND',
-  'PRODUCT_INACTIVE', 'INVALID_PRICE', 'INVALID_QUANTITY',
+  'PRODUCT_INACTIVE', 'PRODUCT_LOCKED', 'INVALID_PRICE', 'INVALID_QUANTITY',
 ]);
 
 export async function createOrderHandler(req) {

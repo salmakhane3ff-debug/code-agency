@@ -43,6 +43,10 @@
   "product_trust_best_price": "أفضل سعر مضمون",
   "product_trust_verified": "موثوق وآمن",
   "product_details_section": "تفاصيل المنتج",
+  "product_locked": "مقفل",
+  "product_locked_message": "هذا المنتج مقفل مؤقتًا: لا يمكن عرضه أو طلبه.",
+  "product_locked_back": "تصفح المنتجات الأخرى",
+  "product_locked_cart": "هذا المنتج مقفل ولا يمكن إضافته إلى السلة.",
 
   "cart_title": "سلة التسوق",
   "cart_empty": "سلتك فارغة",

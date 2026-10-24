@@ -1,8 +1,9 @@
 "use client";
 
 import { memo } from "react";
-import Link from "next/link";
 import { Heart } from "lucide-react";
+import { isProductLocked } from "@/lib/productLock";
+import { LockableLink, LockedOverlay } from "./ProductLock";
 
 /**
  * ProductCard — the All-Products grid card.
@@ -16,10 +17,12 @@ import { Heart } from "lucide-react";
  * compete with the next page's fetch.
  */
 function ProductCard({ product, discountRule, isWishlisted, onWishlist, formatPrice }) {
+  // Locked by the admin: still shown (image, name, price + lock) but not a link.
+  const locked = isProductLocked(product);
   return (
     <div className="bg-white rounded-3xl border !border-purple-50 p-2 flex flex-col shadow-sm hover:shadow-md transition-all duration-300">
       {/* Image container */}
-      <Link href={`/products/${product._id}`}>
+      <LockableLink locked={locked} href={`/products/${product._id}`}>
         <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-gray-100 to-gray-200 mb-3 aspect-square">
           <img
             src={product.images?.[0] || "https://placehold.co/400x500?text=No+Image"}
@@ -28,6 +31,7 @@ function ProductCard({ product, discountRule, isWishlisted, onWishlist, formatPr
             decoding="async"
             className="absolute inset-0 w-full h-full object-cover object-top"
           />
+          {locked && <LockedOverlay />}
 
           {/* Product Label */}
           {product.productLabel && (
@@ -68,11 +72,11 @@ function ProductCard({ product, discountRule, isWishlisted, onWishlist, formatPr
             <Heart className={`w-3.5 h-3.5 ${isWishlisted ? "fill-current" : ""}`} />
           </button>
         </div>
-      </Link>
+      </LockableLink>
 
       {/* Info */}
       <div className="px-2 pb-2 flex flex-col flex-1">
-        <Link href={`/products/${product._id}`}>
+        <LockableLink locked={locked} href={`/products/${product._id}`}>
           <h2 className="text-sm font-bold text-gray-900 line-clamp-1 leading-tight mb-1">{product.title}</h2>
           <div className="flex items-center gap-2 mb-2 flex-wrap">
             <span className="text-lg font-bold text-gray-900">
@@ -84,7 +88,7 @@ function ProductCard({ product, discountRule, isWishlisted, onWishlist, formatPr
               </span>
             )}
           </div>
-        </Link>
+        </LockableLink>
       </div>
     </div>
   );

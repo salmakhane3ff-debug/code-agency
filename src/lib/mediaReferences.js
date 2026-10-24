@@ -62,6 +62,10 @@ const REFERENCE_SOURCES = [
   { table: 'invoices',         columns: ['items'] },
   { table: 'feedbacks',        columns: ['images', 'mediaUrl'] },
   { table: 'scheduled_reviews', columns: ['images'] },
+  // Rewards: catalog images come from the same media library, and each gift
+  // request snapshots its gift's image so history keeps rendering.
+  { table: 'reward_gifts',       columns: ['images'] },
+  { table: 'reward_redemptions', columns: ['giftSnapshot'] },
 ];
 
 // One round-trip: OR of an EXISTS per source. Postgres stops at the first true.

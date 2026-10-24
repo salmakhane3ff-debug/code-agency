@@ -15,6 +15,8 @@
  */
 
 import prisma from '../prisma.js';
+import { deleteAffiliateSafely } from '../affiliateDeletion.js';
+import { onAffiliateActivationCommitted } from '../rewardsHooks.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -89,18 +91,23 @@ export async function createAffiliate({ username, userId, commissionRate = 0.1 }
 }
 
 /** Update affiliate settings (commission rate, isActive). */
-export async function updateAffiliate(id, { commissionRate, isActive, username }) {
+export async function updateAffiliate(id, { commissionRate, isActive, username }, { db = prisma } = {}) {
   const data = {};
   if (commissionRate !== undefined) data.commissionRate = parseFloat(commissionRate);
   if (isActive       !== undefined) data.isActive       = Boolean(isActive);
   if (username       !== undefined) data.username       = username.toLowerCase().trim();
 
   try {
-    const row = await prisma.affiliate.update({
+    const before = data.isActive === true
+      ? await db.affiliate.findUnique({ where: { id }, select: { isActive: true } })
+      : null;
+    const row = await db.affiliate.update({
       where:   { id },
       data,
       include: { user: true },
     });
+    // Rewards: signup bonus on the first inactive → active switch (post-commit, never throws).
+    if (before) await onAffiliateActivationCommitted(id, { wasActive: before.isActive, isActive: row.isActive, db });
     return mapAffiliate(row);
   } catch (err) {
     if (err.code === 'P2025') return null;
@@ -108,15 +115,9 @@ export async function updateAffiliate(id, { commissionRate, isActive, username }
   }
 }
 
-/** Delete an affiliate record. */
+/** Delete an affiliate record. false = not found; throws AFFILIATE_HAS_HISTORY (→ 409) when referenced. */
 export async function deleteAffiliate(id) {
-  try {
-    await prisma.affiliate.delete({ where: { id } });
-    return true;
-  } catch (err) {
-    if (err.code === 'P2025') return false;
-    throw err;
-  }
+  return deleteAffiliateSafely(prisma, id);
 }
 
 // ── Writes — Click tracking ───────────────────────────────────────────────────

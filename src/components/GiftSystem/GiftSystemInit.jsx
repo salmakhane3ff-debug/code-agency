@@ -16,6 +16,7 @@
 
 import { useEffect } from "react";
 import { fetchCached } from "@/lib/dataCache";
+import { isProductLocked } from "@/lib/productLock";
 
 function getImageUrl(images) {
   if (!images) return "";
@@ -58,7 +59,8 @@ export default function GiftSystemInit() {
           const product = products.find(
             (p) => p._id === gift.productId || p.id === gift.productId
           );
-          if (!product) continue;
+          // Locked by the admin: not given away (the server drops it too).
+          if (!product || isProductLocked(product)) continue;
 
           // Avoid duplicates (same gift already present)
           const alreadyIn = newGiftItems.some((i) => i._giftId === gift.id);

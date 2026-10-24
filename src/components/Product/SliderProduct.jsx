@@ -9,6 +9,8 @@ import { Swiper, SwiperSlide } from "swiper/react";
 import { Navigation, Pagination, Autoplay } from "swiper/modules";
 import { useCart } from "@/hooks/useCart";
 import { useLanguage } from "@/context/LanguageContext";
+import { isProductLocked } from "@/lib/productLock";
+import { LockableLink, LockedOverlay } from "./ProductLock";
 import "swiper/css";
 import "swiper/css/navigation";
 import "swiper/css/pagination";
@@ -202,9 +204,10 @@ export default function SliderProduct({ header, products = [], type = "product" 
           return (
             <SwiperSlide key={product._id}>
               <div className="bg-gray-50 border border-gray-100 rounded-xl overflow-hidden">
-                <Link href={`/products/${product._id}`}>
+                <LockableLink locked={isProductLocked(product)} href={`/products/${product._id}`}>
                   <div className="relative">
                     <img src={product.images?.[0] || "https://placehold.co/400x500?text=No+Image"} alt={product.title} className="w-full aspect-[4/5] object-cover" />
+                    {isProductLocked(product) && <LockedOverlay />}
 
                     {/* Product Label */}
                     {product.productLabel && <ProductLabel label={product.productLabel} />}
@@ -229,10 +232,10 @@ export default function SliderProduct({ header, products = [], type = "product" 
                       <Heart className={`w-3 h-3 sm:w-4 sm:h-4 ${isInWishlist(product._id) ? "fill-current" : ""}`} />
                     </button>
                   </div>
-                </Link>
+                </LockableLink>
 
                 <div className="p-2 sm:p-4 bg-white">
-                  <Link href={`/products/${product._id}`}>
+                  <LockableLink locked={isProductLocked(product)} href={`/products/${product._id}`}>
                     {/* Product Name */}
                     <h2 className="text-xs md:text-sm font-medium text-gray-800 leading-tight line-clamp-1 mb-1 sm:mb-2 ">{product.title}</h2>
 
@@ -263,10 +266,10 @@ export default function SliderProduct({ header, products = [], type = "product" 
                     <div className="mb-1 text-center">
                       <span className="text-xs text-green-700 font-normal">Limited Time Deal</span>
                     </div>
-                  </Link>
+                  </LockableLink>
 
-                  {/* Add to Cart Button - Outside Link */}
-                  <Button
+                  {/* Add to Cart Button - Outside Link (never for a locked product) */}
+                  {!isProductLocked(product) && <Button
                     size="sm"
                     isLoading={isAddingToCart(product._id)}
                     onPress={(e) => handleAddToCart(product, e)}
@@ -274,7 +277,7 @@ export default function SliderProduct({ header, products = [], type = "product" 
                     startContent={!isAddingToCart(product._id) && <ShoppingCart className="w-3 h-3 sm:w-4 sm:h-4" />}
                   >
                     {isAddingToCart(product._id) ? "Adding..." : "Add to Cart"}
-                  </Button>
+                  </Button>}
                 </div>
               </div>
             </SwiperSlide>

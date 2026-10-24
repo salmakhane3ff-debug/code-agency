@@ -1,5 +1,5 @@
 /**
- * GET  /api/admin/demo          → settings + competition info
+ * GET  /api/admin/demo          → settings + competition info + archived cycles
  * POST /api/admin/demo          → generate demo affiliates
  * PUT  /api/admin/demo          → save settings (isEnabled, simulationSpeed)
  */
@@ -8,16 +8,18 @@ import {
   saveDemoSettings,
   getCompetitionInfo,
   generateDemoAffiliates,
+  listCompetitionHistory,
 } from '@/lib/services/demoService';
 import { withAdminAuth } from '@/lib/middleware/withAdminAuth';
 
 export const GET = withAdminAuth(async () => {
   try {
-    const [settings, competition] = await Promise.all([
+    const [settings, competition, history] = await Promise.all([
       getDemoSettings(),
       getCompetitionInfo(),
+      listCompetitionHistory(),
     ]);
-    return Response.json({ settings, competition });
+    return Response.json({ settings, competition, history });
   } catch (err) {
     console.error('admin/demo GET error:', err);
     return Response.json({ error: 'Erreur serveur' }, { status: 500 });

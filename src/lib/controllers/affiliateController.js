@@ -20,6 +20,7 @@ import {
   getAffiliateStats,
 } from '../services/affiliateService.js';
 import { badRequest, notFound, serverError } from '../utils/apiResponse.js';
+import { AFFILIATE_HAS_HISTORY } from '../affiliateDeletion.js';
 
 // ── GET /api/affiliate ────────────────────────────────────────────────────────
 
@@ -101,6 +102,9 @@ export async function deleteAffiliateHandler(req) {
 
     return Response.json({ message: 'Affiliate deleted', _id: affiliateId });
   } catch (err) {
+    if (err?.code === AFFILIATE_HAS_HISTORY) {
+      return Response.json({ error: err.message, code: err.code }, { status: 409 });
+    }
     console.error('Affiliate DELETE error:', err);
     return serverError('Failed to delete affiliate');
   }

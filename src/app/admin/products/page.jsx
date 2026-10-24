@@ -5,7 +5,7 @@ import Link from "next/link";
 import {
   Trash2, Edit3, Package, Plus, Search, Copy, Loader2,
   ChevronDown, X, Tags, BarChart2, CheckSquare, TrendingUp,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, Lock, LockOpen,
 } from "lucide-react";
 import DeleteConfirmationModal from "@/components/block/DeleteConfirmationModal";
 import formatDate from "@/utils/formatDate";
@@ -49,6 +49,29 @@ function fmt(price) {
 function ctr(orders, clicks) {
   if (!clicks) return "—";
   return `${((orders / clicks) * 100).toFixed(1)}%`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PRODUCT LOCK — manual per product. Locked: still listed on the storefront
+//  (image, name, price + lock) but nobody can open or buy it (server-enforced)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ProductLockToggle({ locked, busy, onToggle, compact = false }) {
+  return (
+    <button type="button" onClick={onToggle} disabled={busy}
+      title={locked ? "مقفل: ظاهر في المتجر لكن لا يمكن فتحه أو شراؤه — اضغط لفتحه" : "مفتوح: يعمل بشكل عادي — اضغط لقفله"}
+      aria-pressed={locked}
+      className={`inline-flex items-center gap-1 rounded-full border font-semibold transition-colors disabled:opacity-50
+        ${compact ? "px-2 py-0.5 text-[10px]" : "px-2.5 py-1 text-[11px]"}
+        ${locked
+          ? "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100"
+          : "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"}`}>
+      {busy
+        ? <Loader2 className="w-3 h-3 animate-spin" />
+        : locked ? <Lock className="w-3 h-3" /> : <LockOpen className="w-3 h-3" />}
+      {locked ? "مقفل" : "مفتوح"}
+    </button>
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -211,6 +234,10 @@ export default function ProductTablePage() {
   // ── Duplicate ─────────────────────────────────────────────────────────────
   const [duplicating, setDuplicating] = useState(null); // _id of product being duplicated
 
+  // ── Product lock (separate admin endpoint; not part of product PUT) ────────
+  const [lockedIds, setLockedIds] = useState(new Set());
+  const [lockBusy,  setLockBusy]  = useState(null);     // _id being toggled
+
   // ─────────────────────────────────────────────────────────────────────────
   //  FETCH
   // ─────────────────────────────────────────────────────────────────────────
@@ -232,6 +259,38 @@ export default function ProductTablePage() {
     } catch { setCollections([]); }
   }, []);
 
+  const fetchLocks = useCallback(async () => {
+    try {
+      const r = await fetch("/api/admin/products/locks", { cache: "no-store" });
+      if (r.ok) {
+        const d = await r.json();
+        setLockedIds(new Set(Array.isArray(d.lockedIds) ? d.lockedIds : []));
+      }
+    } catch { /* non-critical: every product shows as unlocked until reload */ }
+  }, []);
+
+  const toggleProductLock = async (id) => {
+    const next = !lockedIds.has(id);
+    setLockBusy(id);
+    try {
+      const r = await fetch(`/api/admin/products/${encodeURIComponent(id)}/lock`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ locked: next }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "تعذر تحديث حالة القفل");
+      setLockedIds((prev) => {
+        const s = new Set(prev);
+        if (d.isLocked) s.add(id); else s.delete(id);
+        return s;
+      });
+    } catch (e) {
+      alert(e.message || "تعذر تحديث حالة القفل");
+    } finally {
+      setLockBusy(null);
+    }
+  };
+
   const fetchAnalytics = useCallback(async () => {
     try {
       const r = await fetch("/api/admin/product-analytics");
@@ -240,7 +299,7 @@ export default function ProductTablePage() {
   }, []);
 
   useEffect(() => {
-    Promise.all([fetchProducts(), fetchCollections(), fetchAnalytics()])
+    Promise.all([fetchProducts(), fetchCollections(), fetchAnalytics(), fetchLocks()])
       .finally(() => setLoading(false));
   }, []);
 
@@ -574,6 +633,11 @@ export default function ProductTablePage() {
                             {ctr(stats.orders, stats.clicks)}
                           </span>
                         </div>
+                        <div className="flex items-center gap-1.5 mt-1.5">
+                          <span className="text-[10px] text-gray-400">القفل:</span>
+                          <ProductLockToggle compact locked={lockedIds.has(product._id)}
+                            busy={lockBusy === product._id} onToggle={() => toggleProductLock(product._id)} />
+                        </div>
                       </div>
 
                       {/* Actions */}
@@ -615,6 +679,7 @@ export default function ProductTablePage() {
                     <th className="text-right text-xs font-semibold text-gray-500 px-3 py-3 whitespace-nowrap">المجموعات</th>
                     <th className="text-right text-xs font-semibold text-gray-500 px-3 py-3 whitespace-nowrap">السعر</th>
                     <th className="text-right text-xs font-semibold text-gray-500 px-3 py-3 whitespace-nowrap">الحالة</th>
+                    <th className="text-right text-xs font-semibold text-gray-500 px-3 py-3 whitespace-nowrap" title="مقفل: ظاهر في المتجر لكن لا يمكن فتحه أو شراؤه">القفل</th>
                     <SortTh label="📦 الطلبات" sk="orders" />
                     <SortTh label="👆 الزيارات" sk="clicks" />
                     <th className="text-right text-xs font-semibold text-gray-500 px-3 py-3 whitespace-nowrap">📊 CTR</th>
@@ -690,6 +755,12 @@ export default function ProductTablePage() {
                         {/* Status */}
                         <td className="px-3 py-3">
                           <StatusBadge status={product.status} />
+                        </td>
+
+                        {/* Product lock */}
+                        <td className="px-3 py-3">
+                          <ProductLockToggle locked={lockedIds.has(product._id)}
+                            busy={lockBusy === product._id} onToggle={() => toggleProductLock(product._id)} />
                         </td>
 
                         {/* Orders */}
