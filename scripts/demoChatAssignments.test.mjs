@@ -175,6 +175,7 @@ function makeDb({ gateOn = false } = {}) {
         return structuredClone(t.settings.find((x) => x.id === where.id) ?? null);
       },
       upsert: async ({ where, update, create }) => {
+        await yieldNow(); // a real round trip: concurrent transactions interleave here
         if (where.id !== G.DEMO_CHAT_SETTING_ID) throw new Error(`TEST: forbidden setting write ${where.id}`);
         calls.settingWrites++;
         const row = t.settings.find((x) => x.id === where.id);
@@ -183,7 +184,31 @@ function makeDb({ gateOn = false } = {}) {
       },
     },
   };
-  const raw = async (strings, ...vals) => {
+  // Row locks on "settings" (the only table where the absent-row case matters): FOR UPDATE
+  // locks an EXISTING row until the transaction ends (none when the row is absent, like
+  // PostgreSQL); the first-row INSERT … ON CONFLICT DO NOTHING inserts + locks it.
+  const rowLocks = new Map();
+  const acquire = async (key, owner) => {
+    while (rowLocks.has(key) && rowLocks.get(key).owner !== owner) await rowLocks.get(key).released;
+    if (!rowLocks.has(key)) { let rel; const released = new Promise((r) => { rel = r; }); rowLocks.set(key, { owner, released, rel }); owner.held.push(key); }
+  };
+  const releaseAll = (owner) => { for (const k of owner.held) { const l = rowLocks.get(k); rowLocks.delete(k); l?.rel(); } owner.held = []; };
+  const execRaw = (owner) => async (strings, ...vals) => {
+    await yieldNow();
+    const q = strings.join("?").replace(/\s+/g, " ");
+    calls.raw.push(q);
+    if (/^INSERT INTO "settings" \("id", "data", "updatedAt"\) VALUES \(\?, \?::jsonb, \?\) ON CONFLICT \("id"\) DO NOTHING$/.test(q.trim())) {
+      if (vals[0] !== G.DEMO_CHAT_SETTING_ID) throw new Error("TEST: forbidden settings insert");
+      if (t.settings.some((x) => x.id === vals[0])) return 0;
+      const row = { id: vals[0], data: JSON.parse(vals[1]) };
+      t.settings.push(row); owner.undo?.push(() => { t.settings = t.settings.filter((x) => x !== row); });
+      calls.settingInserts = (calls.settingInserts || 0) + 1;
+      await acquire(`settings:${vals[0]}`, owner);
+      return 1;
+    }
+    throw new Error(`TEST: unexpected raw statement: ${q}`);
+  };
+  const rawFor = (owner) => async (strings, ...vals) => {
     await yieldNow();
     const q = strings.join("?").replace(/\s+/g, " ");
     calls.raw.push(q);
@@ -191,9 +216,15 @@ function makeDb({ gateOn = false } = {}) {
     if (/FROM "demo_chat_journeys" WHERE "id" = \? FOR (SHARE|UPDATE)/.test(q)) { const j = t.journeys.find((x) => x.id === vals[0]); return j ? [{ ...j }] : []; }
     if (/FROM "demo_chat_assignments" WHERE "demoAffiliateId" = \? FOR UPDATE/.test(q)) { const a = t.assignments.find((x) => x.demoAffiliateId === vals[0]); return a ? [structuredClone(a)] : []; }
     if (/FROM "demo_chat_assignments" WHERE "id" = \? FOR SHARE/.test(q)) { const a = t.assignments.find((x) => x.id === vals[0]); return a ? [structuredClone(a)] : []; }
-    if (/FROM "settings" WHERE "id" = \? FOR UPDATE/.test(q)) { if (vals[0] !== G.DEMO_CHAT_SETTING_ID) throw new Error("TEST: forbidden settings lock"); const r = t.settings.find((x) => x.id === vals[0]); return r ? [structuredClone(r)] : []; }
+    if (/FROM "settings" WHERE "id" = \? FOR UPDATE/.test(q)) {
+      if (vals[0] !== G.DEMO_CHAT_SETTING_ID) throw new Error("TEST: forbidden settings lock");
+      if (!t.settings.some((x) => x.id === vals[0])) return []; // absent row: nothing to lock
+      await acquire(`settings:${vals[0]}`, owner);
+      const r = t.settings.find((x) => x.id === vals[0]); return r ? [structuredClone(r)] : [];
+    }
     throw new Error(`TEST: unexpected raw SQL: ${q}`);
   };
+  const raw = rawFor({ held: [] });
   const guard = (o) => new Proxy(o, { get: (x, k) => { if (k in x || typeof k === "symbol" || k === "then") return x[k]; throw new Error(`TABLE ACCESS BLOCKED: db.${String(k)}`); } });
   const db = guard({
     ...models, _t: t, _calls: calls, $queryRaw: raw,
@@ -201,6 +232,7 @@ function makeDb({ gateOn = false } = {}) {
     // concurrent transactions interleave like separate PostgreSQL sessions.
     $transaction: async (fn) => {
       const undo = [];
+      const owner = { held: [], undo };
       const logged = (table, op) => async (args) => {
         const before = structuredClone(t[table]);
         const res = await op(args);
@@ -221,7 +253,9 @@ function makeDb({ gateOn = false } = {}) {
         demoChatMessage: { ...models.demoChatMessage, createMany: logged("messages", models.demoChatMessage.createMany) },
         setting: { ...models.setting, upsert: logged("settings", models.setting.upsert) },
       };
-      try { return await fn(guard({ ...txModels, $queryRaw: raw })); } catch (e) { for (const u of undo.reverse()) u(); throw e; }
+      try { return await fn(guard({ ...txModels, $queryRaw: rawFor(owner), $executeRaw: execRaw(owner) })); }
+      catch (e) { for (const u of undo.reverse()) u(); throw e; }
+      finally { releaseAll(owner); }
     },
   });
   return db;
@@ -357,6 +391,7 @@ console.log("\n5. Global protected switch");
   const n = db._t.audit.length;
   ok("enable again → unchanged, no write, no audit", (await setCfg(on, { enabled: true, confirm: "ACTIVER" })).body.unchanged === true && db._calls.settingWrites === 1 && db._t.audit.length === n);
   const d = await setCfg(off, { enabled: false });
+  ok("disable when the row exists → audit CHAT_DISABLE", d.status === 200);
   ok("disable works with the env switch OFF (no confirmation needed)", d.status === 200 && d.body.setting === false && db._t.settings[0].data.enabled === false && db._t.audit.at(-1).action === "CHAT_DISABLE");
   ok("GET /config reflects both gates", (await call(on.config, { url: "http://x/api/admin/demo-chat/config" })).body.env === true);
   const g = await upsertSettingsHandler(new Request("http://x/api/setting?type=demo-chat-config", { method: "POST", body: JSON.stringify({ enabled: true }) }));
@@ -366,6 +401,21 @@ console.log("\n5. Global protected switch");
   const walk = (dir) => { for (const f of readdirSync(dir)) { const p = join(dir, f); if (statSync(p).isDirectory()) { if (f !== "generated") walk(p); } else if (/\.(js|jsx|ts|tsx)$/.test(f)) { const s = readFileSync(p, "utf8"); if (/(DEMO_CHAT_SETTING_ID|demo-chat-config)/.test(s) && /setting\s*\.\s*(upsert|update|create|createMany|updateMany)\s*\(/.test(s)) writers.push(p); } } };
   walk("src");
   ok(`the assignment service is the only writer of demo-chat-config (${writers.join(", ")})`, writers.length === 1 && writers[0].endsWith("services/demoChatAssignmentService.js"));
+}
+
+// ── 5b. Concurrent FIRST activation (row absent) — Phase 3C-11 regression ─────
+console.log("\n5b. Concurrent first activation of demo-chat-config");
+{
+  const db = use(makeDb()); const on = H(ENV_ON); const off = H({});
+  const d0 = await setCfg(off, { enabled: false });
+  ok("disable while the row is absent → unchanged, row NOT created, no audit", d0.body.unchanged === true && db._t.settings.length === 0 && db._t.audit.length === 0);
+  const rs = await Promise.all(Array.from({ length: 4 }, () => setCfg(on, { enabled: true, confirm: "ACTIVER" })));
+  const changed = rs.filter((r) => r.status === 200 && r.body.unchanged === false).length;
+  const unchanged = rs.filter((r) => r.status === 200 && r.body.unchanged === true).length;
+  ok(`4 simultaneous first enables → 1 changed, 3 unchanged (got ${changed}/${unchanged})`, changed === 1 && unchanged === 3);
+  ok("exactly one CHAT_ENABLE audit row for the transition", db._t.audit.filter((a) => a.action === "CHAT_ENABLE").length === 1);
+  ok("one settings row, enabled, created once by the guarded insert", db._t.settings.length === 1 && db._t.settings[0].data.enabled === true && db._calls.settingInserts === 1);
+  ok("service creates the first row with INSERT … ON CONFLICT DO NOTHING before locking it", /INSERT INTO "settings"[\s\S]*ON CONFLICT \("id"\) DO NOTHING[\s\S]*FROM "settings" WHERE "id" = \$\{DEMO_CHAT_SETTING_ID\} FOR UPDATE/.test(src("src/lib/services/demoChatAssignmentService.js")));
 }
 
 // ── 6. No affiliate / public exposure ─────────────────────────────────────────

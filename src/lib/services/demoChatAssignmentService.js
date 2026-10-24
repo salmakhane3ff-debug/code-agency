@@ -272,6 +272,12 @@ export async function setChatEnabled(body, { actorId = null, now = Date.now(), e
   }
   const db = getDemoDb();
   const unchanged = await inTx(db, 'demo-chat config', async (tx) => {
+    if (enabled) {
+      // First activation: make sure the row exists (as disabled) so the FOR UPDATE below
+      // always locks it. Concurrent first enables then serialize — a second INSERT … ON
+      // CONFLICT waits for the first transaction — and only one records CHAT_ENABLE.
+      await tx.$executeRaw`INSERT INTO "settings" ("id", "data", "updatedAt") VALUES (${DEMO_CHAT_SETTING_ID}, ${JSON.stringify({ enabled: false })}::jsonb, ${new Date(now)}) ON CONFLICT ("id") DO NOTHING`;
+    }
     const [row] = await tx.$queryRaw`SELECT "id", "data" FROM "settings" WHERE "id" = ${DEMO_CHAT_SETTING_ID} FOR UPDATE`;
     const current = !!(row?.data && typeof row.data === 'object' && row.data.enabled === true);
     if (current === enabled) return true;
