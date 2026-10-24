@@ -1770,7 +1770,7 @@ model DemoChatMessage {
   assetId          String?
   earningsPeriod   String?
   metric           String?
-  earningsSnapshot Json?    // audit only; amounts are re-resolved on read
+  earningsSnapshot Json?    // resolved once at materialization, immutable; shown as stored (unavailable stays unavailable)
   createdAt        DateTime @default(now())
 
   assignment    DemoChatAssignment     @relation(fields: [assignmentId], references: [id], onDelete: Restrict)

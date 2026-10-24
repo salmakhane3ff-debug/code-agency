@@ -468,7 +468,7 @@ async function previewSteps(journeyId, versionId) {
 }
 
 /** Read-only demo earnings inputs for the given message dates (history, coverage, participation, admin markers). */
-async function loadEarningsContext(db, profile, dates, nowMs) {
+export async function loadEarningsContext(db, profile, dates, nowMs) {
   const sorted = [...dates].sort();
   const firstDay = addDays(sorted[0], -9); const lastDay = addDays(sorted[sorted.length - 1], 2);
   const from = utcDayStart(addDays(sorted[0], -8)) - DAY_MS; // week + neighbours (ambiguity check)
@@ -665,7 +665,7 @@ export async function listAudit({ entityType, entityId, before, limit = 50 } = {
   const db = getDemoDb();
   const take = Math.min(Math.max(Number.parseInt(limit, 10) || 50, 1), 200);
   const where = {};
-  if (entityType) { if (!['journey', 'step', 'version', 'asset'].includes(entityType)) throw err(400, 'VALIDATION', 'entityType invalide.', 'entityType'); where.entityType = entityType; }
+  if (entityType) { if (!['journey', 'step', 'version', 'asset', 'assignment'].includes(entityType)) throw err(400, 'VALIDATION', 'entityType invalide.', 'entityType'); where.entityType = entityType; }
   if (entityId) { requireId(entityId, 'Élément'); where.entityId = entityId; }
   if (before) { const d = Date.parse(before); if (Number.isNaN(d)) throw err(400, 'VALIDATION', 'Curseur invalide.', 'before'); where.createdAt = { lt: new Date(d) }; }
   const rows = await db.demoChatAuditLog.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: take + 1 });

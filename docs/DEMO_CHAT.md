@@ -3,8 +3,8 @@
 Scripted, **simulated** 30-day chat journeys shown by DEMO competition profiles.
 No AI, no WhatsApp/SMS, never a real affiliate balance, order, commission,
 payout or notification. Phases 3C-2/3C-3 are **authoring only** (journeys, steps,
-media library): journeys are not assigned to profiles and the chat is not shown
-anywhere.
+media library); Phase 3C-6 adds message materialization (service only, disabled by
+default). No profile is assigned and the chat is not shown anywhere.
 
 ## Data (migrations `20261023_demo_chat_journeys`, `20261024_demo_chat_audit_truncate_guard`)
 | Table | Used for |
@@ -168,6 +168,40 @@ Pure modules, `now` always injected: `src/lib/demoChatTime.js`, `src/lib/demoCha
   - Backfill never fills a day that coverage proves was zero for that profile.
   - Coverage starts when this is deployed: earlier days stay unproven (curated rows still resolve).
 
+## Message materialization (Phase 3C-6 — service only, disabled)
+`src/lib/services/demoChatMessageService.js` writes `demo_chat_messages` rows for enabled assignments.
+No schema change: it relies on the Phase 3C-1 unique key and `earningsSnapshot` column.
+
+- **Gates** — runs only when env `DEMO_CHAT_ENABLED=true` **and** setting `demo-chat-config` `{enabled:true}`
+  **and** the assignment is enabled. Otherwise it returns `skipped` and writes nothing. No route, scheduler
+  job or PM2 change calls it yet, and no profile is enabled or assigned.
+- **What is created** — the steps of the assignment's PUBLISHED version (immutable snapshot), scheduled by the
+  Phase 3C-4 scheduler: current cycle only, `scheduledAt ≤ now`, each at its original Casablanca date/time.
+  A late joiner gets day 1 … now of the current cycle; earlier cycles are never back-filled; future messages
+  are never created.
+- **Idempotent** — one row per `(assignmentId, revision, loopIndex, stepId)` (database unique key). Inserts use
+  `createMany({ skipDuplicates: true })` (`INSERT … ON CONFLICT DO NOTHING`) inside a transaction that locks the
+  assignment `FOR SHARE` and re-checks version / revision / anchor / enabled; if they changed, nothing is
+  inserted and the next run uses the new state. Concurrent calls, retries and restarts cannot duplicate a
+  message. Existing rows are never updated; a stored row whose version disagrees with the assignment is
+  logged as a conflict and left untouched. `revision` stands for (version, anchor).
+- **Earnings snapshot (immutable)** — the Phase 3C-4 resolver runs ONCE, at materialization; its result
+  (`v: 1`, status, amounts only when `complete`/`provisional`) is stored in `earningsSnapshot` and is the only
+  source when the message is shown — never re-resolved, so a historical message never changes. Unverified
+  data is never shown as an amount: `incomplete`/`unavailable` are stored as such and render
+  « Données indisponibles », never 0. A `today` summary materialized more than 15 min after its scheduled time
+  is stored `unavailable` (`materialized_too_late`).
+- **Audit** — each insert batch that creates rows adds one SYSTEM `MESSAGES_MATERIALIZE` audit row
+  (`entityType: 'assignment'`).
+- **View** — `listAssignmentMessages()` returns the current revision's current-cycle rows with
+  `scheduledAt ≤ now`; earlier cycles are hidden (`previousCyclesHidden`), not deleted.
+- **Retention** — nothing deletes messages; old-cycle rows stay until the agreed retention cleanup
+  (a separate, approved procedure).
+- **Limitations** — verified with a fake database only (no PostgreSQL run of the concurrency path);
+  `materializeDue()` processes at most 500 enabled assignments per call, sequentially; a `yesterday`
+  message whose previous day is not yet provable at materialization (e.g. scheduled 00:30) is stored
+  unavailable for good; wiring a scheduler or admin route needs separate approval.
+
 ## Deployment prerequisites (voice notes)
 1. Install ffmpeg (≥ 4, with the built-in `aac` encoder — present in standard builds; ffmpeg 6.1.1 verified in
    Development) on every server that handles admin uploads. ffprobe (same package) is optional but recommended.
@@ -192,6 +226,7 @@ Pure modules, `now` always injected: `src/lib/demoChatTime.js`, `src/lib/demoCha
   `DROP TABLE`, schema resets). Retention purges need their own approved procedure.
 
 ## Tests
-`node scripts/demoChat.test.mjs` and `node scripts/demoChatMedia.test.mjs` (no database, no network,
+`node scripts/demoChat.test.mjs`, `node scripts/demoChatMedia.test.mjs` and
+`node scripts/demoChatMessages.test.mjs` (no database, no network,
 injected ffprobe). The SQL constraints, foreign keys and triggers were verified
 separately against a temporary PostgreSQL 16 instance in Phase 3C-1 (TRUNCATE guard: static checks only).
