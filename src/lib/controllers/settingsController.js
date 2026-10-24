@@ -18,6 +18,7 @@ import { mergeSettings } from '../settingsMerge.js';
 import { AFFILIATE_DASHBOARD_SETTING_ID } from '../affiliateDashboardConfig.js';
 import { CYCLE_ARCHIVE_PREFIX } from '../demoCompetitionCycle.js';
 import { PROFILE_META_PREFIX } from '../demoProfileValidation.js';
+import { DEMO_CHAT_SETTING_ID } from '../demoChatGate.js';
 
 /**
  * Settings rows that have their own service and must never be written raw:
@@ -31,6 +32,8 @@ const RESERVED_SETTING_TYPES = new Set([
   // Validated + merged by their dedicated admin routes
   // (/api/admin/team-bonus-config, /api/admin/affiliate-dashboard-config).
   'team-bonus-config', AFFILIATE_DASHBOARD_SETTING_ID,
+  // Demo chat gate 2 (Phase 3C): never writable through the generic settings route.
+  DEMO_CHAT_SETTING_ID,
 ]);
 
 /**

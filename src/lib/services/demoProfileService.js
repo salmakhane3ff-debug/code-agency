@@ -197,7 +197,7 @@ export async function createProfile(input) {
   return getProfileDetail(a.id);
 }
 
-export async function updateProfile(id, input) {
+export async function updateProfile(id, input, { now = Date.now() } = {}) {
   const db = getDemoDb();
   const a = await requireProfile(db, id);
   const v = validateProfileInput(input, { partial: true, avatarAllowed: await avatarChecker(db, a.avatarUrl) });
@@ -212,7 +212,7 @@ export async function updateProfile(id, input) {
   }
   if (city !== undefined) { const meta = await readMeta(db, id); await writeMeta(db, id, { ...meta, city }); }
   invalidateDemoCache();
-  return getProfileDetail(id);
+  return getProfileDetail(id, { now });
 }
 
 const REFERENCED_MSG = "Ce profil a un historique (gains ou cycles archivés) : désactivez-le au lieu de le supprimer.";

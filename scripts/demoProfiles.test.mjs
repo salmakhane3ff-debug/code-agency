@@ -222,9 +222,15 @@ db._t.demoAvatar.push({ id: "av1", gender: "women", url: "/uploads/demo/avatars/
 
   seedHistory(db, id, 3, [0, 1, 2]);
   const before = (await svc.getProfileDetail(id, { now: NOW })).history;
-  const edited = await svc.updateProfile(id, { name: "Salma B.", username: "demo_salma_b", city: "Rabat", avatarUrl: "/uploads/demo/avatars/w1.webp", avatarColor: "#123456", growthType: "aggressive" });
+  const edited = await svc.updateProfile(id, { name: "Salma B.", username: "demo_salma_b", city: "Rabat", avatarUrl: "/uploads/demo/avatars/w1.webp", avatarColor: "#123456", growthType: "aggressive" }, { now: NOW });
   ok("edit name/username/city/avatar/colour/growth persisted, same id", edited.profile.id === id && edited.profile.name === "Salma B." && edited.profile.username === "demo_salma_b" && edited.profile.city === "Rabat" && edited.profile.avatarUrl === "/uploads/demo/avatars/w1.webp" && edited.profile.growthType === "aggressive");
   ok("edit keeps the history intact", JSON.stringify(edited.history.days) === JSON.stringify((await svc.getProfileDetail(id, { now: NOW })).history.days) && edited.history.totals.orders === before.totals.orders);
+  // Regression: the edit response uses the caller's clock, not the wall clock (failed on any day after the fixture date).
+  const PAST = NOW - 400 * DAY; // far from any real clock: seeded rows fall outside that window
+  const editedPast = await svc.updateProfile(id, { city: "Rabat" }, { now: PAST });
+  ok("updateProfile honours an injected now (history window follows it)",
+    before.days.length === 3 && editedPast.history.days.length === 0
+    && JSON.stringify(editedPast.history) === JSON.stringify((await svc.getProfileDetail(id, { now: PAST })).history));
   ok("avatar outside the library → 400", (await rejects(svc.updateProfile(id, { avatarUrl: "https://elsewhere/x.png" })))?.field === "avatarUrl");
   ok("current avatar stays allowed even if removed from the library", (db._t.demoAvatar.length = 0, (await svc.updateProfile(id, { avatarUrl: "/uploads/demo/avatars/w1.webp", name: "Salma B." })).profile.avatarUrl === "/uploads/demo/avatars/w1.webp"));
   ok("rename to a taken username → 409", (await svc.createProfile({ name: "Nadia K", username: "demo_nadia" }), (await rejects(svc.updateProfile(id, { username: "demo_nadia" })))?.status === 409));

@@ -83,6 +83,7 @@ const SideBar = ({ onItemClick }) => {
     { href: "/admin/conversion-optimization", icon: <TrendingUp size={16} />, label: "Conversion Optimization" },
     { href: "/admin/affiliates", icon: <Users size={16} />, label: "Affiliates" },
     { href: "/admin/demo-profiles", icon: <Users size={16} />, label: "🎭 Profils démo" },
+    { href: "/admin/demo-chat", icon: <Users size={16} />, label: "💬 Chat démo (simulation)" },
     { href: "/admin/promo", icon: <Tag size={16} />, label: "Promo Codes" },
     { href: "/admin/spin-wheel", icon: <Disc size={16} />, label: "Spin Wheel" },
     { href: "/admin/gifts", icon: <Gift size={16} />, label: "Gift System" },
