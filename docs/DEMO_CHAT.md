@@ -15,7 +15,8 @@ anywhere.
 | `demo_chat_audit_log` | append-only trail (UPDATE/DELETE row trigger + TRUNCATE statement trigger) |
 | `demo_chat_assets` | media library (3C-3): images + voice notes |
 | `demo_chat_version_assets` | assets frozen into a published version (3C-3) |
-| assignments, messages, viewer states, coverage | not written yet |
+| `demo_sim_day_coverage` + settings `demo-sim-participants:*` | simulation coverage evidence (3C-5) |
+| assignments, messages, viewer states | not written yet |
 
 ## Gates — the chat stays OFF
 Both are required (`src/lib/demoChatGate.js`):
@@ -119,6 +120,53 @@ extension, MIME type and any claimed duration are ignored.
   object never affects another upload of identical content. Remaining gap: a process crash **between**
   storing a file and inserting its row leaves an unrecorded object (no compensation can run); a future
   reconciliation job could list `demo-chat-*` objects without a row.
+
+## Scheduling, date mapping and earnings (Phase 3C-4 — preview only)
+Pure modules, `now` always injected: `src/lib/demoChatTime.js`, `src/lib/demoChatSchedule.js`,
+`src/lib/demoChatEarnings.js`. Nothing is persisted yet (no assignment, no message, no scheduler job).
+
+- **Time zone** — `Africa/Casablanca` via the runtime's Intl tz data; the process TZ is never read or set.
+  Calendar days are `YYYY-MM-DD` keys with calendar arithmetic (local days of 23/25 h around Morocco's
+  Ramadan offset change are handled). A skipped wall time runs at the first instant after the gap; a
+  repeated one at the earlier instant (both flagged `timeAdjustment`).
+- **Cycles** — day 1 = the assignment's anchor date (Casablanca). Cycle *n* covers anchor + 30n … + 29.
+  Visible at `now` = current-cycle messages scheduled ≤ now, each at its own original Casablanca date/time:
+  a late joiner sees day 1 … now; future messages never appear; earlier cycles are hidden (not deleted).
+- **History buckets** — a `demo_earnings_history` row's day is its **UTC calendar date** (rows are written at
+  server-local midnight; all stored rows are 00:00 UTC — Phase 3C-0). Casablanca date D ↔ bucket D, i.e. the
+  bucket runs 01:00–01:00 Casablanca at UTC+1 (a documented ±1 h approximation). Non-midnight or duplicate
+  rows make the day unavailable (fail-closed).
+- **Day status** — `complete`: admin-edited / backfilled row, or row + coverage proving the whole bucket
+  (`demo_sim_day_coverage`: first tick ≤ start + 5 min, last ≥ end − 5 min, max gap ≤ 5 min, profile existed
+  all day), or **no row + that proof → 0**. `incomplete`: row without proof. `unavailable`: anything else.
+  Only `complete` (and `provisional` today) values are rendered; otherwise the message shows
+  « Données indisponibles » / « المعطيات … ماشي متوفرة » — **never 0**.
+- **Periods** (relative to the message's own date D): `yesterday` = D−1 (must be finished at now);
+  `week` = D−7 … D−1, unavailable unless all 7 days are complete; `today` = D only when D is today and
+  ≥ 12:00 Casablanca, always suffixed « (provisoire) » / « (مؤقت) ». A `today` message viewed on a later day
+  is unavailable (its send-time value is not recorded until messages are persisted).
+- **Placeholders** — `{amount}` = commission (earnings, 5 % of the profile's demo revenue), or revenue when
+  the step's metric is `revenue`; `{orders}` = order count; `{period}` = period label. Anything else → invalid.
+- **Preview** — `POST /api/admin/demo-chat/preview/schedule` and the « Planning » panel on the preview page:
+  journey/version + demo profile + day-1 date + Casablanca date/time (+ `ar`/`fr` labels). Reads only demo
+  chat tables, the demo profile, its demo history, coverage and `demo-profile-meta:*`; writes nothing.
+- **Coverage evidence (Phase 3C-5)** — `src/lib/demoSimCoverage.js`, recorded by every SUCCESSFUL
+  `simulateTick()` (auto engine and manual button), after its history writes, in one transaction:
+  - `demo_sim_day_coverage` (per UTC day): first/last tick, tick count, largest gap. Atomic
+    `INSERT … ON CONFLICT DO UPDATE`; the gap only grows when a tick extends the range (later or earlier) and
+    never shrinks, so duplicate, retried or late ticks can only make a day look *less* covered.
+  - settings `demo-sim-participants:<YYYY-MM-DD>`: ids of the eligible profiles (active + stats) present in
+    **every** tick that day (atomic intersection) — a profile activated/deactivated mid-day drops out.
+    Reserved: the generic `/api/setting` route refuses it.
+  - A day yields **0** only with full coverage **and** participation **and** the profile existing before the day.
+  - Nothing is recorded when the server's local midnight is not UTC midnight (history buckets would disagree);
+    the server TZ is never changed. Disabled or failed ticks record nothing; a recorder error is logged and
+    the tick continues (the day simply stays unproven).
+  - Manual ticks run under the engine's advisory lock (`DEMO_SIM_LOCK_KEY`, transaction-scoped) → 409 when busy;
+    no more concurrent manual + engine ticks (and their duplicate history rows).
+  - `clearCompetitionHistory()` deletes history, archives, coverage and participants in ONE transaction.
+  - Backfill never fills a day that coverage proves was zero for that profile.
+  - Coverage starts when this is deployed: earlier days stay unproven (curated rows still resolve).
 
 ## Deployment prerequisites (voice notes)
 1. Install ffmpeg (≥ 4, with the built-in `aac` encoder — present in standard builds; ffmpeg 6.1.1 verified in

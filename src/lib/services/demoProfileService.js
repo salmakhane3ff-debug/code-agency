@@ -30,6 +30,8 @@ import {
   PROFILE_META_PREFIX, HISTORY_DAYS, isValidProfileId, validateProfileInput,
   validateGenerateInput, validateHistoryEdit, normalizeChatConfig,
 } from '../demoProfileValidation.js';
+import { coverageProves } from '../demoChatEarnings.js';
+import { SIM_PARTICIPANTS_PREFIX } from '../demoSimCoverage.js';
 
 const err = (status, code, message, field) => Object.assign(new Error(message), { status, code, field });
 const pad = (n) => String(n).padStart(2, '0');
@@ -292,17 +294,44 @@ export async function backfillHistory(id, { now = Date.now() } = {}) {
   const rows = await db.demoEarningsHistory.findMany({ where: { demoAffiliateId: id, date: { gte: win.from, lt: win.to } } });
   const have = new Set(rows.map((r) => dayKeyOf(r.date)));
   const meta = await readMeta(db, id);
-  let created = 0;
+  const proven = await provenObservedDays(db, a, win);
+  let created = 0; let skippedProven = 0;
   for (let i = 0; i < HISTORY_DAYS - 1; i++) { // from = today − 89 … yesterday
     const date = addLocalDays(win.from, i);
     const key = dayKeyOf(date);
     if (have.has(key)) continue;
+    // The simulation PROVED this profile earned nothing that day: keep the
+    // truthful zero, never fill it with generated figures.
+    if (date.getTime() % 86_400_000 === 0 && proven.has(date.toISOString().slice(0, 10))) { skippedProven++; continue; }
     await db.demoEarningsHistory.create({ data: { demoAffiliateId: id, date, ...seededDemoDay(id, key, a.growthType) } });
     meta.backfilledDays[key] = true;
     created++;
   }
   if (created) await writeMeta(db, id, meta);
-  return { created, existing: have.size };
+  return { created, existing: have.size, skippedProvenZero: skippedProven };
+}
+
+/**
+ * UTC days of the window on which coverage + participation prove this profile
+ * was observed by the simulation for the whole day (Phase 3C-5 evidence).
+ */
+async function provenObservedDays(db, profile, win) {
+  const coverage = await db.demoSimDayCoverage.findMany({ where: { day: { gte: win.from, lt: win.to } } });
+  if (!coverage.length) return new Set();
+  const participants = await db.setting.findMany({
+    where: { id: { in: coverage.map((c) => `${SIM_PARTICIPANTS_PREFIX}${new Date(c.day).toISOString().slice(0, 10)}`) } },
+  });
+  const tookPart = new Set(participants
+    .filter((r) => Array.isArray(r.data?.ids) && r.data.ids.includes(profile.id))
+    .map((r) => r.id.slice(SIM_PARTICIPANTS_PREFIX.length)));
+  const createdAt = profile.createdAt ? new Date(profile.createdAt).getTime() : null;
+  const out = new Set();
+  for (const c of coverage) {
+    const key = new Date(c.day).toISOString().slice(0, 10);
+    const start = Date.parse(`${key}T00:00:00.000Z`);
+    if (tookPart.has(key) && (createdAt === null || createdAt <= start) && coverageProves(c, start, start + 86_400_000)) out.add(key);
+  }
+  return out;
 }
 
 /**

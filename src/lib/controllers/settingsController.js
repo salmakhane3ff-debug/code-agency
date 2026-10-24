@@ -19,6 +19,7 @@ import { AFFILIATE_DASHBOARD_SETTING_ID } from '../affiliateDashboardConfig.js';
 import { CYCLE_ARCHIVE_PREFIX } from '../demoCompetitionCycle.js';
 import { PROFILE_META_PREFIX } from '../demoProfileValidation.js';
 import { DEMO_CHAT_SETTING_ID } from '../demoChatGate.js';
+import { SIM_PARTICIPANTS_PREFIX } from '../demoSimCoverage.js';
 
 /**
  * Settings rows that have their own service and must never be written raw:
@@ -87,7 +88,8 @@ export async function upsertSettingsHandler(req) {
     const { searchParams } = new URL(req.url);
     const type = searchParams.get('type') || 'store';
     // Archived demo cycles / demo profile meta are written only by the demo services.
-    if (RESERVED_SETTING_TYPES.has(type) || type.startsWith(CYCLE_ARCHIVE_PREFIX) || type.startsWith(PROFILE_META_PREFIX)) {
+    if (RESERVED_SETTING_TYPES.has(type) || type.startsWith(CYCLE_ARCHIVE_PREFIX) || type.startsWith(PROFILE_META_PREFIX)
+      || type.startsWith(SIM_PARTICIPANTS_PREFIX)) { // demo simulation coverage evidence (Phase 3C-5)
       return badRequest('Ce paramètre se modifie uniquement depuis sa page dédiée.');
     }
     const body = await req.json();

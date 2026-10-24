@@ -23,6 +23,7 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
+import { makeCoverageExecutor } from "./demoSimCoverageFake.mjs";
 import {
   __setDemoDb,
   generateDemoAffiliates,
@@ -59,8 +60,11 @@ function makeFakeDb() {
     demoEarningsHistory: [],
     demoCompetition: [],
     demoSettings: [],
-    setting: [], // ONLY demo-competition-cycle:* archive rows are allowed
+    setting: [], // ONLY demo-competition-cycle:* archive rows (+ raw demo-sim-participants:* evidence) are allowed
+    demoSimDayCoverage: [],
+    rawWrites: [],
   };
+  const execRaw = makeCoverageExecutor(store, store.rawWrites);
 
   // Apply data honouring Prisma's { increment } shape.
   const applyData = (row, data) => {
@@ -172,6 +176,7 @@ function makeFakeDb() {
     },
     // Interactive transaction (single-threaded fake) + the competition row lock.
     $transaction: async (fn) => fn(db),
+    $executeRaw: (...a) => execRaw(...a), // simulation coverage evidence — demo tables only, anything else throws
     $queryRaw: async (strings) => {
       if (!/FROM "demo_competition"/.test(strings.join("?"))) throw new Error("unexpected raw query");
       return store.demoCompetition.filter((r) => r.id === "current").map((r) => ({ ...r }));

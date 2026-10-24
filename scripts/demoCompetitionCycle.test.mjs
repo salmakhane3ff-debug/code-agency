@@ -20,6 +20,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { makeCoverageExecutor } from "./demoSimCoverageFake.mjs";
 import { readFileSync } from "node:fs";
 import {
   competitionDayStart, addCompetitionDays, cycleWindow, isCycleDue, nextCycleWindow,
@@ -56,8 +57,9 @@ const tick = () => new Promise((r) => setImmediate(r));
 function makeDb() {
   let seq = 1;
   const nid = () => `id_${String(seq++).padStart(4, "0")}`;
-  const t = { demoAffiliate: [], demoStats: [], demoEarningsHistory: [], demoCompetition: [], demoSettings: [], demoAvatar: [], setting: [] };
-  const calls = { tx: 0, rollovers: 0 };
+  const t = { demoAffiliate: [], demoStats: [], demoEarningsHistory: [], demoCompetition: [], demoSettings: [], demoAvatar: [], setting: [], demoSimDayCoverage: [] };
+  const calls = { tx: 0, rollovers: 0, raw: [] };
+  const execRaw = makeCoverageExecutor(t, calls.raw);
   const apply = (row, data) => {
     for (const [k, v] of Object.entries(data)) {
       if (k === "stats") continue;
@@ -114,6 +116,7 @@ function makeDb() {
       upsert: async ({ where, update, create }) => { let r = t.demoSettings.find((x) => match(x, where)); if (r) apply(r, update); else { r = { ...create }; t.demoSettings.push(r); } return { ...r }; },
     },
     demoAvatar: { findMany: async () => t.demoAvatar.map((a) => ({ ...a })) },
+    demoSimDayCoverage: { deleteMany: async () => { const n = t.demoSimDayCoverage.length; t.demoSimDayCoverage = []; return { count: n }; } },
     setting: {
       create: async ({ data }) => {
         await tick();
@@ -139,6 +142,7 @@ function makeDb() {
       let release = null;
       const tx = guard({
         ...models,
+        $executeRaw: execRaw, // simulation coverage evidence (demo tables only)
         $queryRaw: async (strings) => {
           if (!/FROM "demo_competition"[\s\S]*FOR UPDATE/.test(strings.join("?"))) throw new Error("unexpected raw query");
           while (lockHeld) await lockHeld;                    // wait for the row lock
@@ -229,7 +233,8 @@ console.log("\n2. Automatic transition at the 30-day boundary");
   await svc.saveDemoSettings({ isEnabled: true });
   db._t.demoCompetition[0].endDate = new Date(Date.now() - 1000);
   await svc.simulateTick();
-  ok("a simulation tick past the end rolls over too", db._t.demoCompetition[0].cycleNum === 4 && db._t.setting.length === 3);
+  ok("a simulation tick past the end rolls over too", db._t.demoCompetition[0].cycleNum === 4 && db._t.setting.filter((r) => r.id.startsWith(CYCLE_ARCHIVE_PREFIX)).length === 3);
+  ok("the tick also recorded coverage evidence (demo tables only)", db._t.demoSimDayCoverage.length === 1 && db._t.setting.some((r) => r.id.startsWith("demo-sim-participants:")) && db._calls.raw.every((w) => ["demo_sim_day_coverage", "settings"].includes(w.table)));
 }
 
 // ── 3. Restarts / repeated reads keep cycle + profile ids ────────────────────

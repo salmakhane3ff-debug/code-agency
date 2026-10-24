@@ -41,7 +41,7 @@ const key = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0
 function makeDb() {
   let seq = 1;
   const nid = () => `id_${String(seq++).padStart(4, "0")}`;
-  const t = { demoAffiliate: [], demoStats: [], demoEarningsHistory: [], demoCompetition: [], demoSettings: [], demoAvatar: [], setting: [] };
+  const t = { demoAffiliate: [], demoStats: [], demoEarningsHistory: [], demoCompetition: [], demoSettings: [], demoAvatar: [], setting: [], demoSimDayCoverage: [] };
   const writes = [];
   const hooks = {};
   const apply = (row, data) => {
@@ -55,6 +55,7 @@ function makeDb() {
     if (c instanceof Date) return val instanceof Date && val.getTime() === c.getTime();
     if (c && typeof c === "object") {
       if ("startsWith" in c) return String(val).startsWith(c.startsWith);
+      if ("in" in c) return c.in.includes(val);
       if ("gte" in c || "lt" in c) return (!("gte" in c) || val >= c.gte) && (!("lt" in c) || val < c.lt);
     }
     return val === c;
@@ -126,6 +127,7 @@ function makeDb() {
       upsert: async ({ where, update, create }) => { let r = t.demoSettings.find((x) => match(x, where)); if (r) apply(r, update); else { r = { ...create }; t.demoSettings.push(r); } return { ...r }; },
     },
     demoAvatar: { findMany: async () => t.demoAvatar.map((a) => ({ ...a })) },
+    demoSimDayCoverage: { findMany: async ({ where }) => t.demoSimDayCoverage.filter((r) => match(r, where)).map((r) => ({ ...r })) },
     setting: {
       findUnique: async ({ where }) => { const r = t.setting.find((x) => x.id === where.id); return r ? structuredClone(r) : null; },
       findMany: async ({ where }) => t.setting.filter((r) => match(r, where)).map((r) => structuredClone(r)),

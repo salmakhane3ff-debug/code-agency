@@ -22,6 +22,7 @@ import prisma from '../prisma.js';
 import { saveMedia, destroyByUrl } from '../cloudinary.js';
 import { processDemoAvatar, DEMO_AVATAR_FOLDER, DEMO_AVATAR_GENDERS } from '../demoAvatarImage.js';
 import { businessDateKey } from '../ugcTime.js';
+import { recordSimCoverage, SIM_PARTICIPANTS_PREFIX } from '../demoSimCoverage.js';
 import {
   CYCLE_ARCHIVE_PREFIX, cycleWindow, isCycleDue, nextCycleWindow,
   cycleDaysLeft, rankStandings,
@@ -393,12 +394,15 @@ export async function simulateTick() {
     });
   }
 
+  // One instant for the whole tick: the active set, the history bucket and the
+  // coverage evidence all refer to it.
+  const tickAt = Date.now();
   const affiliates = await _db.demoAffiliate.findMany({
     where:   { isActive: true },
     include: { stats: true },
   });
 
-  const today = new Date();
+  const today = new Date(tickAt);
   today.setHours(0, 0, 0, 0);
 
   const eligible = affiliates.filter((a) => a.stats);
@@ -480,6 +484,15 @@ export async function simulateTick() {
     }
   }
 
+  // Coverage evidence for the demo chat (Phase 3C-5) — only reached when every
+  // history write above succeeded. A failure here is logged and ignored: the day
+  // then simply stays unproven (never a false zero).
+  try {
+    await recordSimCoverage(_db, { tickAtMs: tickAt, participantIds: eligible.map((a) => a.id) });
+  } catch (err) {
+    console.error('[demo] simulation coverage not recorded (day stays unproven):', err?.message ?? err);
+  }
+
   // Recalculate ranks + update lastSimAt
   await recomputeRanks();
   await _db.demoSettings.upsert({
@@ -500,6 +513,20 @@ export async function simulateTick() {
 // (scripts/demo-competition-engine.mjs) calls runAutoSimTick() on a loop. Same
 // advisory-lock pattern as the other engines — only ONE runner ticks at a time.
 export const DEMO_SIM_LOCK_KEY      = 0x44454d43; // "DEMC" — distinct from UGC/fake-order locks
+
+/**
+ * The admin "simulate" button: one tick under the SAME advisory lock key as the
+ * auto runner (transaction-scoped here, session-scoped there — same lock space),
+ * so a manual tick can never run concurrently with an engine tick (no duplicate
+ * history rows, no interleaved coverage). Busy → { skipped: 'busy' }, no tick.
+ */
+export async function runManualSimTick({ db = _db } = {}) {
+  return db.$transaction(async (tx) => {
+    const [row] = await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(${DEMO_SIM_LOCK_KEY}::bigint) AS locked`;
+    if (!row?.locked) return { skipped: 'busy' };
+    return simulateTick();
+  }, { timeout: 120_000, maxWait: 5_000 });
+}
 export const DEMO_SIM_MIN_INTERVAL  = 5;          // seconds
 export const DEMO_SIM_MAX_INTERVAL  = 30;         // seconds
 export const DEMO_SIM_DEFAULT_INTERVAL = 10;      // seconds
@@ -649,10 +676,17 @@ export async function listCompetitionHistory({ db = _db, limit = 12 } = {}) {
  * earnings history. Never called by a reset or a rollover.
  */
 export async function clearCompetitionHistory({ db = _db } = {}) {
-  const cycles  = await db.setting.deleteMany({ where: { id: { startsWith: CYCLE_ARCHIVE_PREFIX } } });
-  const history = await db.demoEarningsHistory.deleteMany();
+  const counts = {};
+  await db.$transaction(async (tx) => {
+    counts.history = (await tx.demoEarningsHistory.deleteMany()).count;
+    counts.cycles = (await tx.setting.deleteMany({ where: { id: { startsWith: CYCLE_ARCHIVE_PREFIX } } })).count;
+    // Coverage proves "no history row = zero": once the history is gone it must
+    // go too (same transaction), or deleted days would read as zero.
+    counts.coverage = (await tx.demoSimDayCoverage.deleteMany()).count;
+    counts.participants = (await tx.setting.deleteMany({ where: { id: { startsWith: SIM_PARTICIPANTS_PREFIX } } })).count;
+  });
   invalidateDemoCache();
-  return { deletedCycles: cycles.count, deletedHistoryRows: history.count };
+  return { deletedCycles: counts.cycles, deletedHistoryRows: counts.history, deletedCoverageDays: counts.coverage, deletedParticipantDays: counts.participants };
 }
 
 // ── Leaderboard ───────────────────────────────────────────────────────────────

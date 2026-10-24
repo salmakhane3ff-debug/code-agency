@@ -397,7 +397,7 @@ console.log("\n9. Admin-only routes");
   const routes = [];
   const walk = (dir) => { for (const f of readdirSync(dir)) { const p = join(dir, f); if (statSync(p).isDirectory()) walk(p); else if (f === "route.js") routes.push(p); } };
   walk("src/app/api/admin/demo-chat");
-  ok("12 demo-chat route files", routes.length === 12);
+  ok("13 demo-chat route files", routes.length === 13);
   for (const p of routes) {
     const s = readFileSync(p, "utf8");
     const methods = [...s.matchAll(/export const (GET|POST|PUT|PATCH|DELETE) = (\w+)\(/g)];

@@ -36,6 +36,11 @@ import { processChatImage, processVoiceNote } from '../demoChatMedia.js';
 import { httpError as err, toHttpError } from '../demoChatErrors.js';
 import { readDemoChatGates } from '../demoChatGate.js';
 import { LIVE_ACTIVITY_TIMEZONE } from '../liveActivityTime.js';
+import { CHAT_TIMEZONE, isDateKey, addDays, localParts, utcDayStart, zonedTimeToUtc } from '../demoChatTime.js';
+import { visibleMessages } from '../demoChatSchedule.js';
+import { buildEarningsContext, resolvePeriod, renderEarningsText, LABELS as EARNINGS_LABELS } from '../demoChatEarnings.js';
+import { PROFILE_META_PREFIX } from '../demoProfileValidation.js';
+import { SIM_PARTICIPANTS_PREFIX } from '../demoSimCoverage.js';
 import {
   isValidChatId, validateJourneyInput, validateStepInput, validateReorderInput,
   readExpectedUpdatedAt, canonicalSteps, validateForPublish, renderPreviewText,
@@ -445,6 +450,96 @@ export async function previewTimeline({ journeyId, versionId } = {}) {
     })),
   }));
   return { source, timezone: LIVE_ACTIVITY_TIMEZONE, disclosure: PREVIEW_DISCLOSURE, sampleValues: PREVIEW_SAMPLE, simulated: true, days };
+}
+
+// ── Schedule preview (Phase 3C-4, no writes) ─────────────────────────────────
+
+export const SCHEDULE_PREVIEW_DISCLOSURE = 'Simulation — aperçu administrateur. Messages visibles à la date choisie (heure de Casablanca), gains lus dans l’historique DÉMO du profil — jamais de données réelles. Rien n’est enregistré.';
+const DAY_MS = 86_400_000;
+
+/** Steps of a draft (journeyId) or a published version (versionId). */
+async function previewSteps(journeyId, versionId) {
+  if (versionId) {
+    const { version } = await getVersion(journeyId, versionId);
+    return { steps: Array.isArray(version.steps) ? version.steps : [], source: { kind: 'version', journeyId, versionId, version: version.version } };
+  }
+  const { steps } = await getJourney(journeyId);
+  return { steps, source: { kind: 'draft', journeyId } };
+}
+
+/** Read-only demo earnings inputs for the given message dates (history, coverage, participation, admin markers). */
+async function loadEarningsContext(db, profile, dates, nowMs) {
+  const sorted = [...dates].sort();
+  const firstDay = addDays(sorted[0], -9); const lastDay = addDays(sorted[sorted.length - 1], 2);
+  const from = utcDayStart(addDays(sorted[0], -8)) - DAY_MS; // week + neighbours (ambiguity check)
+  const to = utcDayStart(addDays(sorted[sorted.length - 1], 1)) + DAY_MS;
+  const dayKeys = []; for (let k = firstDay; k <= lastDay; k = addDays(k, 1)) dayKeys.push(k);
+  const [history, coverage, meta, participantRows] = await Promise.all([
+    db.demoEarningsHistory.findMany({
+      where: { demoAffiliateId: profile.id, date: { gte: new Date(from), lt: new Date(to) } },
+      select: { id: true, date: true, orders: true, revenue: true, commission: true },
+    }),
+    db.demoSimDayCoverage.findMany({ where: { day: { gte: new Date(from), lt: new Date(to) } } }),
+    db.setting.findUnique({ where: { id: `${PROFILE_META_PREFIX}${profile.id}` } }),
+    db.setting.findMany({ where: { id: { in: dayKeys.map((k) => `${SIM_PARTICIPANTS_PREFIX}${k}`) } } }),
+  ]);
+  const participants = Object.fromEntries(participantRows.map((r) => [r.id.slice(SIM_PARTICIPANTS_PREFIX.length), Array.isArray(r.data?.ids) ? r.data.ids : []]));
+  return buildEarningsContext({ history, coverage, participants, profileId: profile.id, markers: meta?.data || {}, profileCreatedAt: profile.createdAt, nowMs, tz: CHAT_TIMEZONE });
+}
+
+/**
+ * What a demo profile's chat would show at a given moment, for a hypothetical
+ * assignment starting on `anchorDate` (Casablanca day 1). Pure read: creates
+ * no assignment or message and never writes earnings history.
+ * Input: { journeyId, versionId?, demoAffiliateId, anchorDate: 'YYYY-MM-DD',
+ *          at?: ISO instant | { atDate, atTime } (Casablanca wall time), locale?: 'ar' | 'fr' }
+ */
+export async function previewSchedule({ journeyId, versionId, demoAffiliateId, anchorDate, at, atDate, atTime, locale = 'ar' } = {}) {
+  requireId(journeyId);
+  if (versionId) requireId(versionId, 'Version');
+  requireId(demoAffiliateId, 'Profil démo');
+  if (!isDateKey(anchorDate)) throw err(400, 'VALIDATION', 'Date du jour 1 invalide (AAAA-MM-JJ, calendrier de Casablanca).', 'anchorDate');
+  if (!Object.prototype.hasOwnProperty.call(EARNINGS_LABELS, locale)) throw err(400, 'VALIDATION', 'Langue : ar ou fr.', 'locale');
+  let nowMs;
+  if (atDate !== undefined || atTime !== undefined) {
+    if (!isDateKey(atDate) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(atTime))) throw err(400, 'VALIDATION', 'Date/heure de Casablanca invalide.', 'atDate');
+    nowMs = zonedTimeToUtc(atDate, atTime, CHAT_TIMEZONE).ms;
+  } else if (at === undefined || at === null || at === '') {
+    nowMs = Date.now();
+  } else {
+    nowMs = Date.parse(at);
+    if (!Number.isFinite(nowMs)) throw err(400, 'VALIDATION', 'Instant invalide.', 'at');
+  }
+
+  const { steps, source } = await previewSteps(journeyId, versionId);
+  const db = getDemoDb();
+  const profile = await db.demoAffiliate.findUnique({ where: { id: demoAffiliateId } });
+  if (!profile) throw err(404, 'NOT_FOUND', 'Profil démo introuvable.', 'demoAffiliateId');
+
+  const { position, messages } = visibleMessages({ steps, anchorDate, nowMs, tz: CHAT_TIMEZONE });
+  const earningDates = messages.filter((m) => m.type === 'earnings').map((m) => m.date);
+  const ctx = earningDates.length ? await loadEarningsContext(db, profile, earningDates, nowMs) : null;
+  const assets = await assetsById(db, messages.map((m) => m.assetId));
+
+  return {
+    source, timezone: CHAT_TIMEZONE, anchorDate, at: iso(nowMs), atLocal: localParts(nowMs, CHAT_TIMEZONE), locale,
+    simulated: true, writes: 'none', disclosure: SCHEDULE_PREVIEW_DISCLOSURE,
+    profile: { id: profile.id, name: profile.name, username: profile.username, isActive: profile.isActive },
+    cycle: position.started
+      ? { started: true, loopIndex: position.loopIndex, day: position.day, cycleStart: position.cycleStart, cycleEnd: position.cycleEnd, today: position.today, previousCyclesHidden: position.previousCycles }
+      : { started: false, startsOn: position.startsOn, today: position.today },
+    messages: messages.map((m) => {
+      const base = {
+        stepId: m.stepId, day: m.day, time: m.time, position: m.position ?? 0, loopIndex: m.loopIndex, date: m.date,
+        scheduledAt: iso(m.scheduledAtMs), localTime: localParts(m.scheduledAtMs, CHAT_TIMEZONE).time, timeAdjustment: m.timeAdjustment, type: m.type,
+      };
+      if (m.type !== 'earnings') return { ...base, state: 'ok', text: m.text ?? null, asset: m.assetId ? (assets[m.assetId] || null) : null };
+      const res = resolvePeriod(ctx, m.earningsPeriod, m.date);
+      const rendered = renderEarningsText({ text: m.text, metric: m.metric, resolution: res, locale });
+      const { status, reason, period, ...values } = res;
+      return { ...base, metric: m.metric, earningsPeriod: m.earningsPeriod, metricLabel: rendered.metricLabel ?? null, state: rendered.state, text: rendered.text, earnings: { status, reason, ...values } };
+    }),
+  };
 }
 
 // ── Media assets (Phase 3C-3) ─────────────────────────────────────────────────
