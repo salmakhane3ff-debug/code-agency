@@ -66,6 +66,11 @@ export function buildEarningsSnapshot(resolution, { nowMs, scheduledAtMs, metric
 export function resolutionFromSnapshot(snap) {
   if (!snap || snap.v !== SNAPSHOT_VERSION) return { status: STATUS.UNAVAILABLE, reason: 'snapshot_missing' };
   if (!snap.values) return { period: snap.period, status: snap.status === STATUS.INCOMPLETE ? STATUS.INCOMPLETE : STATUS.UNAVAILABLE, reason: snap.reason };
+  const sane = (n) => typeof n === 'number' && Number.isFinite(n) && n >= 0;
+  if (![STATUS.COMPLETE, STATUS.PROVISIONAL].includes(snap.status)
+    || !['orders', 'revenue', 'commission'].every((f) => sane(snap.values[f]))) {
+    return { period: snap.period, status: STATUS.UNAVAILABLE, reason: 'snapshot_corrupt' };
+  }
   return { period: snap.period, status: snap.status, reason: snap.reason, ...snap.values };
 }
 

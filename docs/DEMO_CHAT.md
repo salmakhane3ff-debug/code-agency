@@ -3,8 +3,9 @@
 Scripted, **simulated** 30-day chat journeys shown by DEMO competition profiles.
 No AI, no WhatsApp/SMS, never a real affiliate balance, order, commission,
 payout or notification. Phases 3C-2/3C-3 are **authoring only** (journeys, steps,
-media library); Phase 3C-6 adds message materialization (service only, disabled by
-default). No profile is assigned and the chat is not shown anywhere.
+media library); Phase 3C-6 adds message materialization and Phase 3C-7 the affiliate
+Mini Chat (dashboard card + API). Everything stays disabled by default: no profile is
+assigned or enabled, and the card renders nothing until both gates are on.
 
 ## Data (migrations `20261023_demo_chat_journeys`, `20261024_demo_chat_audit_truncate_guard`)
 | Table | Used for |
@@ -173,8 +174,9 @@ Pure modules, `now` always injected: `src/lib/demoChatTime.js`, `src/lib/demoCha
 No schema change: it relies on the Phase 3C-1 unique key and `earningsSnapshot` column.
 
 - **Gates** — runs only when env `DEMO_CHAT_ENABLED=true` **and** setting `demo-chat-config` `{enabled:true}`
-  **and** the assignment is enabled. Otherwise it returns `skipped` and writes nothing. No route, scheduler
-  job or PM2 change calls it yet, and no profile is enabled or assigned.
+  **and** the assignment is enabled. Otherwise it returns `skipped` and writes nothing. Since Phase 3C-7 the
+  affiliate feed calls it lazily (see below); no scheduler job or PM2 change calls it, and no profile is
+  enabled or assigned.
 - **What is created** — the steps of the assignment's PUBLISHED version (immutable snapshot), scheduled by the
   Phase 3C-4 scheduler: current cycle only, `scheduledAt ≤ now`, each at its original Casablanca date/time.
   A late joiner gets day 1 … now of the current cycle; earlier cycles are never back-filled; future messages
@@ -202,6 +204,48 @@ No schema change: it relies on the Phase 3C-1 unique key and `earningsSnapshot` 
   message whose previous day is not yet provable at materialization (e.g. scheduled 00:30) is stored
   unavailable for good; wiring a scheduler or admin route needs separate approval.
 
+## Affiliate Mini Chat (Phase 3C-7)
+`GET /api/affiliate/demo-chat` (`src/app/api/affiliate/demo-chat/route.js` → `src/lib/demoChatFeedRoute.js`
+→ `src/lib/services/demoChatFeedService.js`) and the `DemoMiniChat` card on the affiliate dashboard, directly
+above Live Activity (`src/components/DemoMiniChat.jsx`, helpers `src/lib/demoMiniChatView.js`).
+
+- **Shared, server-selected feed** — journeys are assigned to DEMO profiles, never to real affiliates. The feed
+  is one simulated timeline made of the enabled assignments of active demo profiles, identical for every viewer.
+  These are explicitly simulated conversations, not private conversations of real affiliates. The endpoint
+  accepts no profile / assignment / affiliate id (only `lang=ar|fr`; other parameters are ignored) and returns
+  no database ids (profiles get opaque per-response keys).
+- **Request order** — `withAffiliateAuth` (401) → rate limit 30 / min (429) → both gates (uniform 404, no chat
+  data, no further reads) → the token's account must exist and be active (403; the only real-affiliate read is
+  `select { isActive }`) → lazy materialization → feed. Responses are `Cache-Control: private, no-store`.
+- **Lazy materialization** — on each such request, for the conversations of this feed only, the Phase 3C-6
+  `materializeAssignment` creates the due messages (`scheduledAt ≤ now`, current cycle, original Casablanca
+  time) before reading. It re-checks both gates and `assignment.enabled`, inserts with `INSERT … ON CONFLICT
+  DO NOTHING` under the assignment `FOR SHARE` lock, never updates or deletes, and stores the earnings snapshot
+  once — concurrent requests cannot duplicate a message. Bounded: at most 20 conversations, sequential, within a
+  4 s wall-clock budget (the rest is read as stored); a failure is logged and the stored messages are still
+  served. No scheduler, no viewer state (`demo_chat_viewer_states` is not written).
+- **Payload** — newest 200 messages (`truncated` flag), chronological across conversations (ties keep each
+  conversation's order), each with `localDate` / `localTime` in Casablanca, `simulated: true`, plus `today`
+  (Casablanca) for day labels. Media: only `http(s)` or same-origin URLs, asset kind must match the message
+  type, no storage key / hash / uploader; otherwise `media_unavailable`. Unsafe avatar URLs → initials.
+- **Earnings** — text rendered server-side from the stored snapshot only (never re-resolved, never computed in
+  the browser). `unavailable`, missing, corrupt (non-finite / negative values, inconsistent status) or
+  unknown-version snapshots show the fixed « Données indisponibles » / « … ماشي متوفرة » sentence — never an
+  amount, never 0. `provisional` is labelled.
+- **UI** — permanent simulation disclosure (independent of the payload); loading skeleton (after 400 ms, so no
+  flash while disabled), empty, error + retry (keeps the last good feed), disabled (401/403/404 → renders
+  nothing, polling stops). Polls every 60 s while the tab is visible. AR (RTL) / FR (LTR) from the site
+  language; times shown exactly as sent (no browser time-zone conversion); no client re-sorting; no raw HTML.
+- **Limits / remaining risks**
+  - Verified with in-memory fakes only (no PostgreSQL run of the concurrent path; no browser run — the feature
+    is off and no development database is available).
+  - Materialization runs on the request path: while enabled, the first viewer after a step's time pays its
+    cost (bounded as above). A scheduler would remove that but is out of scope.
+  - The rate limiter is in-memory and keyed by IP (existing helper), not per affiliate or across instances.
+  - 20 conversations / 200 messages per response; no pagination, no unread markers.
+  - A "today" earnings message first materialized > 15 min after its time is stored unavailable (3C-6 rule) —
+    with lazy materialization this happens when nobody opens the feed around that time.
+
 ## Deployment prerequisites (voice notes)
 1. Install ffmpeg (≥ 4, with the built-in `aac` encoder — present in standard builds; ffmpeg 6.1.1 verified in
    Development) on every server that handles admin uploads. ffprobe (same package) is optional but recommended.
@@ -210,12 +254,13 @@ No schema change: it relies on the Phase 3C-1 unique key and `earningsSnapshot` 
 3. Check: uploading a voice note in `/admin/demo-chat/assets` succeeds; without these steps voice-note uploads
    return 503 and nothing is stored (images keep working). No other configuration changes.
 
-## API (all `withAdminAuth`)
-`/api/admin/demo-chat/journeys` (GET, POST) · `/journeys/:id` (GET, PATCH, DELETE) ·
+## API
+Admin (all `withAdminAuth`): `/api/admin/demo-chat/journeys` (GET, POST) · `/journeys/:id` (GET, PATCH, DELETE) ·
 `/journeys/:id/steps` (POST, PATCH reorder) · `/journeys/:id/steps/:stepId` (PATCH, DELETE) ·
 `/journeys/:id/publish` (POST) · `/journeys/:id/versions[/:versionId]` (GET) ·
 `/preview` (POST) · `/audit` (GET) · `/status` (GET) ·
 `/assets` (GET, POST multipart `kind` + `file`) · `/assets/:id` (DELETE).
+Affiliate (`withAffiliateAuth`, gated): `/api/affiliate/demo-chat` (GET).
 
 ## Audit log — limits
 - Insert-only from the application; no source file updates/deletes it (enforced by `scripts/demoChat.test.mjs`).
@@ -226,7 +271,7 @@ No schema change: it relies on the Phase 3C-1 unique key and `earningsSnapshot` 
   `DROP TABLE`, schema resets). Retention purges need their own approved procedure.
 
 ## Tests
-`node scripts/demoChat.test.mjs`, `node scripts/demoChatMedia.test.mjs` and
-`node scripts/demoChatMessages.test.mjs` (no database, no network,
+`node scripts/demoChat.test.mjs`, `node scripts/demoChatMedia.test.mjs`,
+`node scripts/demoChatMessages.test.mjs` and `node scripts/demoChatFeed.test.mjs` (no database, no network,
 injected ffprobe). The SQL constraints, foreign keys and triggers were verified
 separately against a temporary PostgreSQL 16 instance in Phase 3C-1 (TRUNCATE guard: static checks only).

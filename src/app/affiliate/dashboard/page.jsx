@@ -16,6 +16,7 @@ import DepositTab from "./DepositTab";
 import BoosterTab from "./BoosterTab";
 import RewardsTab from "./RewardsTab";
 import LiveActivity from "@/components/LiveActivity";
+import DemoMiniChat from "@/components/DemoMiniChat";
 import { diffNewItems, shouldPlaySaleSound } from "@/lib/liveFeed";
 import { createSaleSound } from "./saleSound";
 import { resolveSupportLink } from "@/lib/whatsappSupport";
@@ -1999,6 +2000,10 @@ export default function AffiliateDashboard() {
               <StatCard icon={DollarSign}  label="Gains UGC total"        value={fmtMoney(ugcStats?.totalEarnings)} color="purple" sub="UGC" />
               <StatCard icon={TrendingUp}  label="Ventes UGC total"       value={ugcStats?.totalSales ?? "—"}       color="purple" sub="UGC" />
             </div>
+
+            {/* 💬 Mini Chat — simulated demo conversations (Phase 3C-7). Renders
+                nothing unless both demo-chat gates are on (API → 404). */}
+            <DemoMiniChat />
 
             {/* 🔥 النشاط المباشر — same shared server-side Live Activity engine as
                 the landing page (GET /api/live-activity). Placed below the stats. */}
