@@ -395,7 +395,7 @@ console.log("\n4. Routes, gates, storage conventions, isolation");
   const banned = /(order|commission|payout|withdraw|deposit|booster|balance|wallet|notification|whatsapp|sms|ugc|reward|fakeOrder|affiliateService|teamBonus|referral)/i;
   ok("new media files import no order/money/messaging/UGC/rewards modules", newFiles.every((p) => [...src(p).matchAll(/from\s+['"]([^'"]+)['"]/g)].every((m) => !banned.test(m[1]))));
   ok("DB CHECK limits match the validation constants (180 s, 5 242 880 bytes)",
-    V.AUDIO_MAX_DURATION_SEC === 180 && V.AUDIO_MAX_BYTES === 5242880 && /"durationSec" <= 180 AND "bytes" <= 5242880/.test(src("prisma/migrations/20261023_demo_chat_journeys/migration.sql")));
+    V.AUDIO_MAX_DURATION_SEC === 180 && V.AUDIO_MAX_BYTES === 5242880 && /"durationSec" <= 180 AND "bytes" <= 5242880/.test(src("prisma/migrations_archive/20261023_demo_chat_journeys/migration.sql")));
 }
 
 // ── 5. Security review fixes ──────────────────────────────────────────────────

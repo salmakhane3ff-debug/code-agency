@@ -112,11 +112,11 @@ console.log("\n2. Lock / open persistence");
   const listed = await (await r.list(req("/x", { headers: { cookie: adminCookie() } }))).json();
   ok("admin list reflects the saved state", listed.lockedIds.sort().join() === "p-locked,p-open");
   ok("schema: Product.isLocked Boolean @default(false)", /\bisLocked\s+Boolean\s+@default\(false\)/.test(read("prisma/schema.prisma")));
-  const mig = read("prisma/migrations/20261020_product_lock/migration.sql");
+  const mig = read("prisma/migrations_archive/20261020_product_lock/migration.sql");
   ok("migration: additive NOT NULL DEFAULT false (existing products stay open), idempotent, nothing else",
     /ALTER TABLE "products" ADD COLUMN IF NOT EXISTS "isLocked" BOOLEAN NOT NULL DEFAULT false;/.test(mig)
     && mig.replace(/^--.*$/gm, "").trim().split(";").filter((x) => x.trim()).length === 1);
-  ok("old affiliate-only migration and column are gone", !existsSync(join(ROOT, "prisma/migrations/20261020_product_affiliate_lock")) && !/affiliateLocked/.test(read("prisma/schema.prisma")));
+  ok("old affiliate-only migration and column are gone", !existsSync(join(ROOT, "prisma/migrations/20261020_product_affiliate_lock")) && !existsSync(join(ROOT, "prisma/migrations_archive/20261020_product_affiliate_lock")) && !/affiliateLocked/.test(read("prisma/schema.prisma")));
 }
 
 // ── 3. Lock rules ────────────────────────────────────────────────────────────

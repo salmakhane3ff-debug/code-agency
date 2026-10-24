@@ -28,7 +28,7 @@ const ADMIN   = readFileSync("src/app/admin/feedback/page.jsx", "utf8");
 const SERVICE = readFileSync("src/lib/services/feedbackService.js", "utf8");
 const CTRL    = readFileSync("src/lib/controllers/feedbackController.js", "utf8");
 const SCHEMA  = readFileSync("prisma/schema.prisma", "utf8");
-const MIG     = readFileSync("prisma/migrations/20260806_feedback_review_date/migration.sql", "utf8");
+const MIG     = readFileSync("prisma/migrations_archive/20260806_feedback_review_date/migration.sql", "utf8");
 const CARD    = readFileSync("src/components/FeedbackCarousel.jsx", "utf8");
 
 const NOW = new Date("2026-08-18T12:00:00Z");

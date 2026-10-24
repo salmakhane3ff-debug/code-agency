@@ -8,6 +8,12 @@ Mini Chat (dashboard card + API). Everything stays disabled by default: no profi
 assigned or enabled, and the card renders nothing until both gates are on.
 
 ## Data (migrations `20261023_demo_chat_journeys`, `20261024_demo_chat_audit_truncate_guard`)
+Since Phase 3C-9A both are archived unchanged in `prisma/migrations_archive/` and their tables, CHECK
+constraints, append-only trigger and TRUNCATE guard are part of the squashed
+`prisma/migrations/20261025000000_baseline`. Fresh database: `npx prisma migrate deploy`. Existing
+database: baseline once with `npx prisma migrate resolve --applied 20261025000000_baseline` after an
+approved read-only comparison — see `prisma/migrations/README.md` (no database has been baselined yet).
+
 | Table | Used for |
 |---|---|
 | `demo_chat_journeys` | journey header, status `draft` / `archived` |
@@ -17,7 +23,9 @@ assigned or enabled, and the card renders nothing until both gates are on.
 | `demo_chat_assets` | media library (3C-3): images + voice notes |
 | `demo_chat_version_assets` | assets frozen into a published version (3C-3) |
 | `demo_sim_day_coverage` + settings `demo-sim-participants:*` | simulation coverage evidence (3C-5) |
-| assignments, messages, viewer states | not written yet |
+| `demo_chat_assignments` | profile → published version (no admin workflow yet: Phase 3C-9B) |
+| `demo_chat_messages` | materialized messages (3C-6), created lazily by the affiliate feed (3C-7) |
+| `demo_chat_viewer_states` | not written yet |
 
 ## Gates — the chat stays OFF
 Both are required (`src/lib/demoChatGate.js`):

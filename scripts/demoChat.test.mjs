@@ -351,7 +351,7 @@ console.log("\n6. Audit log");
     return /demoChatAuditLog\s*\.\s*(update|updateMany|delete|deleteMany|upsert)\b/.test(s) || /(\$executeRaw|\$queryRaw)[\s\S]{0,300}demo_chat_audit_log/.test(s);
   });
   ok(`no source file updates/deletes/raw-writes demo_chat_audit_log (${files.length} files scanned)`, offenders.length === 0);
-  const mig = src("prisma/migrations/20261024_demo_chat_audit_truncate_guard/migration.sql").split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
+  const mig = src("prisma/migrations_archive/20261024_demo_chat_audit_truncate_guard/migration.sql").split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
   ok("TRUNCATE guard migration present (statement-level BEFORE TRUNCATE)", /BEFORE TRUNCATE ON "demo_chat_audit_log"\s+FOR EACH STATEMENT/.test(mig));
 }
 

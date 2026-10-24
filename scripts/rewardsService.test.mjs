@@ -601,7 +601,7 @@ console.log("\n12. Static checks");
   ok("activation hook only in adminUpdateAffiliate", (aff.match(/onAffiliateActivationCommitted\(/g) || []).length === 1);
 
   // Statements only — SQL comments may legitimately mention DROP/TRUNCATE.
-  const sql = read("../prisma/migrations/20261019_affiliate_rewards/migration.sql")
+  const sql = read("../prisma/migrations_archive/20261019_affiliate_rewards/migration.sql")
     .split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
   const schema = read("../prisma/schema.prisma");
   const maps = [...schema.matchAll(/model (Reward\w+) \{[\s\S]*?@@map\("([^"]+)"\)/g)].map((m) => m[2]);

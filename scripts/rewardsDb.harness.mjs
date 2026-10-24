@@ -121,7 +121,8 @@ async function main() {
   try {
     // ── 1. Migration chain on a clean schema, then the rewards migration again ──
     console.log(`\n1. Migrations (schema ${schema})`);
-    const dir = new URL('../prisma/migrations/', import.meta.url).pathname;
+    // Historical chain (archived in Phase 3C-9A; the active folder holds only the baseline).
+    const dir = new URL('../prisma/migrations_archive/', import.meta.url).pathname;
     const names = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
 
     // 1a. PRE-EXISTING ordering check (informational, not a rewards result):
