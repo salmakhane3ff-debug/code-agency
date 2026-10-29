@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 import { api, inputCls, btnPrimary, btnGhost } from "./ui";
 import BrandSimStats from "@/components/brand/BrandSimStats";
 import { brandT } from "@/lib/brandI18n";
+import { displayBreakdown } from "@/lib/brandPricing";
 
 const STATUS_UI = {
   PENDING_PAYMENT: { label: "En attente de paiement", cls: "bg-amber-50 text-amber-700 border-amber-200" },
@@ -162,12 +163,15 @@ function AccessRow({ a, onChanged }) {
             </p>
           )}
           <ConsentNotice a={a} />
-          {a.packageSnapshot?.breakdown && (() => {
-            const b = a.packageSnapshot.breakdown;
+          {(() => {
+            // A saved snapshot may lack fields: a missing figure shows "—" instead of breaking the list.
+            const b = displayBreakdown(a.packageSnapshot?.breakdown);
+            if (!b) return null;
+            const m = (n) => (n === null ? "—" : money(n));
             return (
               <p className="text-[11px] text-gray-600" data-admin-breakdown>
-                Montant demandé : prix {money(b.price)} + livraison {money(b.deliveryCost)} + logistique {money(b.logisticsCost)} = {money(b.subtotal)} HT ;
-                TVA {b.vat.percent} % = {money(b.vat.amount)} ; total {money(b.total)}
+                Montant demandé : prix {m(b.price)} + livraison {m(b.deliveryCost)} + logistique {m(b.logisticsCost)} = {m(b.subtotal)} HT ;
+                TVA {b.vat.percent ?? "—"} % = {m(b.vat.amount)} ; total {m(b.total)}
               </p>
             );
           })()}

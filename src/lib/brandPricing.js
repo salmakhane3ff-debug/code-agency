@@ -77,3 +77,35 @@ export function packageBreakdown(p) {
     }),
   };
 }
+
+const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const numOrNull = (v) => ((typeof v === 'number' || (typeof v === 'string' && v.trim() !== '')) && Number.isFinite(Number(v)) ? Number(v) : null);
+
+/**
+ * A SAVED breakdown (request snapshot) made safe to DISPLAY — never to compute
+ * or charge with (payment uses the request's amount column). Snapshots are
+ * frozen once written, so an older or hand-edited one may lack fields: every
+ * figure becomes a number or null, vat is always an object, and informational
+ * keeps only well-formed lines (unique keys). null if there is no breakdown.
+ */
+export function displayBreakdown(b) {
+  if (!isObj(b)) return null;
+  const vat = isObj(b.vat) ? b.vat : {};
+  const seen = new Set();
+  const informational = (Array.isArray(b.informational) ? b.informational : [])
+    .filter((x) => isObj(x) && typeof x.key === 'string' && x.key && numOrNull(x.percent) !== null
+      && !seen.has(x.key) && seen.add(x.key))
+    .map((x) => ({
+      key: x.key, percent: numOrNull(x.percent), base: typeof x.base === 'string' ? x.base : '',
+      baseAmount: numOrNull(x.baseAmount), amount: numOrNull(x.amount),
+    }));
+  return {
+    price: numOrNull(b.price),
+    deliveryCost: numOrNull(b.deliveryCost),
+    logisticsCost: numOrNull(b.logisticsCost),
+    subtotal: numOrNull(b.subtotal),
+    vat: { percent: numOrNull(vat.percent), amount: numOrNull(vat.amount) },
+    total: numOrNull(b.total),
+    informational,
+  };
+}

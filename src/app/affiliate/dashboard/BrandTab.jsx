@@ -40,6 +40,7 @@ import {
 import { useLanguage } from "@/context/LanguageContext";
 import { brandT, brandDir } from "@/lib/brandI18n";
 import { BRAND_LIMITS } from "@/lib/brandProgram";
+import { displayBreakdown } from "@/lib/brandPricing";
 import BrandSimStats, { SimulatedBadge, STATUS_COLOR } from "@/components/brand/BrandSimStats";
 import BankDetailsCard from "@/components/checkout/BankDetailsCard";
 import ProofUploadCard from "@/components/checkout/ProofUploadCard";
@@ -120,10 +121,13 @@ function NumTitle({ n, children }) {
  * Price breakdown of a package, as computed by the server (lib/brandPricing.js):
  * price + delivery + logistics = subtotal; VAT on the subtotal; total to pay.
  * Informational percentages are listed apart, each with its calculation base,
- * and are never added to the total.
+ * and are never added to the total. A saved snapshot may lack fields (see
+ * displayBreakdown): a missing figure shows "—", a missing section is omitted.
  */
-function Breakdown({ b, t, money }) {
+function Breakdown({ b: raw, t, money: fmt }) {
+  const b = displayBreakdown(raw);
   if (!b) return null;
+  const money = (n) => (n === null ? "—" : fmt(n));
   const row = (label, value, strong = false) => (
     <p className={`flex justify-between gap-3 ${strong ? "font-black text-gray-900" : "text-gray-700"}`}>
       <span className={strong ? "" : "text-gray-500"}>{label}</span><span className={`whitespace-nowrap ${strong ? "text-violet-700" : "font-semibold"}`}>{value}</span>
@@ -138,11 +142,11 @@ function Breakdown({ b, t, money }) {
         {row(t("bd_logistics"), money(b.logisticsCost))}
         <div className="border-t border-gray-200 my-1" />
         {row(t("bd_subtotal"), money(b.subtotal))}
-        {row(t("bd_vat", { p: b.vat.percent }), money(b.vat.amount))}
+        {row(t("bd_vat", { p: b.vat.percent ?? "—" }), money(b.vat.amount))}
         <div className="border-t border-gray-200 my-1" />
         {row(t("bd_total"), money(b.total), true)}
       </div>
-      <div className="rounded-xl border border-dashed border-gray-200 p-3 space-y-1">
+      {b.informational.length > 0 && <div className="rounded-xl border border-dashed border-gray-200 p-3 space-y-1">
         <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-1">{t("bd_info_title")}</p>
         {b.informational.map((x) => (
           <p key={x.key} className="flex justify-between gap-3 text-gray-600">
@@ -151,7 +155,7 @@ function Breakdown({ b, t, money }) {
           </p>
         ))}
         <p className="text-[11px] text-gray-500 pt-1">{t("bd_info_note")}</p>
-      </div>
+      </div>}
     </div>
   );
 }
@@ -700,13 +704,15 @@ function RecentOrders({ orders, t, locale }) {
 }
 
 /** What the request costs (saved snapshot) — explicitly NOT earnings, nothing withdrawable. */
-function PackageCosts({ b, t, money }) {
+function PackageCosts({ b: raw, t, money: fmt }) {
+  const b = displayBreakdown(raw);
   if (!b) return null;
+  const money = (n) => (n === null ? "—" : fmt(n));
   const cards = [
     { key: "price", label: t("bd_price"), value: b.price, Icon: Package, cls: "bg-violet-50 text-violet-700" },
     { key: "delivery", label: t("bd_delivery"), value: b.deliveryCost, Icon: Truck, cls: "bg-sky-50 text-sky-700" },
     { key: "logistics", label: t("bd_logistics"), value: b.logisticsCost, Icon: Warehouse, cls: "bg-emerald-50 text-emerald-700" },
-    { key: "vat", label: t("bd_vat", { p: b.vat.percent }), value: b.vat.amount, Icon: Receipt, cls: "bg-rose-50 text-rose-700" },
+    { key: "vat", label: t("bd_vat", { p: b.vat.percent ?? "—" }), value: b.vat.amount, Icon: Receipt, cls: "bg-rose-50 text-rose-700" },
   ];
   return (
     <section className={`${CARD} p-4 sm:p-5`} data-package-costs>
