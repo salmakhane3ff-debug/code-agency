@@ -65,5 +65,15 @@ module.exports = {
       script: 'scripts/booster-simulation-engine.mjs',
       ...engineDefaults,
     },
+    {
+      // "Create Your Own Brand" training-simulator history. Keeps the permanent,
+      // deterministic simulated history of every active / closed brand up to date
+      // in bounded batches. Writes ONLY brand_sim_hours (+ its progress column) —
+      // never an order, commission, deposit or balance. Same advisory-lock /
+      // instances:1 rule — never scale this worker.
+      name:   'brand-simulation-engine',
+      script: 'scripts/brand-simulation-engine.mjs',
+      ...engineDefaults,
+    },
   ],
 };

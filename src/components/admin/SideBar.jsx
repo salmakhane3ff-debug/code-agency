@@ -51,6 +51,7 @@ import {
   Gift,
   LoaderCircle,
   Film,
+  Store,
 } from "lucide-react";
 
 const SideBar = ({ onItemClick }) => {
@@ -86,6 +87,7 @@ const SideBar = ({ onItemClick }) => {
     { href: "/admin/spin-wheel", icon: <Disc size={16} />, label: "Spin Wheel" },
     { href: "/admin/gifts", icon: <Gift size={16} />, label: "Gift System" },
     { href: "/admin/rewards", icon: <Gift size={16} />, label: "🎁 Récompenses affiliés" },
+    { href: "/admin/brand", icon: <Store size={16} />, label: "🏪 Create Your Own Brand" },
     { href: "/admin/affiliate-orders", icon: <ShoppingCart size={16} />, label: "Affiliate Orders" },
     { href: "/admin/affiliate-payouts",    icon: <CreditCard size={16} />,        label: "Affiliate Payouts" },
     { href: "/admin/identity",             icon: <ShieldCheck size={16} />,       label: "Identity Verification" },

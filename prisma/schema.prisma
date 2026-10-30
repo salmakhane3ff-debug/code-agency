@@ -325,6 +325,9 @@ model Affiliate {
   rewardLedger         RewardPointsLedger[]
   rewardOrderAwards    RewardOrderAward[]
   rewardRedemptions    RewardRedemption[]
+  // "Create Your Own Brand" training simulator (additive back-relation — no DB column).
+  brandAccesses        BrandAccess[]
+  brandRequestAuthorizations BrandRequestAuthorization[]
 
   @@index([username])
   @@index([isActive])
@@ -1613,4 +1616,219 @@ model RewardAuditLog {
   @@index([entityType, entityId])
   @@index([createdAt])
   @@map("reward_audit_log")
+}
+
+// ── "Create Your Own Brand" — paid TRAINING & SIMULATION experience ────────────
+// Fully additive and isolated. A participant buys ACCESS to a brand simulator;
+// the simulated activity lives only in brand_sim_hours. Nothing here is a real
+// order, sale or earning: no table below is read by the order pipeline,
+// commissions, Rewards, the Fake Orders Engine or any wallet balance provider.
+
+/// One purchase of access to the simulator (fictional brand name + package).
+/// PENDING_PAYMENT → ACTIVE (admin, after verifying the payment) | REJECTED (admin)
+/// | CANCELLED (participant, while still pending). Package, price, branding and
+/// accepted refund terms are snapshotted at request time.
+/// NOTE: a PARTIAL unique index (one PENDING_PAYMENT/ACTIVE access per affiliate)
+/// is created in the migration via raw SQL (Prisma's DSL can't express it).
+model BrandAccess {
+  id                 String         @id @default(uuid())
+  affiliateId        String
+  brandName          String
+  packageId          String
+  packageSnapshot    Json
+  brandingOptionId   String?
+  brandingSnapshot   Json?
+  amount             Decimal        @db.Decimal(12, 2)
+  termsVersion       Int
+  termsSnapshot      Json
+  /// SHA-256 (lowercase hex, UTF-8 bytes) of the accepted terms text. New requests only;
+  /// NULL on legacy rows (never backfilled). Frozen after insert (DB trigger).
+  termsTextSha256    String?
+  /// Selected catalogue products: [{ id, title, image }] snapshotted from the store (3–4, DB check)
+  selectedProducts   Json           @default("[]")
+  clientRequestId    String
+  status             String         @default("PENDING_PAYMENT")
+  paymentReference   String?
+  activatedAt        DateTime?
+  activatedBy        String?
+  simulationStartsAt DateTime?
+  closedAt           DateTime?
+  closedBy           String?
+  closeReason        String?
+  /// Single-use admin authorization consumed by this request (required after a CLOSED access; DB trigger)
+  authorizationId    String?        @unique
+  /// Simulation generation progress: every hour before this instant has been processed (idempotent batches)
+  generatedThrough   DateTime?
+  lastReopenedAt     DateTime?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  affiliate          Affiliate      @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+  authorization      BrandRequestAuthorization? @relation(fields: [authorizationId], references: [id], onDelete: Restrict)
+  simHours           BrandSimHour[]
+  periods            BrandAccessPeriod[]
+  paymentProof       BrandPaymentProof?
+  consents           BrandAccessConsent[]
+
+  @@unique([affiliateId, clientRequestId])
+  @@index([affiliateId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("brand_accesses")
+}
+
+/// SIMULATED training data: one row per completed hour of one access (outcome
+/// counts of fictional orders). Written once per hour (ON CONFLICT DO NOTHING) —
+/// the generator is deterministic, so a retry can never duplicate or change it.
+model BrandSimHour {
+  accessId   String
+  hourStart  DateTime
+  created    Int
+  delivered  Int
+  refused    Int
+  returned   Int
+  noResponse Int
+  cancelled  Int
+  createdAt  DateTime    @default(now())
+  access     BrandAccess @relation(fields: [accessId], references: [id], onDelete: Cascade)
+
+  @@id([accessId, hourStart])
+  @@map("brand_sim_hours")
+}
+
+/// Append-only audit trail: config and terms changes, access requests,
+/// activations, rejections and cancellations.
+model BrandAuditLog {
+  id         String   @id @default(uuid())
+  action     String
+  entityType String
+  entityId   String?
+  actorType  String   @default("ADMIN")
+  actorId    String?
+  before     Json?
+  after      Json?
+  reason     String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("brand_audit_log")
+}
+
+/// Append-only versions of the simulation settings that influence generated
+/// history (enabled flag, daily volume, outcome split, display delays), each with
+/// the instant it took effect. `proven = false` marks a period whose settings
+/// cannot be established from the audit trail: no history is generated there.
+model BrandSimSettingsVersion {
+  id            String   @id @default(uuid())
+  effectiveFrom DateTime
+  enabled       Boolean
+  proven        Boolean
+  settings      Json
+  source        String
+  auditId       String?  @unique
+  createdAt     DateTime @default(now())
+
+  @@index([effectiveFrom])
+  @@map("brand_sim_settings_versions")
+}
+
+/// One activation / reopening interval of an access (end = closure). History is
+/// generated only inside these intervals. NOTE: one open period per access is a
+/// PARTIAL unique index created in the migration.
+model BrandAccessPeriod {
+  id           String      @id @default(uuid())
+  accessId     String
+  startedAt    DateTime
+  endedAt      DateTime?
+  startReason  String
+  startAuditId String?
+  endAuditId   String?
+  createdAt    DateTime    @default(now())
+  access       BrandAccess @relation(fields: [accessId], references: [id], onDelete: Restrict)
+
+  @@index([accessId, startedAt])
+  @@map("brand_access_periods")
+}
+
+/// Payment proof of ONE brand request — never an AffiliateSecurityDeposit and
+/// never a wallet credit. fileKey is a PRIVATE storage key (never sent to clients).
+model BrandPaymentProof {
+  id                          String      @id @default(uuid())
+  accessId                    String      @unique
+  fileKey                     String
+  fingerprint                 String      @unique
+  paymentMethod               String
+  transferReference           String?
+  transferReferenceNormalized String?
+  status                      String      @default("SUBMITTED")
+  reviewedBy                  String?
+  reviewedAt                  DateTime?
+  rejectionReason             String?
+  createdAt                   DateTime    @default(now())
+  updatedAt                   DateTime    @updatedAt
+  access                      BrandAccess @relation(fields: [accessId], references: [id], onDelete: Restrict)
+
+  @@index([status])
+  @@index([transferReferenceNormalized])
+  @@map("brand_payment_proofs")
+}
+
+/// Single-use admin authorization for a new request after a CLOSED access.
+/// Append-only: only "consume" or "revoke" (once) — DB trigger. NOTE: one unused
+/// authorization per affiliate is a PARTIAL unique index created in the migration.
+model BrandRequestAuthorization {
+  id                 String       @id @default(uuid())
+  affiliateId        String
+  grantedBy          String
+  reason             String
+  grantAuditId       String?
+  createdAt          DateTime     @default(now())
+  revokedAt          DateTime?
+  revokedBy          String?
+  revokeReason       String?
+  revokeAuditId      String?
+  consumedAt         DateTime?
+  consumedByAccessId String?      @unique
+  affiliate          Affiliate    @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+  access             BrandAccess?
+
+  @@index([affiliateId])
+  @@map("brand_request_authorizations")
+}
+
+/// One immutable row per PUBLISHED refund-terms version: exact text and the SHA-256
+/// of its UTF-8 bytes. Append-only: no UPDATE / DELETE / TRUNCATE (DB triggers).
+/// Written by the publish action in the same transaction as the settings and audit
+/// row; earlier versions backfilled by migration 20261030 from reliable sources only.
+model BrandTermsVersion {
+  version        Int      @id
+  text           String
+  textSha256     String
+  publishedAt    DateTime
+  publishedBy    String?
+  publishAuditId String?  @unique
+  source         String // PUBLISH | BACKFILL_AUDIT | BACKFILL_SETTINGS
+  createdAt      DateTime @default(now())
+
+  @@map("brand_terms_versions")
+}
+
+/// FRESH consent given later by the participant, kept separately from the request's
+/// original consent snapshot (which is never changed). Append-only (DB triggers);
+/// acceptedAt is written by the database. PENDING_RENEWAL never authorizes payment;
+/// REOPEN_RENEWAL to the latest version allows reopening a CLOSED request.
+model BrandAccessConsent {
+  id              String      @id @default(uuid())
+  accessId        String
+  affiliateId     String
+  context         String // PENDING_RENEWAL | REOPEN_RENEWAL
+  termsVersion    Int
+  termsTextSha256 String
+  acceptedAt      DateTime    @default(now())
+  auditId         String?     @unique
+  createdAt       DateTime    @default(now())
+  access          BrandAccess @relation(fields: [accessId], references: [id], onDelete: Restrict)
+
+  @@index([accessId])
+  @@map("brand_access_consents")
 }
