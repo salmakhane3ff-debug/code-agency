@@ -12,8 +12,9 @@
  *     breakdowns → numbers or null, vat always an object, only well-formed
  *     informational lines (unique keys)
  *   • a complete breakdown displays exactly as computed (no figure changed)
- *   • the affiliate Breakdown / PackageCosts and the admin request list go
- *     through displayBreakdown; the informational section is omitted when empty
+ *   • the affiliate Breakdown, the affiliate dashboard's pack card and the admin
+ *     request list go through displayBreakdown; the informational section is
+ *     omitted when empty
  *   • display only: payment, snapshot writing and pricing maths are untouched
  * Run: node scripts/brandSnapshotDisplay.test.mjs
  * ─────────────────────────────────────────────────────────────────────────────
@@ -85,13 +86,17 @@ console.log("\n— components use the safe view");
 {
   const tab = readFileSync(new URL("../src/app/affiliate/dashboard/BrandTab.jsx", import.meta.url), "utf8");
   const admin = readFileSync(new URL("../src/app/admin/brand/AccessesTab.jsx", import.meta.url), "utf8");
+  const dashUi = readFileSync(new URL("../src/app/affiliate/dashboard/_brand/BrandDashboard.jsx", import.meta.url), "utf8");
   const fn = (src, name) => { const i = src.indexOf(`function ${name}(`); return i < 0 ? "" : src.slice(i, src.indexOf("\n}\n", i)); };
-  const bd = fn(tab, "Breakdown"), pc = fn(tab, "PackageCosts");
+  const bd = fn(tab, "Breakdown"), pack = fn(dashUi, "MyPack");
   ok("BrandTab imports displayBreakdown", /import \{ displayBreakdown \} from "@\/lib\/brandPricing";/.test(tab));
   ok("Breakdown normalizes before rendering", /const b = displayBreakdown\(raw\);\s*\n\s*if \(!b\) return null;/.test(bd));
   ok("Breakdown omits the informational section when empty", bd.includes("{b.informational.length > 0 && <div"));
-  ok("Breakdown and PackageCosts show — for a missing figure", [bd, pc].every((s) => s.includes('(n === null ? "—" : fmt(n))') && s.includes('b.vat.percent ?? "—"')));
-  ok("PackageCosts normalizes before rendering", /const b = displayBreakdown\(raw\);\s*\n\s*if \(!b\) return null;/.test(pc));
+  ok("Breakdown shows — for a missing figure", bd.includes('(n === null ? "—" : fmt(n))') && bd.includes('b.vat.percent ?? "—"'));
+  ok("dashboard pack card normalizes before rendering and shows — for a missing price",
+    /import \{ displayBreakdown \} from "@\/lib\/brandPricing";/.test(dashUi) && /const b = displayBreakdown\(breakdown\);\s*\n\s*if \(!b\) return null;/.test(pack)
+    && pack.includes('b.price === null ? "—" : money(b.price)'));
+  ok("dashboard pack card shows only the pack price (no total, VAT, delivery or logistics)", !/b\.(total|vat|deliveryCost|logisticsCost|subtotal)/.test(pack));
   ok("admin list imports displayBreakdown", /import \{ displayBreakdown \} from "@\/lib\/brandPricing";/.test(admin));
   ok("admin list normalizes each row's snapshot", admin.includes("const b = displayBreakdown(a.packageSnapshot?.breakdown);") && !admin.includes("const b = a.packageSnapshot.breakdown;"));
   ok("admin list shows — for missing VAT figures", admin.includes('TVA {b.vat.percent ?? "—"} % = {m(b.vat.amount)}'));

@@ -16,9 +16,10 @@
  *                 details and the transfer-proof upload (reused deposit
  *                 components; stored as a BRAND proof, never as a deposit);
  *                 access is activated only when an admin accepts the proof
- *   active      → "My brand": header, SIMULATED summary / analytics / order
- *                 details, latest simulated orders, products, and the package
- *                 amount (what the request costs — never earnings)
+ *   active      → _brand/BrandDashboard: hero + brand, SIMULATED analytics
+ *                 (24 h / 7 d / 30 d counts + chart), latest simulated orders
+ *                 (tap → details), selected products and the pack price (what
+ *                 the training costs — never earnings); no amount per order
  *   closed      → the same dashboard, READ-ONLY as of the closure, with its reason
  *   consent     → when the terms accepted with a request cannot be verified: a
  *                 pending request shows that payment is unavailable (a fresh
@@ -34,14 +35,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Loader2, Store, CheckCircle, Clock, PauseCircle, Info, XCircle, GraduationCap, Package, ChevronDown,
-  ArrowLeft, ArrowRight, Crown, Check, Truck, Warehouse, Receipt, Wallet,
+  Loader2, Store, CheckCircle, Clock, Info, XCircle, GraduationCap, Package, ChevronDown,
+  ArrowLeft, ArrowRight, Crown, Check,
 } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
 import { brandT, brandDir } from "@/lib/brandI18n";
 import { BRAND_LIMITS } from "@/lib/brandProgram";
 import { displayBreakdown } from "@/lib/brandPricing";
-import BrandSimStats, { SimulatedBadge, STATUS_COLOR } from "@/components/brand/BrandSimStats";
+import BrandDashboard from "./_brand/BrandDashboard";
 import BankDetailsCard from "@/components/checkout/BankDetailsCard";
 import ProofUploadCard from "@/components/checkout/ProofUploadCard";
 
@@ -673,69 +674,8 @@ function PendingCard({ access, terms, t, money, onChanged }) {
   );
 }
 
-/** Latest SIMULATED orders (deterministic, from the same generator as the counts; no amount). */
-function RecentOrders({ orders, t, locale }) {
-  return (
-    <section className={`${CARD} p-4 sm:p-5`} data-recent>
-      <div className="flex items-center justify-between gap-2 mb-1">
-        <h3 className="text-base font-black text-gray-900">{t("recent_title")}</h3>
-        <SimulatedBadge t={t} />
-      </div>
-      <p className="text-[11px] text-gray-500 mb-3">{t("recent_note")}</p>
-      {orders?.length ? (
-        <ul className="divide-y divide-gray-100">
-          {orders.map((o) => (
-            <li key={o.ref} className="flex items-center gap-3 py-2.5">
-              <div className="w-12 h-12 rounded-xl overflow-hidden border border-gray-100 shrink-0"><Thumb src={o.product?.image} iconCls="w-5 h-5" /></div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-black text-gray-900" dir="ltr">#{o.ref}</p>
-                <p className="text-[11px] text-gray-500 truncate">
-                  {new Date(o.at).toLocaleString(locale, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
-                  {o.product?.title ? <> · <span dir="auto">{o.product.title}</span></> : null}
-                </p>
-              </div>
-              <span className={`px-2.5 py-1 rounded-lg text-[11px] font-bold whitespace-nowrap ${STATUS_COLOR[o.status]?.chip || "bg-gray-100 text-gray-700"}`}>{t(`status_${o.status}`)}</span>
-            </li>
-          ))}
-        </ul>
-      ) : <p className="text-sm text-gray-500 py-4 text-center">{t("recent_empty")}</p>}
-    </section>
-  );
-}
-
-/** What the request costs (saved snapshot) — explicitly NOT earnings, nothing withdrawable. */
-function PackageCosts({ b: raw, t, money: fmt }) {
-  const b = displayBreakdown(raw);
-  if (!b) return null;
-  const money = (n) => (n === null ? "—" : fmt(n));
-  const cards = [
-    { key: "price", label: t("bd_price"), value: b.price, Icon: Package, cls: "bg-violet-50 text-violet-700" },
-    { key: "delivery", label: t("bd_delivery"), value: b.deliveryCost, Icon: Truck, cls: "bg-sky-50 text-sky-700" },
-    { key: "logistics", label: t("bd_logistics"), value: b.logisticsCost, Icon: Warehouse, cls: "bg-emerald-50 text-emerald-700" },
-    { key: "vat", label: t("bd_vat", { p: b.vat.percent ?? "—" }), value: b.vat.amount, Icon: Receipt, cls: "bg-rose-50 text-rose-700" },
-  ];
-  return (
-    <section className={`${CARD} p-4 sm:p-5`} data-package-costs>
-      <h3 className="text-base font-black text-gray-900 mb-3">{t("package_costs_title")}</h3>
-      <div className="grid grid-cols-2 gap-2.5">
-        {cards.map(({ key, label, value, Icon, cls }) => (
-          <div key={key} className={`rounded-2xl p-3 ${cls}`}>
-            <Icon className="w-5 h-5 mb-1.5" aria-hidden="true" />
-            <p className="text-base font-black whitespace-nowrap">{money(value)}</p>
-            <p className="text-[11px] font-semibold opacity-80 leading-tight">{label}</p>
-          </div>
-        ))}
-      </div>
-      <div className="mt-2.5 flex items-center justify-between gap-3 rounded-2xl border border-gray-100 p-3">
-        <span className="flex items-center gap-2 text-sm font-bold text-gray-700"><Wallet className="w-5 h-5 text-violet-600" aria-hidden="true" />{t("bd_total")}</span>
-        <span className="text-lg font-black text-violet-700 whitespace-nowrap">{money(b.total)}</span>
-      </div>
-      <p className="text-[11px] text-gray-500 mt-2">{t("package_costs_note")}</p>
-    </section>
-  );
-}
-
-function ActiveDashboard({ access, t, locale, money }) {
+/** Active / closed brand: loads the simulated dashboard (refreshed while active) and renders _brand/BrandDashboard. */
+function ActiveDashboard({ access, t, lang, dir, locale, money }) {
   const [windowKey, setWindowKey] = useState("7d");
   const [dash, setDash] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -759,43 +699,8 @@ function ActiveDashboard({ access, t, locale, money }) {
   }, [load, closed]);
 
   return (
-    <div className="space-y-4">
-      <BrandHeader access={access} t={t} status={closed ? "CLOSED" : "ACTIVE"} sinceDays={closed ? null : sinceDays} />
-      {closed && (
-        <div role="status" className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm text-slate-800">
-          <p className="font-bold">{t("closed_title", { date: fmtDate(access.closedAt) })}</p>
-          {access.closureReason && <p dir="auto" className="mt-1">{t("closed_reason", { reason: access.closureReason })}</p>}
-          <p className="mt-1 text-xs">{t("closed_readonly")}</p>
-        </div>
-      )}
-      <div className="rounded-2xl bg-amber-50 border border-amber-100 px-4 py-3 space-y-1.5">
-        <div className="flex items-start justify-between gap-2">
-          <p className="text-xs font-semibold text-amber-900">{t("dash_disclaimer")}</p>
-          <SimulatedBadge t={t} />
-        </div>
-        <p className="text-[11px] text-amber-800">{t("activated_on", { date: fmtDate(access.activatedAt) })}</p>
-        {dash && !dash.started && <p className="text-xs text-gray-700 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" aria-hidden="true" />{t("starts_on", { date: fmtDate(dash.simulationStartsAt) })}</p>}
-        {dash && dash.started && !dash.running && !dash.readOnly && <p className="text-xs text-gray-700 flex items-center gap-1.5"><PauseCircle className="w-3.5 h-3.5" aria-hidden="true" />{t("paused")}</p>}
-        {dash?.incomplete?.length > 0 && <p className="text-xs text-gray-700 flex items-center gap-1.5"><Info className="w-3.5 h-3.5" aria-hidden="true" />{t("dash_incomplete")}</p>}
-      </div>
-
-      {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-      {dash ? (
-        <>
-          <BrandSimStats stats={dash.stats} windowKey={windowKey} onWindow={setWindowKey} t={t} locale={locale} loading={loading} />
-          <RecentOrders orders={dash.recent} t={t} locale={locale} />
-        </>
-      ) : <div className="flex justify-center py-10"><Loader2 className="w-6 h-6 animate-spin text-gray-400" aria-label={t("sending")} /></div>}
-
-      {access.products?.length > 0 && (
-        <section className={`${CARD} p-4 sm:p-5`}>
-          <h3 className="text-base font-black text-gray-900 mb-3">{t("brand_products_title")}</h3>
-          <ProductList products={access.products} />
-          <p className="text-[11px] text-gray-500 mt-3">{t("products_training_note")}</p>
-        </section>
-      )}
-      <PackageCosts b={access.package?.breakdown} t={t} money={money} />
-    </div>
+    <BrandDashboard access={access} dash={dash} error={error} loading={loading} windowKey={windowKey} onWindow={setWindowKey}
+      t={t} lang={lang} dir={dir} locale={locale} money={money} fmtDate={fmtDate} sinceDays={sinceDays} />
   );
 }
 
@@ -825,11 +730,11 @@ export default function BrandTab() {
 
   const access = data.access;
   // text-start: the site sets `text-align: left` on <body> (inherited); "start" follows each element's own direction.
-  if (access?.status === "ACTIVE") return <div dir={dir} className="max-w-3xl mx-auto text-start"><ActiveDashboard access={access} t={t} locale={locale} money={money} /></div>;
+  if (access?.status === "ACTIVE") return <div dir={dir} className="max-w-3xl mx-auto text-start"><ActiveDashboard access={access} t={t} lang={lang} dir={dir} locale={locale} money={money} /></div>;
   if (access?.status === "CLOSED") {
     return (
       <div dir={dir} className="max-w-3xl mx-auto space-y-5 text-start">
-        <ActiveDashboard access={access} t={t} locale={locale} money={money} />
+        <ActiveDashboard access={access} t={t} lang={lang} dir={dir} locale={locale} money={money} />
         {access.consentStatus === "RENEWAL_REQUIRED" && <ConsentRenewal access={access} terms={data.terms} t={t} onChanged={load} />}
         {access.consentStatus === "RENEWED" && <p role="status" className="text-xs text-gray-600 bg-gray-50 rounded-xl px-3 py-2">{t("consent_renewed")}</p>}
         {data.enabled && (

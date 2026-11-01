@@ -38,6 +38,7 @@ import { packageBreakdown, missingPricingFields } from "../src/lib/brandPricing.
 import { getBrandConfig, saveRefundTermsDraft, publishRefundTerms, getRefundTerms } from "../src/lib/services/brandProgramService.js";
 import { adminBrandHandlers, affiliateBrandHandlers } from "../src/lib/brandRouteHandlers.js";
 import { BRAND_TEXT } from "../src/lib/brandI18n.js";
+import { DASHBOARD_TEXT } from "../src/app/affiliate/dashboard/_brand/dashboardText.js";
 import { makeBrandFakeDb } from "./lib/brandFakeDb.mjs";
 
 let pass = 0, fail = 0;
@@ -370,8 +371,9 @@ console.log("\n10. Texts and labelling");
   ok("product-count error label interpolates the package's count in both languages", /\{n\}/.test(BRAND_TEXT.fr.code_INVALID_PRODUCT_SELECTION) && /\{n\}/.test(BRAND_TEXT.ar.code_INVALID_PRODUCT_SELECTION));
   const tab = read("../src/app/affiliate/dashboard/BrandTab.jsx");
   const stats = read("../src/components/brand/BrandSimStats.jsx");
+  const dashUi = read("../src/app/affiliate/dashboard/_brand/BrandDashboard.jsx");
   ok("offer always shows what is bought; dashboard shows the disclaimer + badges",
-    /<WhatYouBuy t=\{t\} \/>/.test(tab) && /t\("dash_disclaimer"\)/.test(tab) && (stats.match(/<SimulatedBadge t=\{t\} \/>/g) || []).length === 2);
+    /<WhatYouBuy t=\{t\} \/>/.test(tab) && /t\("dash_disclaimer"\)/.test(dashUi) && (stats.match(/<SimulatedBadge t=\{t\} \/>/g) || []).length === 2);
   ok("the affiliate page has no hardcoded price or delay", !/\b(8[\s.,]?000|10[\s.,]?000|90\s?%|72\s?h)\b/.test(tab));
   ok("products disclosure present (training only, no real order, no stock)", /simulation/.test(BRAND_TEXT.fr.products_training_note)
     && /aucune vraie commande/.test(BRAND_TEXT.fr.products_training_note) && BRAND_TEXT.ar.products_training_note.length > 10);
@@ -387,18 +389,37 @@ console.log("\n10. Texts and labelling");
   ok("Buy Now sends product ids only (no product names or prices)", /productIds: chosen\.map\(\(p\) => p\.id\)/.test(tab) && !/price: p\.|title: p\./.test(tab.slice(tab.indexOf("const buy"), tab.indexOf("const nav"))));
   ok("selection capped in the UI at the package's count, Continue needs exactly that count", /cur\.length >= need \? cur/.test(tab) && /chosen\.length === need/.test(tab) && /nav\(countOk\)/.test(tab));
   ok("pending and active views show the brand name and the selected products",
-    (tab.match(/<ProductList products=\{access\.products\} \/>/g) || []).length === 2 && /access\.brandName/.test(tab) && /t\("brand_products_title"\)/.test(tab));
+    (tab.match(/<ProductList products=\{access\.products\} \/>/g) || []).length === 1 && /access\.brandName/.test(tab)
+    && /<MyProducts products=\{access\.products\}/.test(dashUi) && /access\.brandName/.test(dashUi) && /d\("product_selected"\)/.test(dashUi));
   const apiCalls = [...tab.matchAll(/["`](\/api\/[^"`?$]*)/g)].map((m) => m[1]);
   ok("the tab only calls brand APIs (never earnings, wallet, orders or payouts) + reads the bank details",
     apiCalls.length > 0 && apiCalls.every((u) => u.startsWith("/api/affiliate/brand") || u === "/api/setting")
     && [...tab.matchAll(/["`]\/api\/setting([^"`]*)["`]/g)].map((m) => m[1]).join() === "?type=bank-settings", apiCalls.join());
   ok("the proof is uploaded to the BRAND proof route (never the deposit route)", /\/api\/affiliate\/brand\/access\/\$\{encodeURIComponent\(access\.id\)\}\/proof/.test(tab) && !/\/api\/affiliate\/deposits/.test(tab));
   ok("no wallet / earnings / commission code imported by the tab", !/balance|wallet|commission|payout|earning/i.test(tab.split("\n").filter((l) => l.startsWith("import")).join("\n")));
-  ok("no real-profit, refund-guarantee or withdrawal promise in the brand UI", ![tab, stats].map((src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "")).some((src) => /أرباح حقيقية|ضمان استرجاع|سحب الأرباح|withdraw|retirer vos gains|profits? r[ée]els?/i.test(src))
+  ok("no real-profit, refund-guarantee or withdrawal promise in the brand UI", ![tab, stats, dashUi].map((src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "")).some((src) => /أرباح حقيقية|ضمان استرجاع|سحب الأرباح|withdraw|retirer vos gains|profits? r[ée]els?/i.test(src))
     && !/(guarantee|garantie|ضمان)/i.test(JSON.stringify(BRAND_TEXT)));
-  ok("every simulated block is badged (summary area, chart, donut, recent orders, dashboard disclaimer)",
-    (stats.match(/<SimulatedBadge t=\{t\} \/>/g) || []).length === 2 && (tab.match(/<SimulatedBadge t=\{t\} \/>/g) || []).length === 2 && /data-recent/.test(tab));
-  ok("package amount card is labelled as the request amount, not earnings", /package_costs_note/.test(tab) && /pas un gain/.test(BRAND_TEXT.fr.package_costs_note) && /رصيدك/.test(BRAND_TEXT.ar.package_costs_note));
+  ok("every simulated block is badged (analytics, latest orders, dashboard disclaimer; each order row tagged)",
+    (stats.match(/<SimulatedBadge t=\{t\} \/>/g) || []).length === 2 && (dashUi.match(/<SimulatedBadge t=\{t\} \/>/g) || []).length === 3
+    && /data-recent/.test(dashUi) && (dashUi.match(/d\("sim_tag"\)/g) || []).length === 2 && /<BrandDashboard /.test(tab));
+  ok("pack summary shows only the pack price, labelled as not earnings", /package_costs_note/.test(dashUi) && /pas un gain/.test(BRAND_TEXT.fr.package_costs_note) && /رصيدك/.test(BRAND_TEXT.ar.package_costs_note)
+    && /t\("bd_price"\)/.test(dashUi) && !/bd_total|bd_vat|bd_delivery|bd_logistics|b\.total|b\.vat|deliveryCost|logisticsCost/.test(dashUi));
+  {
+    const code = dashUi.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    ok("dashboard UI calls no API (data comes from BrandTab's brand + dashboard calls)", !/fetch\(|\/api\//.test(code));
+    ok("no amount per simulated order, no revenue / profit / gain / stock / availability shown",
+      !/money\(o\.|money\(order\.|revenue|profit|chiffre|gain|stock|availab|disponib/i.test(code.replace(/hero_no_stock/g, "")));
+    ok("periods are the existing 24 h / 7 d / 30 d windows only (no all time), no 'see all orders' action",
+      /Object\.entries\(SIM_WINDOWS\)/.test(code) && !/all ?time|voir toutes/i.test(code));
+    ok("four real counts: orders, delivered, refused, no response", ["stats?.total", "byStatus?.delivered", "byStatus?.refused", "byStatus?.noResponse"].every((k) => code.includes(k)));
+    ok("order details show only reference, product, status and time", /d\("detail_ref"\)/.test(code) && /d\("detail_product"\)/.test(code) && /d\("detail_status"\)/.test(code) && /d\("detail_time"\)/.test(code)
+      && (code.slice(code.indexOf("function OrderSheet"), code.indexOf("function LiveOrders")).match(/\{row\(/g) || []).length === 4);
+  }
+  ok("dashboard texts: same keys FR/AR, no figure, simulated delivery chip, no earnings wording",
+    JSON.stringify(Object.keys(DASHBOARD_TEXT.fr).sort()) === JSON.stringify(Object.keys(DASHBOARD_TEXT.ar).sort())
+    && !/\d/.test(JSON.stringify(DASHBOARD_TEXT).replace(/\{\w+\}/g, ""))
+    && DASHBOARD_TEXT.fr.hero_sim_delivery === "Livraison simulée" && !/s.occupe de la livraison/i.test(JSON.stringify(DASHBOARD_TEXT))
+    && !/profit|gain|chiffre|revenu|retir|ربح|أرباح|سحب/i.test(JSON.stringify(DASHBOARD_TEXT)));
   ok("hero uses real catalogue product images (no stock imagery)", /data-hero/.test(tab) && !/https?:\/\//.test(tab.replace(/\/\*[\s\S]*?\*\//g, "")) && /pr\.image/.test(tab));
   ok("included services on the landing come from the package's configured features", /features\?\.slice\(0, 4\)/.test(tab));
   const pageSrc = read("../src/app/affiliate/dashboard/page.jsx");
