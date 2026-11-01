@@ -8,7 +8,7 @@
  *
  *   hero (title, simulator chips, brand identity) · disclaimer / closed notice
  *   · analyses (24 h / 7 j / 30 j, four counts, chart) · latest simulated
- *   orders (tap → details) · selected products · training pack price
+ *   orders (tap → details) · training pack (price + selected products' images)
  *
  * Every figure comes from the APIs. Simulated orders carry no amount, so no
  * revenue, profit or gain is shown anywhere; the pack card is the price paid
@@ -18,7 +18,7 @@
 import { useEffect, useState } from "react";
 import {
   BarChart3, ShoppingCart, Truck, XCircle, Clock, CheckCircle, Undo2, Ban, ChevronRight, ChevronLeft,
-  Zap, GraduationCap, ShieldCheck, ShoppingBag, Package, Info, PauseCircle, Check, X, Store,
+  Zap, GraduationCap, ShoppingBag, Package, Info, PauseCircle, X, Store,
 } from "lucide-react";
 import { SimulatedBadge, LineChart } from "@/components/brand/BrandSimStats";
 import { SIM_WINDOWS } from "@/lib/brandSimulation";
@@ -87,13 +87,11 @@ function useRelativeTime(locale) {
 }
 
 /** B — purple hero: title, simulator chips, then the brand's identity and status. */
-function Hero({ access, t, d, closed, sinceDays }) {
+function Hero({ access, t, d, closed }) {
   const letter = (access.brandName || "?").trim().charAt(0).toUpperCase();
   const chips = [
     { key: "hero_no_stock", Icon: Zap, icon: "text-amber-500" },
-    { key: "hero_sim_delivery", Icon: Truck, icon: "text-violet-600" },
     { key: "hero_training", Icon: GraduationCap, icon: "text-violet-600" },
-    { key: "hero_safe_sim", Icon: ShieldCheck, icon: "text-violet-600" },
   ];
   return (
     <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-violet-700 via-violet-600 to-fuchsia-500 text-white p-4 sm:p-6 shadow-lg shadow-violet-200" data-brand-hero>
@@ -131,7 +129,6 @@ function Hero({ access, t, d, closed, sinceDays }) {
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
           <span className={`px-2 py-0.5 rounded-lg text-[11px] font-bold ${closed ? "bg-slate-100 text-slate-700" : "bg-emerald-100 text-emerald-800"}`}>{t(closed ? "chip_closed" : "chip_active")}</span>
-          {sinceDays !== null && <span className="text-[10px] text-violet-50/85">{t("since_days", { n: sinceDays })}</span>}
         </div>
       </div>
     </section>
@@ -269,31 +266,8 @@ function LiveOrders({ orders, closed, running, t, d, locale, dir }) {
   );
 }
 
-/** E — the brand's selected products. */
-function MyProducts({ products, t, d }) {
-  if (!products?.length) return null;
-  return (
-    <section className={`${CARD} p-4 sm:p-5`} data-my-products>
-      <SectionTitle Icon={Package}>{d("products_title")} <span className="text-gray-500 font-bold">({products.length})</span></SectionTitle>
-      <ul className="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
-        {products.map((p) => (
-          <li key={p.id} className="relative rounded-2xl border border-gray-100 bg-white overflow-hidden">
-            <Thumb src={p.image} className="aspect-square w-full" />
-            <span className="absolute top-1.5 end-1.5 w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shadow-sm" aria-hidden="true"><Check className="w-3.5 h-3.5" /></span>
-            <div className="px-2 py-1.5">
-              <p dir="auto" className="text-[11px] font-black text-gray-900 line-clamp-2 leading-tight">{p.title}</p>
-              <p className="text-[10px] font-bold text-emerald-600 mt-0.5">{d("product_selected")}</p>
-            </div>
-          </li>
-        ))}
-      </ul>
-      <p className="text-[11px] text-gray-500 mt-3">{t("products_training_note")}</p>
-    </section>
-  );
-}
-
-/** F — the training pack: its price only (what was paid for the training, never earnings). */
-function MyPack({ breakdown, t, d, money }) {
+/** F — the training pack: its price (what was paid for the training, never earnings) and the selected products' images. */
+function MyPack({ breakdown, products, t, d, money }) {
   const b = displayBreakdown(breakdown);
   if (!b) return null;
   return (
@@ -306,17 +280,27 @@ function MyPack({ breakdown, t, d, money }) {
           <p className="text-xs font-semibold text-gray-600">{t("bd_price")}</p>
         </div>
       </div>
+      {products?.length > 0 && (
+        <ul className="grid grid-cols-3 sm:grid-cols-4 gap-2.5 mt-3" data-pack-products>
+          {products.map((p) => (
+            <li key={p.id} className="rounded-2xl border border-gray-100 bg-white overflow-hidden">
+              <Thumb src={p.image} className="aspect-square w-full" />
+              <span className="sr-only">{p.title}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <p className="text-[11px] text-gray-500 mt-2">{t("package_costs_note")}</p>
     </section>
   );
 }
 
-export default function BrandDashboard({ access, dash, error, loading, windowKey, onWindow, t, lang, dir, locale, money, fmtDate, sinceDays }) {
+export default function BrandDashboard({ access, dash, error, loading, windowKey, onWindow, t, lang, dir, locale, money, fmtDate }) {
   const d = dashboardT(lang);
   const closed = access.status === "CLOSED";
   return (
     <div className="space-y-4">
-      <Hero access={access} t={t} d={d} closed={closed} sinceDays={closed ? null : sinceDays} />
+      <Hero access={access} t={t} d={d} closed={closed} />
 
       {closed && (
         <div role="status" className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm text-slate-800">
@@ -342,8 +326,7 @@ export default function BrandDashboard({ access, dash, error, loading, windowKey
         </>
       ) : <div className="flex justify-center py-10"><span className="w-6 h-6 rounded-full border-2 border-violet-200 border-t-violet-600 animate-spin" aria-label={t("sending")} /></div>}
 
-      <MyProducts products={access.products} t={t} d={d} />
-      <MyPack breakdown={access.package?.breakdown} t={t} d={d} money={money} />
+      <MyPack breakdown={access.package?.breakdown} products={access.products} t={t} d={d} money={money} />
     </div>
   );
 }

@@ -390,7 +390,8 @@ console.log("\n10. Texts and labelling");
   ok("selection capped in the UI at the package's count, Continue needs exactly that count", /cur\.length >= need \? cur/.test(tab) && /chosen\.length === need/.test(tab) && /nav\(countOk\)/.test(tab));
   ok("pending and active views show the brand name and the selected products",
     (tab.match(/<ProductList products=\{access\.products\} \/>/g) || []).length === 1 && /access\.brandName/.test(tab)
-    && /<MyProducts products=\{access\.products\}/.test(dashUi) && /access\.brandName/.test(dashUi) && /d\("product_selected"\)/.test(dashUi));
+    && /<MyPack breakdown=\{access\.package\?\.breakdown\} products=\{access\.products\}/.test(dashUi) && /access\.brandName/.test(dashUi)
+    && /data-pack-products/.test(dashUi) && /<Thumb src=\{p\.image\}/.test(dashUi) && !/function MyProducts|<MyProducts/.test(dashUi));
   const apiCalls = [...tab.matchAll(/["`](\/api\/[^"`?$]*)/g)].map((m) => m[1]);
   ok("the tab only calls brand APIs (never earnings, wallet, orders or payouts) + reads the bank details",
     apiCalls.length > 0 && apiCalls.every((u) => u.startsWith("/api/affiliate/brand") || u === "/api/setting")
@@ -415,10 +416,10 @@ console.log("\n10. Texts and labelling");
     ok("order details show only reference, product, status and time", /d\("detail_ref"\)/.test(code) && /d\("detail_product"\)/.test(code) && /d\("detail_status"\)/.test(code) && /d\("detail_time"\)/.test(code)
       && (code.slice(code.indexOf("function OrderSheet"), code.indexOf("function LiveOrders")).match(/\{row\(/g) || []).length === 4);
   }
-  ok("dashboard texts: same keys FR/AR, no figure, simulated delivery chip, no earnings wording",
+  ok("dashboard texts: same keys FR/AR, no figure, removed hero chips / days-since not rendered, no earnings wording",
     JSON.stringify(Object.keys(DASHBOARD_TEXT.fr).sort()) === JSON.stringify(Object.keys(DASHBOARD_TEXT.ar).sort())
     && !/\d/.test(JSON.stringify(DASHBOARD_TEXT).replace(/\{\w+\}/g, ""))
-    && DASHBOARD_TEXT.fr.hero_sim_delivery === "Livraison simulée" && !/s.occupe de la livraison/i.test(JSON.stringify(DASHBOARD_TEXT))
+    && !/"hero_sim_delivery"|"hero_safe_sim"|since_days/.test(dashUi) && !/s.occupe de la livraison/i.test(JSON.stringify(DASHBOARD_TEXT))
     && !/profit|gain|chiffre|revenu|retir|ربح|أرباح|سحب/i.test(JSON.stringify(DASHBOARD_TEXT)));
   ok("hero uses real catalogue product images (no stock imagery)", /data-hero/.test(tab) && !/https?:\/\//.test(tab.replace(/\/\*[\s\S]*?\*\//g, "")) && /pr\.image/.test(tab));
   ok("included services on the landing come from the package's configured features", /features\?\.slice\(0, 4\)/.test(tab));
