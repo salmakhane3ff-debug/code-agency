@@ -18,9 +18,9 @@
 import { useEffect, useState } from "react";
 import {
   BarChart3, ShoppingCart, Truck, XCircle, Clock, CheckCircle, Undo2, Ban, ChevronRight, ChevronLeft,
-  Zap, GraduationCap, ShoppingBag, Package, Info, PauseCircle, X, Store,
+  Zap, GraduationCap, ShoppingBag, Package, Info, PauseCircle, X, Store, Route,
 } from "lucide-react";
-import { SimulatedBadge, LineChart } from "@/components/brand/BrandSimStats";
+import { SimulatedBadge, LineChart, STATUS_COLOR } from "@/components/brand/BrandSimStats";
 import { SIM_WINDOWS } from "@/lib/brandSimulation";
 import { displayBreakdown } from "@/lib/brandPricing";
 import { dashboardT } from "./dashboardText";
@@ -31,6 +31,7 @@ const CARD = "bg-white rounded-3xl border border-violet-100/70 shadow-[0_4px_18p
 const ORDER_STATUS = {
   pending:    { Icon: Clock,       cls: "bg-gray-100 text-gray-700" },
   confirmed:  { Icon: CheckCircle, cls: "bg-violet-50 text-violet-700" },
+  inDelivery: { Icon: Route,       cls: "bg-sky-50 text-sky-700" },
   delivered:  { Icon: Truck,       cls: "bg-emerald-50 text-emerald-700" },
   refused:    { Icon: XCircle,     cls: "bg-red-50 text-red-600" },
   returned:   { Icon: Undo2,       cls: "bg-orange-50 text-orange-600" },
@@ -62,8 +63,9 @@ function SectionTitle({ Icon, children, extra }) {
 function StatusChip({ status, d, small = false }) {
   const s = ORDER_STATUS[status] || ORDER_STATUS.pending;
   return (
-    <span className={`inline-flex items-center gap-1 rounded-xl font-bold whitespace-nowrap ${small ? "px-2 py-1 text-[11px]" : "px-2.5 py-1.5 text-xs"} ${s.cls}`}>
-      <s.Icon className={small ? "w-3.5 h-3.5" : "w-4 h-4"} aria-hidden="true" />{d(`order_status_${status}`)}
+    // Small badges are capped (112 px) so a long label ("En cours de livraison") wraps instead of covering the row's time.
+    <span className={`inline-flex items-center gap-1 rounded-xl font-bold ${small ? "px-2 py-1 text-[11px] leading-tight max-w-[112px]" : "px-2.5 py-1.5 text-xs whitespace-nowrap"} ${s.cls}`}>
+      <s.Icon className={`shrink-0 ${small ? "w-3.5 h-3.5" : "w-4 h-4"}`} aria-hidden="true" />{d(`order_status_${status}`)}
     </span>
   );
 }
@@ -143,6 +145,13 @@ function Analyses({ stats, windowKey, onWindow, t, d, locale, loading }) {
     { key: "delivered", value: stats?.byStatus?.delivered, label: t("sum_delivered"), Icon: Truck, cls: "bg-emerald-50/70", icon: "bg-emerald-100 text-emerald-600", num: "text-emerald-700" },
     { key: "refused", value: stats?.byStatus?.refused, label: t("sum_refused"), Icon: XCircle, cls: "bg-red-50/60", icon: "bg-red-100 text-red-500", num: "text-red-600" },
     { key: "noResponse", value: stats?.byStatus?.noResponse, label: t("sum_noResponse"), Icon: Clock, cls: "bg-amber-50/70", icon: "bg-amber-100 text-amber-600", num: "text-amber-700" },
+    { key: "inDelivery", value: stats?.byStatus?.inDelivery, label: d("kpi_inDelivery"), Icon: Route, cls: "bg-sky-50/70", icon: "bg-sky-100 text-sky-600", num: "text-sky-700" },
+    { key: "cancelled", value: stats?.byStatus?.cancelled, label: d("kpi_cancelled"), Icon: Ban, cls: "bg-gray-50", icon: "bg-gray-200 text-gray-600", num: "text-gray-700" },
+  ];
+  // Extra chart lines, from each bucket's per-status counts (same counts as the cards above).
+  const series = [
+    { key: "inDelivery", label: d("kpi_inDelivery"), color: STATUS_COLOR.inDelivery.hex },
+    { key: "cancelled", label: d("kpi_cancelled"), color: STATUS_COLOR.cancelled.hex },
   ];
   return (
     <section className={`${CARD} p-4 sm:p-5`} data-analytics aria-busy={loading}>
@@ -157,18 +166,28 @@ function Analyses({ stats, windowKey, onWindow, t, d, locale, loading }) {
       </div>
       <div className={`grid grid-cols-2 gap-2.5 ${loading ? "opacity-60" : ""}`} data-kpis>
         {kpis.map(({ key, value, label, Icon, cls, icon, num }) => (
-          <div key={key} className={`flex items-center gap-2.5 rounded-2xl border border-gray-100 p-3 min-w-0 ${cls}`} data-kpi={key}>
-            <span className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${icon}`}><Icon className="w-5 h-5" aria-hidden="true" /></span>
+          // ≤380 px: slightly smaller icon, gap and side padding, so the longest single word ("Commandes") fits; labels wrap between words.
+          <div key={key} className={`flex items-center gap-2.5 max-[380px]:gap-2 rounded-2xl border border-gray-100 p-3 max-[380px]:px-2.5 min-w-0 ${cls}`} data-kpi={key}>
+            <span className={`w-10 h-10 max-[380px]:w-9 max-[380px]:h-9 rounded-full flex items-center justify-center shrink-0 ${icon}`}><Icon className="w-5 h-5" aria-hidden="true" /></span>
             <div className="min-w-0">
               <p className={`text-xl sm:text-2xl font-black leading-none ${num}`}>{n(value)}</p>
-              <p className="text-[12px] font-semibold text-gray-600 mt-1 truncate" title={label}>{label}</p>
+              <p className="text-[12px] font-semibold text-gray-600 mt-1 leading-tight break-words">{label}</p>
             </div>
           </div>
         ))}
       </div>
       <div className={`mt-3 ${loading ? "opacity-60" : ""}`}>
         <p className="text-[11px] text-gray-500 mb-1">{stats?.unit === "hour" ? t("chart_hour") : t("chart_day")}</p>
-        {stats?.total ? <LineChart stats={stats} t={t} locale={locale} /> : <p className="text-sm text-gray-500 py-8 text-center">{t("no_data")}</p>}
+        {stats?.total ? (
+          <>
+            <LineChart stats={stats} t={t} locale={locale} series={series} />
+            <ul className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-[11px] font-semibold text-gray-600" data-chart-legend>
+              {[{ key: "total", label: t("sum_total"), color: "#7c3aed" }, ...series].map((s) => (
+                <li key={s.key} className="flex items-center gap-1.5"><span className="w-3 h-1 rounded-full" style={{ background: s.color }} aria-hidden="true" />{s.label}</li>
+              ))}
+            </ul>
+          </>
+        ) : <p className="text-sm text-gray-500 py-8 text-center">{t("no_data")}</p>}
       </div>
     </section>
   );

@@ -15,7 +15,9 @@
  * Displayed status depends on the order's age and the admin "speed" settings:
  *   age < confirmationDelayHours          → pending
  *   noResponse / cancelled outcomes       → shown once confirmation time passes
- *   delivered / refused / returned        → "confirmed" until deliveryDelayHours,
+ *   delivered / refused / returned        → "confirmed" for the first half of the
+ *                                            time between the two delays,
+ *                                            "inDelivery" for the second half,
  *                                            then the final outcome
  *
  * Nothing here knows about real orders, products, customers, money or wallets.
@@ -129,7 +131,10 @@ export function liveHourCounts(seed, nowMs, sim) {
 export function statusAt(outcome, ageHours, sim) {
   if (ageHours < sim.confirmationDelayHours) return 'pending';
   if (outcome === 'noResponse' || outcome === 'cancelled') return outcome;
-  if (ageHours < sim.deliveryDelayHours) return 'confirmed';
+  if (ageHours < sim.deliveryDelayHours) {
+    const half = sim.confirmationDelayHours + (sim.deliveryDelayHours - sim.confirmationDelayHours) / 2;
+    return ageHours < half ? 'confirmed' : 'inDelivery';
+  }
   return outcome;
 }
 
@@ -146,7 +151,9 @@ export function windowBuckets(windowKey, nowMs) {
 /**
  * Stats for one window ending at `nowMs` (now, or the closure of a closed
  * access): orders CREATED in the window, counted by the status they display at
- * that instant, plus per-bucket totals. `rows` are persisted hours; `live` is the
+ * that instant, plus per-bucket totals and per-bucket status counts (the same
+ * count, split by bucket: each status's buckets add up to its window count).
+ * `rows` are persisted hours; `live` is the
  * current hour so far (or null). `delaysFor(hourStartMs)` returns the display
  * delays of the day the orders were created (a plain object = fixed delays).
  */
@@ -156,6 +163,7 @@ export function windowStats(rows, live, nowMs, windowKey, delaysFor) {
   if (!b) return null;
   const byStatus = Object.fromEntries(SIM_STATUSES.map((s) => [s, 0]));
   const totals = new Map(b.starts.map((s) => [s, 0]));
+  const bucketStatus = new Map(b.starts.map((s) => [s, Object.fromEntries(SIM_STATUSES.map((x) => [x, 0]))]));
   let total = 0;
   const add = (hourStartMs, counts) => {
     if (hourStartMs < b.from || hourStartMs > nowMs) return;
@@ -164,7 +172,10 @@ export function windowStats(rows, live, nowMs, windowKey, delaysFor) {
     const age = (nowMs - hourStartMs) / HOUR_MS;
     for (const k of SIM_OUTCOMES) {
       const n = Number(counts[k]) || 0;
-      if (n) byStatus[statusAt(k, age, delays(hourStartMs))] += n;
+      if (!n) continue;
+      const status = statusAt(k, age, delays(hourStartMs));
+      byStatus[status] += n;
+      bucketStatus.get(bucket)[status] += n;
     }
     const created = Number(counts.created) || 0;
     totals.set(bucket, totals.get(bucket) + created);
@@ -179,7 +190,7 @@ export function windowStats(rows, live, nowMs, windowKey, delaysFor) {
     to: new Date(nowMs).toISOString(),
     total,
     byStatus,
-    buckets: b.starts.map((s) => ({ start: new Date(s).toISOString(), total: totals.get(s) })),
+    buckets: b.starts.map((s) => ({ start: new Date(s).toISOString(), total: totals.get(s), byStatus: bucketStatus.get(s) })),
   };
 }
 

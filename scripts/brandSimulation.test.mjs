@@ -96,9 +96,17 @@ console.log("\n2. Status progression (speed settings)");
 {
   ok("younger than the confirmation delay → pending", statusAt("delivered", 1.5, SIM) === "pending" && statusAt("cancelled", 0, SIM) === "pending");
   ok("no response / cancelled shown once confirmation time passes", statusAt("noResponse", 2, SIM) === "noResponse" && statusAt("cancelled", 100, SIM) === "cancelled");
-  ok("delivered / refused / returned are 'confirmed' until the final delay", statusAt("delivered", 10, SIM) === "confirmed" && statusAt("refused", 47.9, SIM) === "confirmed");
+  // confirmation 2 h, delivery 48 h → halfway point 25 h
+  ok("delivered / refused / returned are 'confirmed' for the first half of the delivery time", statusAt("delivered", 2, SIM) === "confirmed" && statusAt("delivered", 10, SIM) === "confirmed" && statusAt("refused", 24.9, SIM) === "confirmed");
+  ok("…then 'inDelivery' for the second half", statusAt("refused", 25, SIM) === "inDelivery" && statusAt("delivered", 40, SIM) === "inDelivery" && statusAt("returned", 47.9, SIM) === "inDelivery");
   ok("…then their final outcome", statusAt("delivered", 48, SIM) === "delivered" && statusAt("returned", 60, SIM) === "returned");
   ok("zero delays → final outcome immediately", statusAt("refused", 0, { confirmationDelayHours: 0, deliveryDelayHours: 0 }) === "refused");
+  ok("equal delays → no confirmed / inDelivery phase", ["delivered", "refused", "returned"].every((o) => statusAt(o, 5, { confirmationDelayHours: 5, deliveryDelayHours: 5 }) === o));
+  ok("no response / cancelled never pass through confirmed or inDelivery", [2, 10, 25, 40, 47.9, 100].every((a) => statusAt("noResponse", a, SIM) === "noResponse" && statusAt("cancelled", a, SIM) === "cancelled"));
+  ok("a delivered order moves pending → confirmed → inDelivery → delivered, never back",
+    [0, 1, 2, 10, 24.9, 25, 30, 47.9, 48, 100].map((a) => statusAt("delivered", a, SIM)).join() === "pending,pending,confirmed,confirmed,confirmed,inDelivery,inDelivery,inDelivery,delivered,delivered");
+  ok("statuses: inDelivery added as a display status; the admin outcomes are unchanged",
+    SIM_STATUSES.join() === "pending,confirmed,inDelivery,delivered,refused,returned,noResponse,cancelled" && SIM_OUTCOMES.join() === "delivered,refused,returned,noResponse,cancelled");
 }
 
 console.log("\n3. Ranges, live hour, windows");
@@ -122,6 +130,28 @@ console.log("\n3. Ranges, live hour, windows");
   ok("status breakdown and buckets add up to the total", ["24h", "7d", "30d"].every((k) =>
     SIM_STATUSES.reduce((s, x) => s + w[k].byStatus[x], 0) === w[k].total && w[k].buckets.reduce((s, b) => s + b.total, 0) === w[k].total));
   ok("recent orders still pending / confirmed, older ones final", w["24h"].byStatus.delivered === 0 && w["24h"].byStatus.confirmed > 0 && w["30d"].byStatus.delivered > 0);
+  // inDelivery = orders aged 25–48 h (confirmation 2 h, delivery 48 h): none inside the last 24 h
+  ok("inDelivery and cancelled are counted (inDelivery only in windows reaching back past 25 h)",
+    w["24h"].byStatus.inDelivery === 0 && w["7d"].byStatus.inDelivery > 0 && w["30d"].byStatus.inDelivery === w["7d"].byStatus.inDelivery
+    && w["7d"].byStatus.cancelled > 0 && w["24h"].byStatus.cancelled <= w["7d"].byStatus.cancelled && w["7d"].byStatus.cancelled <= w["30d"].byStatus.cancelled);
+  // independent recount: every created hour inside the window, by the status statusAt gives it now
+  const recount = (k, status) => {
+    const from = windowBuckets(k, now).from; let n = 0;
+    for (const r of [...rows, live]) {
+      const h = new Date(r.hourStart).getTime(); if (h < from || h > now) continue;
+      for (const o of SIM_OUTCOMES) if (statusAt(o, (now - h) / HOUR_MS, SIM) === status) n += Number(r[o]) || 0;
+    }
+    return n;
+  };
+  ok("24h / 7d / 30d filters: inDelivery and cancelled match an independent recount",
+    ["24h", "7d", "30d"].every((k) => w[k].byStatus.inDelivery === recount(k, "inDelivery") && w[k].byStatus.cancelled === recount(k, "cancelled")),
+    JSON.stringify(["24h", "7d", "30d"].map((k) => [w[k].byStatus.inDelivery, recount(k, "inDelivery"), w[k].byStatus.cancelled, recount(k, "cancelled")])));
+  ok("chart data: every bucket carries per-status counts that add up to its total",
+    ["24h", "7d", "30d"].every((k) => w[k].buckets.every((b) => SIM_STATUSES.every((x) => Number.isInteger(b.byStatus[x])) && SIM_STATUSES.reduce((s, x) => s + b.byStatus[x], 0) === b.total)));
+  ok("chart data: each status's buckets add up to its window count (cards and chart agree)",
+    ["24h", "7d", "30d"].every((k) => SIM_STATUSES.every((x) => w[k].buckets.reduce((s, b) => s + b.byStatus[x], 0) === w[k].byStatus[x])));
+  ok("chart data: the existing total series is unchanged (buckets keep start + total)",
+    ["24h", "7d", "30d"].every((k) => w[k].buckets.every((b) => typeof b.start === "string" && Number.isInteger(b.total))) && w["7d"].buckets.some((b) => b.byStatus.inDelivery > 0) && w["30d"].buckets.some((b) => b.byStatus.cancelled > 0));
 }
 
 // ── 4. Persistence: once, whatever happens ────────────────────────────────────
@@ -134,7 +164,13 @@ console.log("\n4. Persisted once: re-runs, restart, concurrency");
   ok("dashboard is flagged simulated", early.simulated === true && early.brandName === "Ma Marque");
 
   const now = new Date(T0.getTime() + 10 * DAY_MS);
-  await getAffiliateSimulationDashboard("a1", { db, now, window: "30d" });
+  const d30 = await getAffiliateSimulationDashboard("a1", { db, now, window: "30d" });
+  ok("API response: buckets carry per-status counts matching the cards (inDelivery, cancelled, every status)",
+    d30.stats.buckets.every((b) => Number.isInteger(b.total) && SIM_STATUSES.reduce((x, k) => x + b.byStatus[k], 0) === b.total)
+    && SIM_STATUSES.every((k) => d30.stats.buckets.reduce((x, b) => x + b.byStatus[k], 0) === d30.stats.byStatus[k])
+    && d30.stats.byStatus.inDelivery > 0 && d30.stats.byStatus.cancelled > 0, JSON.stringify(d30.stats.byStatus));
+  ok("simulation only: still nothing but brand_sim_hours rows written (no order, wallet or commission table touched)",
+    Object.entries(T).every(([name, rows]) => !/^(order|affiliateOrder|commission|wallet|payout|deposit|reward)/i.test(name) || rows.length === 0));
   const startsAt = T.brandAccess[0].simulationStartsAt.getTime();
   const expected = (floorHour(now.getTime()) - ceilHour(startsAt)) / HOUR_MS;
   ok(`every completed hour since the start stored once (${expected} hours)`, T.brandSimHour.length === expected, `${T.brandSimHour.length}`);
@@ -219,6 +255,18 @@ console.log("\n5b. Latest simulated orders");
     && SIM_STATUSES.includes(o.status) && prods.some((p) => p.id === o.product.id) && Object.keys(o).sort().join() === "at,product,ref,status"));
   ok("orders of uncounted (paused / not started) hours are never listed", recentSimulatedOrders("acc-x", { ...args, countedHours: [], liveHour: null }).length === 0);
   ok("limit respected", recentSimulatedOrders("acc-x", { ...args, limit: 3 }).length === 3);
+  // short delays (confirmed 0.5 h, delivery 10 h → halfway 5.25 h) so the latest orders reach inDelivery
+  const quick = { ...SIM, confirmationDelayHours: 0.5, deliveryDelayHours: 10 };
+  const q = recentSimulatedOrders("acc-x", { ...args, sim: quick });
+  const phase = (o) => { const age = (now - Date.parse(o.at)) / H; return age < 0.5 ? "pending" : age < 5.25 ? "confirmed" : age < 10 ? "inDelivery" : "final"; };
+  ok("latest orders show inDelivery and cancelled from the same generator",
+    q.some((o) => o.status === "inDelivery") && q.some((o) => o.status === "cancelled"), [...new Set(q.map((o) => o.status))].join());
+  ok("each listed status matches its age (pending → confirmed → inDelivery → final; no response / cancelled once confirmed)", q.every((o) => {
+    const p = phase(o);
+    if (p === "pending") return o.status === "pending";
+    if (o.status === "noResponse" || o.status === "cancelled") return true;
+    return p === "final" ? ["delivered", "refused", "returned"].includes(o.status) : o.status === p;
+  }));
   const { db } = await activeAccessDb({ strict: true, activateAt: new Date(T0.getTime() - 3 * DAY_MS) });
   const dash = await getAffiliateSimulationDashboard("a1", { db, now: T0, window: "24h" });
   ok("dashboard returns the latest simulated orders with the brand's products", Array.isArray(dash.recent) && dash.recent.length > 0

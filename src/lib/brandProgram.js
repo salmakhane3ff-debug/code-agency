@@ -48,8 +48,8 @@ export const BRAND_LIMITS = Object.freeze({
 
 /** Final outcomes of a simulated order — the admin distribution covers exactly these. */
 export const SIM_OUTCOMES = Object.freeze(['delivered', 'refused', 'returned', 'noResponse', 'cancelled']);
-/** Every status a simulated order can display (pending and confirmed are intermediate). */
-export const SIM_STATUSES = Object.freeze(['pending', 'confirmed', ...SIM_OUTCOMES]);
+/** Every status a simulated order can display (pending, confirmed and inDelivery are intermediate). */
+export const SIM_STATUSES = Object.freeze(['pending', 'confirmed', 'inDelivery', ...SIM_OUTCOMES]);
 
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
 const REQUEST_ID_RE = /^[A-Za-z0-9_-]{8,100}$/;

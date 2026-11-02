@@ -412,10 +412,57 @@ console.log("\n10. Texts and labelling");
       !/money\(o\.|money\(order\.|revenue|profit|chiffre|gain|stock|availab|disponib/i.test(code.replace(/hero_no_stock/g, "")));
     ok("periods are the existing 24 h / 7 d / 30 d windows only (no all time), no 'see all orders' action",
       /Object\.entries\(SIM_WINDOWS\)/.test(code) && !/all ?time|voir toutes/i.test(code));
-    ok("four real counts: orders, delivered, refused, no response", ["stats?.total", "byStatus?.delivered", "byStatus?.refused", "byStatus?.noResponse"].every((k) => code.includes(k)));
+    ok("six real counts: orders, delivered, refused, no response, in delivery, cancelled",
+      ["stats?.total", "byStatus?.delivered", "byStatus?.refused", "byStatus?.noResponse", "byStatus?.inDelivery", "byStatus?.cancelled"].every((k) => code.includes(k))
+      && /d\("kpi_inDelivery"\)/.test(code) && /d\("kpi_cancelled"\)/.test(code));
+    ok("chart: existing total line + inDelivery and cancelled series, with a legend",
+      /<LineChart stats=\{stats\} t=\{t\} locale=\{locale\} series=\{series\} \/>/.test(code) && /key: "inDelivery"[^}]*STATUS_COLOR\.inDelivery\.hex/.test(code)
+      && /key: "cancelled"[^}]*STATUS_COLOR\.cancelled\.hex/.test(code) && /data-chart-legend/.test(code)
+      && /export function LineChart\(\{ stats, t, locale, series = \[\] \}\)/.test(stats) && /b\.byStatus\?\.\[s\.key\]/.test(stats));
+    ok("latest orders: inDelivery has its own badge; every simulated status has a badge style",
+      /inDelivery: \{ Icon: Route,\s+cls: "bg-sky-50 text-sky-700" \}/.test(code) && SIM_STATUSES.every((x) => new RegExp(`\\b${x}:\\s+\\{ Icon:`).test(code)));
+    ok("every simulated status has a colour in the shared chart/donut component", SIM_STATUSES.every((x) => new RegExp(`\\b${x}:\\s+\\{ hex: "#[0-9a-f]{6}"`).test(stats)));
+    // admin view (BrandSimStats default export, used by the admin requests panel only)
+    const tilesSrc = stats.slice(stats.indexOf("export function SummaryTiles"), stats.indexOf("export function LineChart"));
+    const adminSrc = stats.slice(stats.indexOf("export default function BrandSimStats"));
+    ok("admin tiles: total, delivered, refused, no response + separate confirmed, in delivery and cancellation tiles",
+      ["stats?.total", "byStatus?.delivered", "byStatus?.refused", "byStatus?.noResponse", "byStatus?.confirmed", "byStatus?.inDelivery", "byStatus?.cancelled"].every((k) => tilesSrc.includes(k))
+      && /t\("status_confirmed"\)/.test(tilesSrc) && /t\("sum_inDelivery"\)/.test(tilesSrc) && /t\("sum_cancelled"\)/.test(tilesSrc)
+      && (tilesSrc.match(/\{ key: "/g) || []).length === 7);
+    ok("admin chart: total line + separate confirmed, inDelivery and cancelled lines, with a legend",
+      /<LineChart stats=\{stats\} t=\{t\} locale=\{locale\} series=\{series\} \/>/.test(adminSrc)
+      && /key: "confirmed"[^}]*CHART_LINE_COLOR\.confirmed/.test(adminSrc) && /key: "inDelivery"[^}]*CHART_LINE_COLOR\.inDelivery/.test(adminSrc)
+      && /key: "cancelled"[^}]*STATUS_COLOR\.cancelled\.hex/.test(adminSrc) && /data-chart-legend/.test(adminSrc));
+    {
+      // admin chart: confirmed and inDelivery lines in clearly different hues; shared status / donut colours unchanged
+      const lineCol = Object.fromEntries([...stats.matchAll(/(confirmed|inDelivery): "(#[0-9a-f]{6})"/g)].map((m) => [m[1], m[2]]));
+      const hue = (hex) => { const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255); const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+        if (!d) return 0; const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return (h * 60 + 360) % 360; };
+      const gap = (a, b) => { const x = Math.abs(hue(a) - hue(b)); return Math.min(x, 360 - x); };
+      ok("admin chart: confirmed and inDelivery line colours differ clearly (hue gap ≥ 40°, vs 18° for the shared colours)",
+        lineCol.confirmed && lineCol.inDelivery && gap(lineCol.confirmed, lineCol.inDelivery) >= 40, JSON.stringify(lineCol));
+      ok("shared STATUS_COLOR (donut, affiliate) unchanged: confirmed #3b82f6, inDelivery #0ea5e9",
+        /confirmed:\s+\{ hex: "#3b82f6"/.test(stats) && /inDelivery: \{ hex: "#0ea5e9"/.test(stats));
+    }
+    ok("admin tile labels wrap between words only (no truncation / ellipsis, no mid-word breaking)",
+      /text-\[11px\] text-gray-500 leading-tight mt-0\.5">\{label\}/.test(tilesSrc) && !/truncate|break-words|break-all|overflow-wrap|word-break/.test(tilesSrc));
+    ok("admin donut keeps every status separate (one row per simulated status, nothing merged)",
+      /SIM_STATUSES\.map\(\(s\) => \(\{ s, v: Number\(stats\?\.byStatus\?\.\[s\]/.test(stats) && /\{SIM_STATUSES\.map\(\(s\) => \{/.test(stats));
+    const simTab = read("../src/app/admin/brand/SimulationTab.jsx");
+    ok("admin outcome distribution: still the five final outcomes (no inDelivery), validated at 100 %",
+      /SIM_OUTCOMES\.reduce\(/.test(simTab) && /\{SIM_OUTCOMES\.map\(\(k\) =>/.test(simTab) && /total === 100/.test(simTab) && !/inDelivery|SIM_STATUSES/.test(simTab));
     ok("order details show only reference, product, status and time", /d\("detail_ref"\)/.test(code) && /d\("detail_product"\)/.test(code) && /d\("detail_status"\)/.test(code) && /d\("detail_time"\)/.test(code)
       && (code.slice(code.indexOf("function OrderSheet"), code.indexOf("function LiveOrders")).match(/\{row\(/g) || []).length === 4);
   }
+  ok("in delivery / cancellation labels (FR / AR) on the affiliate cards, the badges, the admin tiles and the shared status list",
+    DASHBOARD_TEXT.fr.kpi_inDelivery === "En cours de livraison" && DASHBOARD_TEXT.ar.kpi_inDelivery === "قيد التوصيل"
+    && DASHBOARD_TEXT.fr.kpi_cancelled === "Annulation" && DASHBOARD_TEXT.ar.kpi_cancelled === "ملغاة"
+    && DASHBOARD_TEXT.fr.order_status_inDelivery === "En cours de livraison" && DASHBOARD_TEXT.ar.order_status_inDelivery === "قيد التوصيل"
+    && DASHBOARD_TEXT.fr.order_status_cancelled === "Annulation" && DASHBOARD_TEXT.ar.order_status_cancelled === "ملغاة"
+    && BRAND_TEXT.fr.status_inDelivery === "En cours de livraison" && BRAND_TEXT.ar.status_inDelivery === "قيد التوصيل"
+    && BRAND_TEXT.fr.sum_inDelivery === "En cours de livraison" && BRAND_TEXT.ar.sum_inDelivery === "قيد التوصيل"
+    && BRAND_TEXT.fr.sum_cancelled === "Annulation" && BRAND_TEXT.ar.sum_cancelled === "ملغاة"
+    && SIM_STATUSES.every((x) => DASHBOARD_TEXT.fr[`order_status_${x}`] && DASHBOARD_TEXT.ar[`order_status_${x}`]));
   ok("dashboard texts: same keys FR/AR, no figure, removed hero chips / days-since not rendered, no earnings wording",
     JSON.stringify(Object.keys(DASHBOARD_TEXT.fr).sort()) === JSON.stringify(Object.keys(DASHBOARD_TEXT.ar).sort())
     && !/\d/.test(JSON.stringify(DASHBOARD_TEXT).replace(/\{\w+\}/g, ""))

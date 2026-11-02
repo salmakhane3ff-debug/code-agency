@@ -11,7 +11,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { FlaskConical, ShoppingCart, Truck, XCircle, Clock } from "lucide-react";
+import { FlaskConical, ShoppingCart, Truck, XCircle, Clock, CheckCircle, Route, Ban } from "lucide-react";
 import { SIM_WINDOWS } from "@/lib/brandSimulation";
 import { SIM_STATUSES } from "@/lib/brandProgram";
 
@@ -19,6 +19,7 @@ import { SIM_STATUSES } from "@/lib/brandProgram";
 export const STATUS_COLOR = {
   pending:    { hex: "#9ca3af", chip: "bg-gray-100 text-gray-700" },
   confirmed:  { hex: "#3b82f6", chip: "bg-blue-50 text-blue-700" },
+  inDelivery: { hex: "#0ea5e9", chip: "bg-sky-50 text-sky-700" },
   delivered:  { hex: "#10b981", chip: "bg-emerald-50 text-emerald-700" },
   refused:    { hex: "#ef4444", chip: "bg-red-50 text-red-700" },
   returned:   { hex: "#f97316", chip: "bg-orange-50 text-orange-700" },
@@ -53,7 +54,7 @@ export function WindowSelect({ windowKey, onWindow, t }) {
   );
 }
 
-/** Four summary tiles: total, delivered, refused, no response. */
+/** Seven summary tiles: total, delivered, refused, no response, confirmed, in delivery, cancelled. */
 export function SummaryTiles({ stats, t, locale }) {
   const n = (v) => Number(v || 0).toLocaleString(locale);
   const tiles = [
@@ -61,14 +62,17 @@ export function SummaryTiles({ stats, t, locale }) {
     { key: "delivered", value: stats?.byStatus?.delivered, label: t("sum_delivered"), cls: "text-emerald-600", Icon: Truck, icon: "text-emerald-600 bg-emerald-50" },
     { key: "refused", value: stats?.byStatus?.refused, label: t("sum_refused"), cls: "text-red-600", Icon: XCircle, icon: "text-red-500 bg-red-50" },
     { key: "noResponse", value: stats?.byStatus?.noResponse, label: t("sum_noResponse"), cls: "text-amber-600", Icon: Clock, icon: "text-amber-500 bg-amber-50" },
+    { key: "confirmed", value: stats?.byStatus?.confirmed, label: t("status_confirmed"), cls: "text-blue-600", Icon: CheckCircle, icon: "text-blue-600 bg-blue-50" },
+    { key: "inDelivery", value: stats?.byStatus?.inDelivery, label: t("sum_inDelivery"), cls: "text-sky-600", Icon: Route, icon: "text-sky-600 bg-sky-50" },
+    { key: "cancelled", value: stats?.byStatus?.cancelled, label: t("sum_cancelled"), cls: "text-gray-700", Icon: Ban, icon: "text-gray-600 bg-gray-100" },
   ];
   return (
-    <div className="grid grid-cols-4 divide-x divide-gray-100 rtl:divide-x-reverse bg-white rounded-2xl border border-gray-100 shadow-sm py-3" data-summary>
+    <div className="grid grid-cols-3 sm:grid-cols-7 gap-y-3 divide-x divide-gray-100 rtl:divide-x-reverse bg-white rounded-2xl border border-gray-100 shadow-sm py-3" data-summary>
       {tiles.map(({ key, value, label, cls, Icon, icon }) => (
-        <div key={key} className="px-1.5 text-center min-w-0">
+        <div key={key} className="px-1.5 text-center min-w-0" data-tile={key}>
           <span className={`mx-auto mb-1 w-7 h-7 rounded-full flex items-center justify-center ${icon}`}><Icon className="w-3.5 h-3.5" aria-hidden="true" /></span>
           <p className={`text-xl font-black leading-tight ${cls}`}>{n(value)}</p>
-          <p className="text-[11px] text-gray-500 leading-tight mt-0.5 truncate" title={label}>{label}</p>
+          <p className="text-[11px] text-gray-500 leading-tight mt-0.5">{label}</p>
         </div>
       ))}
     </div>
@@ -78,8 +82,10 @@ export function SummaryTiles({ stats, t, locale }) {
 /**
  * Line chart of simulated orders per bucket. A point is highlighted (the peak by
  * default); pointer moves and ←/→ keys change it, and its value is announced.
+ * Optional `series` ([{ key, label, color }]) adds one line per status, read from
+ * each bucket's `byStatus`; without it the chart is unchanged.
  */
-export function LineChart({ stats, t, locale }) {
+export function LineChart({ stats, t, locale, series = [] }) {
   const buckets = stats?.buckets || [];
   const W = 320, H = 150, P = { l: 26, r: 8, t: 14, b: 22 };
   const max = Math.max(1, ...buckets.map((b) => b.total));
@@ -92,6 +98,10 @@ export function LineChart({ stats, t, locale }) {
   const pts = buckets.map((b, i) => [x(i), y(b.total)]);
   const line = pts.map(([px, py], i) => `${i ? "L" : "M"}${px.toFixed(1)},${py.toFixed(1)}`).join(" ");
   const area = pts.length ? `${line} L${pts.at(-1)[0].toFixed(1)},${y(0)} L${pts[0][0].toFixed(1)},${y(0)} Z` : "";
+  const extra = series.map((s) => {
+    const sp = buckets.map((b, i) => [x(i), y(Number(b.byStatus?.[s.key]) || 0)]);
+    return { ...s, pts: sp, d: sp.map(([px, py], i) => `${i ? "L" : "M"}${px.toFixed(1)},${py.toFixed(1)}`).join(" ") };
+  });
   const fmt = (iso, long = false) => (stats?.unit === "hour"
     ? new Date(iso).toLocaleTimeString(locale, { hour: "2-digit", ...(long ? { minute: "2-digit" } : {}) })
     : new Date(iso).toLocaleDateString(locale, long ? { day: "2-digit", month: "short" } : { day: "2-digit", month: "2-digit" }));
@@ -116,7 +126,7 @@ export function LineChart({ stats, t, locale }) {
   return (
     <div dir="ltr">
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-violet-400 rounded-lg"
-        role="img" tabIndex={0} aria-label={`${t("chart_aria")} — ${fmt(cur.start, true)} : ${cur.total}`}
+        role="img" tabIndex={0} aria-label={`${t("chart_aria")} — ${fmt(cur.start, true)} : ${cur.total}${series.map((s) => `, ${s.label} : ${Number(cur.byStatus?.[s.key]) || 0}`).join("")}`}
         onPointerMove={onMove} onPointerDown={onMove} onKeyDown={onKey} data-chart>
         <defs>
           <linearGradient id="brandArea" x1="0" x2="0" y1="0" y2="1">
@@ -131,6 +141,12 @@ export function LineChart({ stats, t, locale }) {
         ))}
         <path d={area} fill="url(#brandArea)" />
         <path d={line} fill="none" stroke="#7c3aed" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        {extra.map((s) => (
+          <g key={s.key} data-series={s.key}>
+            <path d={s.d} fill="none" stroke={s.color} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
+            <circle cx={s.pts[idx][0]} cy={s.pts[idx][1]} r="2.6" fill={s.color} />
+          </g>
+        ))}
         {pts.map(([px, py], i) => (i % every === 0 || i === idx) && <circle key={i} cx={px} cy={py} r={i === idx ? 4 : 2.6} fill={i === idx ? "#7c3aed" : "#fff"} stroke="#7c3aed" strokeWidth="1.6" />)}
         <line x1={pts[idx][0]} x2={pts[idx][0]} y1={pts[idx][1]} y2={y(0)} stroke="#7c3aed" strokeOpacity="0.35" strokeDasharray="3 3" />
         <g transform={`translate(${tipX - 40}, ${Math.max(0, pts[idx][1] - 34)})`}>
@@ -175,8 +191,17 @@ export function StatusDonut({ stats, t, locale }) {
   );
 }
 
+/** Admin chart lines for confirmed / in delivery: clearly different hues (the shared STATUS_COLOR blue and sky are too close as lines). */
+const CHART_LINE_COLOR = { confirmed: "#1d4ed8", inDelivery: "#0d9488" };
+
 /** Full block: summary tiles, analytics (period + line chart) and order details donut. */
 export default function BrandSimStats({ stats, windowKey, onWindow, t, locale = "fr-FR", loading = false }) {
+  // Extra chart lines (same per-status counts as the tiles and the donut); total line unchanged.
+  const series = [
+    { key: "confirmed", label: t("status_confirmed"), color: CHART_LINE_COLOR.confirmed },
+    { key: "inDelivery", label: t("sum_inDelivery"), color: CHART_LINE_COLOR.inDelivery },
+    { key: "cancelled", label: t("sum_cancelled"), color: STATUS_COLOR.cancelled.hex },
+  ];
   return (
     <div className={`space-y-4 ${loading ? "opacity-60" : ""}`} aria-busy={loading}>
       <SummaryTiles stats={stats} t={t} locale={locale} />
@@ -187,7 +212,16 @@ export default function BrandSimStats({ stats, windowKey, onWindow, t, locale = 
           <div className="flex items-center gap-2"><SimulatedBadge t={t} /><WindowSelect windowKey={windowKey} onWindow={onWindow} t={t} /></div>
         </div>
         <p className="text-[11px] text-gray-500 mb-2">{t("total_orders")} · {windowLabel(windowKey, t)} · {stats?.unit === "hour" ? t("chart_hour") : t("chart_day")}</p>
-        {stats?.total ? <LineChart stats={stats} t={t} locale={locale} /> : <p className="text-sm text-gray-500 py-8 text-center">{t("no_data")}</p>}
+        {stats?.total ? (
+          <>
+            <LineChart stats={stats} t={t} locale={locale} series={series} />
+            <ul className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-[11px] font-semibold text-gray-600" data-chart-legend>
+              {[{ key: "total", label: t("sum_total"), color: "#7c3aed" }, ...series].map((s) => (
+                <li key={s.key} className="flex items-center gap-1.5"><span className="w-3 h-1 rounded-full" style={{ background: s.color }} aria-hidden="true" />{s.label}</li>
+              ))}
+            </ul>
+          </>
+        ) : <p className="text-sm text-gray-500 py-8 text-center">{t("no_data")}</p>}
       </section>
 
       <section className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
