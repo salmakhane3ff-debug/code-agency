@@ -690,6 +690,14 @@ function ActiveDashboard({ access, t, lang, dir, locale, money }) {
     if (r.ok) { setDash(r.data); setError(null); } else setError(errorText(r, t));
   }, [windowKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Real affiliate figures, read-only — the same /api/affiliate/me stats the main dashboard shows (no new calculation).
+  const [finance, setFinance] = useState(null);
+  useEffect(() => {
+    let on = true;
+    call("/api/affiliate/me").then((r) => { if (on && r.ok && r.data?.stats) setFinance(r.data.stats); });
+    return () => { on = false; };
+  }, []);
+
   const closed = access.status === "CLOSED";
   useEffect(() => {
     load();
@@ -700,7 +708,8 @@ function ActiveDashboard({ access, t, lang, dir, locale, money }) {
 
   return (
     <BrandDashboard access={access} dash={dash} error={error} loading={loading} windowKey={windowKey} onWindow={setWindowKey}
-      t={t} lang={lang} dir={dir} locale={locale} money={money} fmtDate={fmtDate} sinceDays={sinceDays} />
+      t={t} lang={lang} dir={dir} locale={locale} money={money} fmtDate={fmtDate} sinceDays={sinceDays}
+      finance={finance} />
   );
 }
 

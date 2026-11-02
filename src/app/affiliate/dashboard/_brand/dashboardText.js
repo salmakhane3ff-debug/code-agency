@@ -43,6 +43,9 @@ export const DASHBOARD_TEXT = {
     order_status_cancelled: "Annulation",
     kpi_inDelivery: "En cours de livraison",
     kpi_cancelled: "Annulation",
+    fin_balance: "Solde",
+    fin_profit: "Profit",
+    fin_revenue: "Total chiffre d'affaires",
   },
   ar: {
     hero_title: "أنشئ علامتك التجارية الخاصة",
@@ -80,6 +83,9 @@ export const DASHBOARD_TEXT = {
     order_status_cancelled: "ملغاة",
     kpi_inDelivery: "قيد التوصيل",
     kpi_cancelled: "ملغاة",
+    fin_balance: "الرصيد",
+    fin_profit: "الأرباح",
+    fin_revenue: "إجمالي رقم المعاملات",
   },
 };
 

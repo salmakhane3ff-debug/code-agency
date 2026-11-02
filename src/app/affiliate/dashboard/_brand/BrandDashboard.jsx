@@ -7,18 +7,20 @@
  * presents it:
  *
  *   hero (title, simulator chips, brand identity) · disclaimer / closed notice
- *   · analyses (24 h / 7 j / 30 j, four counts, chart) · latest simulated
- *   orders (tap → details) · training pack (price + selected products' images)
+ *   · the affiliate's REAL account figures (balance, profit, total revenue: the
+ *   /api/affiliate/me stats, shown as-is) · analyses (24 h / 7 j / 30 j, counts,
+ *   chart) · latest simulated orders (tap → details) · training pack (price +
+ *   selected products' images)
  *
  * Every figure comes from the APIs. Simulated orders carry no amount, so no
- * revenue, profit or gain is shown anywhere; the pack card is the price paid
- * for the training, never earnings. Stock and availability are not shown.
+ * amount is attached to any simulated order; the pack card is the price paid
+ * for the training, never earnings.
  */
 
 import { useEffect, useState } from "react";
 import {
   BarChart3, ShoppingCart, Truck, XCircle, Clock, CheckCircle, Undo2, Ban, ChevronRight, ChevronLeft,
-  Zap, GraduationCap, ShoppingBag, Package, Info, PauseCircle, X, Store, Route,
+  Zap, GraduationCap, ShoppingBag, Package, Info, PauseCircle, X, Store, Route, Wallet, Coins, TrendingUp,
 } from "lucide-react";
 import { SimulatedBadge, LineChart, STATUS_COLOR } from "@/components/brand/BrandSimStats";
 import { SIM_WINDOWS } from "@/lib/brandSimulation";
@@ -137,6 +139,31 @@ function Hero({ access, t, d, closed }) {
   );
 }
 
+/** The affiliate's real account figures, exactly as /api/affiliate/me returns them (no calculation here). */
+function Finance({ stats, d, money }) {
+  const v = (x) => (typeof x === "number" && Number.isFinite(x) ? money(x) : "—");
+  const items = [
+    { key: "balance", value: stats?.balance, label: d("fin_balance"), Icon: Wallet, icon: "bg-blue-100 text-blue-600", num: "text-blue-700" },
+    { key: "profit", value: stats?.totalCommission, label: d("fin_profit"), Icon: Coins, icon: "bg-emerald-100 text-emerald-600", num: "text-emerald-700" },
+    { key: "revenue", value: stats?.totalRevenue, label: d("fin_revenue"), Icon: TrendingUp, icon: "bg-amber-100 text-amber-600", num: "text-amber-700" },
+  ];
+  return (
+    <section className={`${CARD} p-3 sm:p-4`} data-finance>
+      <ul className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+        {items.map(({ key, value, label, Icon, icon, num }) => (
+          <li key={key} className="flex items-center gap-3 rounded-2xl border border-gray-100 bg-white p-3 min-w-0" data-fin={key}>
+            <span className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${icon}`}><Icon className="w-5 h-5" aria-hidden="true" /></span>
+            <div className="min-w-0">
+              <p className="text-[12px] font-semibold text-gray-600 leading-tight">{label}</p>
+              <p dir="ltr" className={`text-lg sm:text-xl font-black leading-tight mt-0.5 whitespace-nowrap text-start ${num}`}>{stats ? v(value) : "—"}</p>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 /** C — period pills, the four real counts and the orders chart. */
 function Analyses({ stats, windowKey, onWindow, t, d, locale, loading }) {
   const n = (v) => Number(v || 0).toLocaleString(locale);
@@ -147,6 +174,7 @@ function Analyses({ stats, windowKey, onWindow, t, d, locale, loading }) {
     { key: "noResponse", value: stats?.byStatus?.noResponse, label: t("sum_noResponse"), Icon: Clock, cls: "bg-amber-50/70", icon: "bg-amber-100 text-amber-600", num: "text-amber-700" },
     { key: "inDelivery", value: stats?.byStatus?.inDelivery, label: d("kpi_inDelivery"), Icon: Route, cls: "bg-sky-50/70", icon: "bg-sky-100 text-sky-600", num: "text-sky-700" },
     { key: "cancelled", value: stats?.byStatus?.cancelled, label: d("kpi_cancelled"), Icon: Ban, cls: "bg-gray-50", icon: "bg-gray-200 text-gray-600", num: "text-gray-700" },
+    { key: "confirmed", value: stats?.byStatus?.confirmed, label: t("status_confirmed"), Icon: CheckCircle, cls: "bg-blue-50/70", icon: "bg-blue-100 text-blue-600", num: "text-blue-700" },
   ];
   // Extra chart lines, from each bucket's per-status counts (same counts as the cards above).
   const series = [
@@ -285,6 +313,18 @@ function LiveOrders({ orders, closed, running, t, d, locale, dir }) {
   );
 }
 
+/** Pack card image only: an image that fails to load shows the package icon instead of a broken image. */
+function PackThumb({ src, className = "" }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setFailed(false); }, [src]);
+  return (
+    <div className={`bg-gray-50 flex items-center justify-center overflow-hidden shrink-0 ${className}`}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      {src && !failed ? <img src={src} alt="" loading="lazy" onError={() => setFailed(true)} className="w-full h-full object-cover" /> : <Package className="w-5 h-5 text-gray-300" aria-hidden="true" />}
+    </div>
+  );
+}
+
 /** F — the training pack: its price (what was paid for the training, never earnings) and the selected products' images. */
 function MyPack({ breakdown, products, t, d, money }) {
   const b = displayBreakdown(breakdown);
@@ -303,7 +343,7 @@ function MyPack({ breakdown, products, t, d, money }) {
         <ul className="grid grid-cols-3 sm:grid-cols-4 gap-2.5 mt-3" data-pack-products>
           {products.map((p) => (
             <li key={p.id} className="rounded-2xl border border-gray-100 bg-white overflow-hidden">
-              <Thumb src={p.image} className="aspect-square w-full" />
+              <PackThumb src={p.image} className="aspect-square w-full" />
               <span className="sr-only">{p.title}</span>
             </li>
           ))}
@@ -314,7 +354,7 @@ function MyPack({ breakdown, products, t, d, money }) {
   );
 }
 
-export default function BrandDashboard({ access, dash, error, loading, windowKey, onWindow, t, lang, dir, locale, money, fmtDate }) {
+export default function BrandDashboard({ access, dash, error, loading, windowKey, onWindow, t, lang, dir, locale, money, fmtDate, finance = null }) {
   const d = dashboardT(lang);
   const closed = access.status === "CLOSED";
   return (
@@ -340,6 +380,7 @@ export default function BrandDashboard({ access, dash, error, loading, windowKey
       {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
       {dash ? (
         <>
+          <Finance stats={finance} d={d} money={money} />
           <Analyses stats={dash.stats} windowKey={windowKey} onWindow={onWindow} t={t} d={d} locale={locale} loading={loading} />
           <LiveOrders orders={dash.recent} closed={closed} running={dash.running === true} t={t} d={d} locale={locale} dir={dir} />
         </>

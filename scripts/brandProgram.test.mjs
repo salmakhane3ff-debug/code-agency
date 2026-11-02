@@ -390,12 +390,14 @@ console.log("\n10. Texts and labelling");
   ok("selection capped in the UI at the package's count, Continue needs exactly that count", /cur\.length >= need \? cur/.test(tab) && /chosen\.length === need/.test(tab) && /nav\(countOk\)/.test(tab));
   ok("pending and active views show the brand name and the selected products",
     (tab.match(/<ProductList products=\{access\.products\} \/>/g) || []).length === 1 && /access\.brandName/.test(tab)
-    && /<MyPack breakdown=\{access\.package\?\.breakdown\} products=\{access\.products\}/.test(dashUi) && /access\.brandName/.test(dashUi)
-    && /data-pack-products/.test(dashUi) && /<Thumb src=\{p\.image\}/.test(dashUi) && !/function MyProducts|<MyProducts/.test(dashUi));
+    && /<MyPack breakdown=\{access\.package\?\.breakdown\} products=\{access\.products\} t=\{t\}/.test(dashUi) && /access\.brandName/.test(dashUi)
+    && /data-pack-products/.test(dashUi) && /<PackThumb src=\{p\.image\}/.test(dashUi) && !/function MyProducts|<MyProducts/.test(dashUi));
   const apiCalls = [...tab.matchAll(/["`](\/api\/[^"`?$]*)/g)].map((m) => m[1]);
-  ok("the tab only calls brand APIs (never earnings, wallet, orders or payouts) + reads the bank details",
-    apiCalls.length > 0 && apiCalls.every((u) => u.startsWith("/api/affiliate/brand") || u === "/api/setting")
+  ok("the tab only calls brand APIs + reads the bank details and the affiliate's own stats (never products, orders, payouts or wallet writes)",
+    apiCalls.length > 0 && apiCalls.every((u) => u.startsWith("/api/affiliate/brand") || ["/api/setting", "/api/affiliate/me"].includes(u))
     && [...tab.matchAll(/["`]\/api\/setting([^"`]*)["`]/g)].map((m) => m[1]).join() === "?type=bank-settings", apiCalls.join());
+  ok("the extra read is GET only: /api/affiliate/me (stats); no store products API",
+    /call\("\/api\/affiliate\/me"\)\.then/.test(tab) && !/call\("\/api\/affiliate\/me",/.test(tab) && !/\/api\/products/.test(tab));
   ok("the proof is uploaded to the BRAND proof route (never the deposit route)", /\/api\/affiliate\/brand\/access\/\$\{encodeURIComponent\(access\.id\)\}\/proof/.test(tab) && !/\/api\/affiliate\/deposits/.test(tab));
   ok("no wallet / earnings / commission code imported by the tab", !/balance|wallet|commission|payout|earning/i.test(tab.split("\n").filter((l) => l.startsWith("import")).join("\n")));
   ok("no real-profit, refund-guarantee or withdrawal promise in the brand UI", ![tab, stats, dashUi].map((src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "")).some((src) => /أرباح حقيقية|ضمان استرجاع|سحب الأرباح|withdraw|retirer vos gains|profits? r[ée]els?/i.test(src))
@@ -408,8 +410,26 @@ console.log("\n10. Texts and labelling");
   {
     const code = dashUi.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
     ok("dashboard UI calls no API (data comes from BrandTab's brand + dashboard calls)", !/fetch\(|\/api\//.test(code));
-    ok("no amount per simulated order, no revenue / profit / gain / stock / availability shown",
-      !/money\(o\.|money\(order\.|revenue|profit|chiffre|gain|stock|availab|disponib/i.test(code.replace(/hero_no_stock/g, "")));
+    ok("no amount per simulated order, no gain / stock / availability shown",
+      !/money\(o\.|money\(order\.|money\(dash|money\(stats\?\.by|gain|stock|availab|disponib/i.test(code.replace(/hero_no_stock/g, "")));
+    const fin = code.slice(code.indexOf("function Finance("), code.indexOf("function Analyses("));
+    ok("finance cards: Balance = stats.balance, Profit = stats.totalCommission, Total CA = stats.totalRevenue (shown as-is, no calculation)",
+      /key: "balance", value: stats\?\.balance,/.test(fin) && /key: "profit", value: stats\?\.totalCommission,/.test(fin) && /key: "revenue", value: stats\?\.totalRevenue,/.test(fin)
+      && !/[+*/]\s*stats|stats\?\.\w+\s*[-+*/]/.test(fin) && (fin.match(/stats\?\./g) || []).length === 3);
+    ok("finance cards sit directly above Analyses & Performances",
+      /<Finance stats=\{finance\} d=\{d\} money=\{money\} \/>\s*<Analyses /.test(code));
+    ok("revenue / profit wording only in the finance cards", !/revenue|profit|chiffre/i.test(code.replace(fin, "").replace(/finance/g, "")));
+    {
+      const thumb = code.slice(code.indexOf("function Thumb("), code.indexOf("function SectionTitle("));
+      const packThumb = code.slice(code.indexOf("function PackThumb("), code.indexOf("function MyPack("));
+      const myPack = code.slice(code.indexOf("function MyPack("), code.indexOf("export default function BrandDashboard("));
+      ok("image fallback only in the pack card: shared Thumb unchanged, PackThumb used only inside MyPack",
+        !/onError|failed/.test(thumb) && /onError=\{\(\) => setFailed\(true\)\}/.test(packThumb) && /src && !failed \?/.test(packThumb)
+        && (code.match(/<PackThumb /g) || []).length === 1 && /<PackThumb src=\{p\.image\}/.test(myPack) && (code.match(/onError/g) || []).length === 1);
+    }
+    ok("Confirmées card added; the other six cards unchanged",
+      /\{ key: "confirmed", value: stats\?\.byStatus\?\.confirmed, label: t\("status_confirmed"\)/.test(code)
+      && ["total", "delivered", "refused", "noResponse", "inDelivery", "cancelled", "confirmed"].join() === [...code.slice(code.indexOf("const kpis = ["), code.indexOf("];", code.indexOf("const kpis = ["))).matchAll(/\{ key: "(\w+)"/g)].map((m) => m[1]).join());
     ok("periods are the existing 24 h / 7 d / 30 d windows only (no all time), no 'see all orders' action",
       /Object\.entries\(SIM_WINDOWS\)/.test(code) && !/all ?time|voir toutes/i.test(code));
     ok("six real counts: orders, delivered, refused, no response, in delivery, cancelled",
@@ -467,7 +487,9 @@ console.log("\n10. Texts and labelling");
     JSON.stringify(Object.keys(DASHBOARD_TEXT.fr).sort()) === JSON.stringify(Object.keys(DASHBOARD_TEXT.ar).sort())
     && !/\d/.test(JSON.stringify(DASHBOARD_TEXT).replace(/\{\w+\}/g, ""))
     && !/"hero_sim_delivery"|"hero_safe_sim"|since_days/.test(dashUi) && !/s.occupe de la livraison/i.test(JSON.stringify(DASHBOARD_TEXT))
-    && !/profit|gain|chiffre|revenu|retir|ربح|أرباح|سحب/i.test(JSON.stringify(DASHBOARD_TEXT)));
+    && !/profit|gain|chiffre|revenu|retir|ربح|أرباح|سحب/i.test(JSON.stringify(["fr", "ar"].map((l) => Object.entries(DASHBOARD_TEXT[l]).filter(([k]) => !/^fin_/.test(k)))))
+    && DASHBOARD_TEXT.fr.fin_balance === "Solde" && DASHBOARD_TEXT.fr.fin_profit === "Profit" && DASHBOARD_TEXT.fr.fin_revenue === "Total chiffre d'affaires"
+    && !Object.keys(DASHBOARD_TEXT.fr).some((k) => /^stock_/.test(k)));
   ok("hero uses real catalogue product images (no stock imagery)", /data-hero/.test(tab) && !/https?:\/\//.test(tab.replace(/\/\*[\s\S]*?\*\//g, "")) && /pr\.image/.test(tab));
   ok("included services on the landing come from the package's configured features", /features\?\.slice\(0, 4\)/.test(tab));
   const pageSrc = read("../src/app/affiliate/dashboard/page.jsx");
