@@ -9,11 +9,12 @@ import {
   XCircle, CheckCircle, Building2, CreditCard,
   Target, Star, UserPlus, Eye, AlertTriangle, Settings, Video, Wallet,
   ShieldCheck, ShieldAlert, MessageCircle, Upload, Trash2,
-  Home, Plus, MoreHorizontal, X, Rocket, Gift,
+  Home, Plus, MoreHorizontal, X, Store, Gift,
 } from "lucide-react";
 import UgcTab from "./UgcTab";
 import DepositTab from "./DepositTab";
 import BoosterTab from "./BoosterTab";
+import BrandTab from "./BrandTab";
 import RewardsTab from "./RewardsTab";
 import LiveActivity from "@/components/LiveActivity";
 import { diffNewItems, shouldPlaySaleSound } from "@/lib/liveFeed";
@@ -225,7 +226,7 @@ function MobileBottomNav({ activeTab, setActiveTab, refLink, onLogout, unread = 
 
   const moreItems = [
     { icon: Package,     label: "الطلبات",        tab: "orders" },
-    { icon: Rocket,      label: "Booster",        tab: "booster" },
+    { icon: Store,       label: "أنشئ علامتك التجارية", tab: "brand" },
     { icon: Gift,        label: "المكافآت",       tab: "rewards" },
     { icon: Video,       label: "UGC",            tab: "ugc" },
     { icon: Users,       label: "الفريق",         tab: "team" },
@@ -1683,7 +1684,7 @@ export default function AffiliateDashboard() {
     { id: "bank",          label: "Coordonnées" },
     { id: "payout",        label: "Retraits" },
     { id: "deposit",       label: "💰 Dépôt de solde" },
-    { id: "booster",       label: "🚀 Booster" },
+    { id: "brand",         label: "🏪 Créez votre marque" },
     { id: "rewards",       label: "🎁 Récompenses" },
     { id: "ugc",           label: "💰 Video UGC" },
     { id: "notifications", label: `Notifs ${unread > 0 ? `(${unread})` : ""}` },
@@ -2956,7 +2957,11 @@ export default function AffiliateDashboard() {
           <DepositTab token={token} onChanged={() => fetchAll(token, { silent: true })} />
         )}
 
+        {/* No menu entry any more ("Create Your Own Brand" took its place): still
+            opened from the overview widget so existing boosters stay visible. */}
         {activeTab === "booster" && <BoosterTab onRecharge={goToDeposit} />}
+
+        {activeTab === "brand" && <BrandTab />}
 
         {activeTab === "rewards" && <RewardsTab />}
 

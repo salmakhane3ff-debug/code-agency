@@ -14,6 +14,7 @@ import {
 } from '../services/settingsService.js';
 import { badRequest, serverError } from '../utils/apiResponse.js';
 import { REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID } from '../rewards.js';
+import { BRAND_SETTING_ID, BRAND_TERMS_SETTING_ID } from '../brandProgram.js';
 
 /**
  * Settings rows that have their own service and must never be written raw:
@@ -21,8 +22,11 @@ import { REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID } from '../rewards.js';
  * which runs the launch baseline under a table lock, manages the launch
  * timestamps and writes the audit log. A raw write would bypass all three.
  * 'rewards-reconcile-state' holds reconcile's resume cursors (system-managed).
+ * 'brand-program-config' is saved only through brandProgramService.saveBrandConfig
+ * (strict validation, audit log); 'brand-refund-terms' only through the draft /
+ * publish actions, so published terms always come from an admin approval.
  */
-const RESERVED_SETTING_TYPES = new Set([REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID]);
+const RESERVED_SETTING_TYPES = new Set([REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID, BRAND_SETTING_ID, BRAND_TERMS_SETTING_ID]);
 
 // ── Generic settings (/api/setting) ──────────────────────────────────────────
 
