@@ -119,6 +119,9 @@ export function publicAccess(row, info = null) {
     package: {
       id: row.packageId, name: pkg.name || '', features: Array.isArray(pkg.features) ? pkg.features : [],
       productCount: pkg.productCount ?? null, breakdown: pkg.breakdown || null,
+      // Snapshot only (requests made before these fields existed → null, shown as "—").
+      quantity: Number.isInteger(pkg.quantity) && pkg.quantity > 0 ? pkg.quantity : null,
+      simulatedSellingPrice: typeof pkg.simulatedSellingPrice === 'number' && pkg.simulatedSellingPrice > 0 ? pkg.simulatedSellingPrice : null,
     },
     branding: row.brandingSnapshot ? { label: row.brandingSnapshot.label || '' } : null,
     products: Array.isArray(row.selectedProducts)
@@ -247,6 +250,8 @@ export async function requestBrandAccess(affiliateId, input = {}, { db = prisma,
       id: pkg.id, name: pkg.name, description: pkg.description, features: pkg.features, productCount: pkg.productCount,
       price: pkg.price, deliveryCost: pkg.deliveryCost, logisticsCost: pkg.logisticsCost, vatPercent: pkg.vatPercent,
       percentages: pkg.percentages, breakdown,
+      // Frozen with the request: a later pack edit never changes this brand's training data.
+      quantity: pkg.quantity ?? null, simulatedSellingPrice: pkg.simulatedSellingPrice ?? null,
     },
     brandingOptionId: branding ? branding.id : null,
     brandingSnapshot: branding ? { id: branding.id, label: branding.label, description: branding.description } : undefined,

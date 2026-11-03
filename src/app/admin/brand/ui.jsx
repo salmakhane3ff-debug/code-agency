@@ -29,6 +29,7 @@ export const ERROR_TEXT = {
   TOO_MANY_PRODUCTS: "Trop de produits dans le catalogue",
   INVALID_AMOUNT: "Montant invalide (0 ou plus, 2 décimales)",
   INVALID_PRODUCT_COUNT: "Le nombre de produits doit être 3 ou 4",
+  INVALID_QUANTITY: "Nombre de pièces invalide (entier, 1 ou plus)",
   INVALID_BASE: "Base de calcul invalide",
   PERCENT_SUM_OVER_100: "Les pourcentages appliqués à une même base ne peuvent pas dépasser 100 %",
   REQUIRED_WHEN_ACTIVE: "Requis pour activer le pack",

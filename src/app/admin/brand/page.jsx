@@ -81,7 +81,9 @@ export default function AdminBrandPage() {
   };
 
   return (
-    <div className="py-6 max-w-5xl space-y-5">
+    // contain:inline-size — this page's width comes from the admin layout, never from its widest content, so a
+    // narrow phone never gets a horizontal page scroll (the shared layout's flex column has no min-w-0).
+    <div className="py-6 max-w-5xl space-y-5 [contain:inline-size]">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <Store className="w-6 h-6 text-violet-600" />
@@ -105,9 +107,10 @@ export default function AdminBrandPage() {
       )}
       {dirty && !notice && <p className="text-xs text-amber-700">Configuration modifiée — non enregistrée.</p>}
 
-      <div className="flex gap-1.5 overflow-x-auto pb-1">
+      {/* Wraps on narrow screens (every tab stays visible); one row on desktop as before. */}
+      <div className="flex flex-wrap gap-1.5 pb-1" role="tablist" aria-label="Sections">
         {TABS.map((t) => (
-          <button key={t.id} onClick={() => setTab(t.id)}
+          <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}
             className={`relative whitespace-nowrap px-4 py-2 rounded-xl text-xs font-semibold transition-colors ${tab === t.id ? "bg-gray-900 text-white" : "bg-white border border-gray-200 text-gray-600 hover:border-gray-400"}`}>
             {t.label}
             {errorTabs[t.id] && <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500" />}

@@ -26,6 +26,7 @@ export const BRAND_TERMS_SETTING_ID = 'brand-refund-terms';
 export const BRAND_LIMITS = Object.freeze({
   MAX_PACKAGES:                 30,
   MAX_PRICE:                    10_000_000,
+  MAX_PACK_QUANTITY:            1_000_000,
   MAX_FEATURES:                 20,
   FEATURE_MAX:                  160,
   MAX_BRANDING_OPTIONS:         50,
@@ -50,6 +51,14 @@ export const BRAND_LIMITS = Object.freeze({
 export const SIM_OUTCOMES = Object.freeze(['delivered', 'refused', 'returned', 'noResponse', 'cancelled']);
 /** Every status a simulated order can display (pending, confirmed and inDelivery are intermediate). */
 export const SIM_STATUSES = Object.freeze(['pending', 'confirmed', 'inDelivery', ...SIM_OUTCOMES]);
+
+/**
+ * Fixed SIMULATED operational expenses of one training order (MAD). Training
+ * figures only: they are never charged, credited or recorded anywhere.
+ */
+export const SIM_ORDER_EXPENSES = Object.freeze({ delivery: 15, notification: 20, confirmation: 30 });
+/** Statuses whose simulated profit is not realized yet (shown as "expected", never totalled). */
+export const SIM_OPEN_STATUSES = Object.freeze(['pending', 'confirmed', 'inDelivery']);
 
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
 const REQUEST_ID_RE = /^[A-Za-z0-9_-]{8,100}$/;
@@ -166,6 +175,12 @@ function normalizePackage(src) {
   if (Number.isNaN(vatPercent)) errors.vatPercent = 'INVALID_PERCENT';
   const productCount = optionalInt(p.productCount, L.MIN_SELECTED_PRODUCTS, L.MAX_SELECTED_PRODUCTS);
   if (Number.isNaN(productCount)) errors.productCount = 'INVALID_PRODUCT_COUNT';
+  // Physical pieces in the pack (≠ productCount, the number of products chosen) — optional.
+  const quantity = optionalInt(p.quantity, 1, L.MAX_PACK_QUANTITY);
+  if (Number.isNaN(quantity)) errors.quantity = 'INVALID_QUANTITY';
+  // Simulated selling price of one training order (MAD, > 0) — optional; drives the simulated figures only.
+  const simulatedSellingPrice = optionalAmount(p.simulatedSellingPrice, 0.01, L.MAX_PRICE);
+  if (Number.isNaN(simulatedSellingPrice)) errors.simulatedSellingPrice = 'INVALID_PRICE';
   const list = productIdList(p.productIds, L.MAX_CATALOG_PRODUCTS);
   if (list.bad) errors.productIds = 'INVALID_PRODUCT_ID';
   if (list.tooMany) errors.productIds = 'TOO_MANY_PRODUCTS';
@@ -190,6 +205,8 @@ function normalizePackage(src) {
     active: toBool(p.active),
     sortOrder: Number.isNaN(sortOrder) || sortOrder === null ? 0 : sortOrder,
     productCount: Number.isNaN(productCount) ? null : productCount,
+    quantity: Number.isNaN(quantity) ? null : quantity,
+    simulatedSellingPrice: Number.isNaN(simulatedSellingPrice) ? null : simulatedSellingPrice,
     productIds: list.ids,
     deliveryCost,
     logisticsCost,
@@ -378,10 +395,27 @@ export function isOfferedPackage(pkg, catalog) {
   return isPublishablePackage(pkg) && packageProducts(pkg, catalog).length >= pkg.productCount;
 }
 
+/**
+ * Why a pack's simulated selling price cannot drive the simulator: 'MISSING' (empty / absent),
+ * 'INVALID' (not a finite number, or above MAX_PRICE) or 'NOT_POSITIVE' (below 0.01 MAD, i.e. zero
+ * or negative once rounded to cents); null when it is valid — exactly the rule normalizePackage
+ * applies on save. Nothing is ever substituted for it (not the pack price, not a product price).
+ */
+export function simulatedSellingPriceIssue(value) {
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) return 'MISSING';
+  const n = toNum(value);
+  if (!Number.isFinite(n) || n > BRAND_LIMITS.MAX_PRICE) return 'INVALID';
+  if (n < 0.01) return 'NOT_POSITIVE';
+  return null;
+}
+
 /** What an affiliate sees (and what a request snapshots) of an offered package. */
 export function publicPackage(pkg, catalog) {
   const { id, name, description, price, features, productCount } = pkg;
-  return { id, name, description, price, features, productCount, products: packageProducts(pkg, catalog), breakdown: packageBreakdown(pkg) };
+  // Physical pieces and the simulated selling price (training only) — shown on the pack cards; null when not configured.
+  const quantity = Number.isInteger(pkg.quantity) && pkg.quantity > 0 ? pkg.quantity : null;
+  const simulatedSellingPrice = typeof pkg.simulatedSellingPrice === 'number' && pkg.simulatedSellingPrice > 0 ? pkg.simulatedSellingPrice : null;
+  return { id, name, description, price, features, productCount, quantity, simulatedSellingPrice, products: packageProducts(pkg, catalog), breakdown: packageBreakdown(pkg) };
 }
 
 /**

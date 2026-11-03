@@ -38,6 +38,8 @@ const STATUS = {
   INVALID_BRAND_NAME:         400,
   INVALID_PRODUCT_SELECTION:  400,
   INVALID_WINDOW:             400,
+  INVALID_AS_OF:              400,
+  LIST_CHANGED:               409,
   INVALID_ACTION:             400,
   TERMS_NOT_ACCEPTED:         400,
   PAYMENT_REFERENCE_REQUIRED: 400,
@@ -104,6 +106,38 @@ export const actorIdOf = (user) => user?.userId || user?.email || null;
 
 const param = async (ctx, name) => (await ctx?.params)?.[name];
 const windowOf = (req) => new URL(req.url).searchParams.get('window') || '24h';
+/**
+ * "See all" frozen instant: the `orders.asOf` of an earlier dashboard response (ISO UTC, ms precision).
+ * Absent → now. Must not be in the future and at most SIM_AS_OF_MAX_AGE_MS old; anything else → 400.
+ * It only fixes WHEN the list is computed: WHICH brand is always the caller's own (from the token).
+ */
+export const SIM_AS_OF_MAX_AGE_MS = 24 * 3_600_000;
+const AS_OF_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+export function asOfOf(req, nowDate) {
+  const raw = new URL(req.url).searchParams.get('asOf');
+  if (raw === null || raw === '') return nowDate;
+  const t = AS_OF_RE.test(raw) ? Date.parse(raw) : NaN;
+  const n = nowDate.getTime();
+  if (!Number.isFinite(t) || t > n || t < n - SIM_AS_OF_MAX_AGE_MS) {
+    throw Object.assign(new Error('Instant de référence invalide.'), { code: 'INVALID_AS_OF' });
+  }
+  return new Date(t);
+}
+/**
+ * "See all" list identity: the `orders.listId` of the response that opened the list. When present, the
+ * page is served only if the list recomputed at the same asOf is IDENTICAL (same orders, statuses, money,
+ * window, price); otherwise 409 LIST_CHANGED (e.g. the brand was closed / reopened or the simulation
+ * disabled meanwhile) — never a page from a different list.
+ */
+const LIST_ID_RE = /^[0-9a-f]{16}$/;
+export function expectedListOf(req) {
+  const raw = new URL(req.url).searchParams.get('list');
+  if (raw === null || raw === '') return null;
+  if (!LIST_ID_RE.test(raw)) throw Object.assign(new Error('La liste a changé.'), { code: 'LIST_CHANGED' });
+  return raw;
+}
+/** "See all" page of the simulated order list (1-based; anything else → 1). */
+const pageOf = (req) => { const n = Number(new URL(req.url).searchParams.get('page')); return Number.isInteger(n) && n > 0 ? Math.min(n, 100_000) : 1; };
 
 /** Proof upload: the file (8 MiB) plus a 64 KiB allowance for multipart framing and the text fields. */
 export const PROOF_BODY_LIMIT = DEPOSIT_MAX_BYTES + 64 * 1024; // 8,454,144 bytes
@@ -290,7 +324,11 @@ export function affiliateBrandHandlers(deps = {}) {
     }),
     dashboard: safe(async (req, _ctx, decoded) => {
       const me = await activeMe(decoded);
-      return json(await getAffiliateSimulationDashboard(me, { db, now: now(), window: windowOf(req) }));
+      const expected = expectedListOf(req);
+      const clock = now();
+      const dash = await getAffiliateSimulationDashboard(me, { db, now: asOfOf(req, clock), clock, window: windowOf(req), page: pageOf(req) });
+      if (expected !== null && dash.orders.listId !== expected) throw Object.assign(new Error('La liste a changé.'), { code: 'LIST_CHANGED' });
+      return json(dash);
     }),
   };
 }

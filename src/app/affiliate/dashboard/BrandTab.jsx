@@ -36,7 +36,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Loader2, Store, CheckCircle, Clock, Info, XCircle, GraduationCap, Package, ChevronDown,
-  ArrowLeft, ArrowRight, Crown, Check,
+  ArrowLeft, ArrowRight, Crown, Check, Boxes,
 } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
 import { brandT, brandDir } from "@/lib/brandI18n";
@@ -86,10 +86,13 @@ const errorText = (r, t) => (r.status === 0 ? t("error_network") : (r.data?.code
  * all configured for next/image.
  */
 function Thumb({ src, iconCls, rounded = "" }) {
+  // A missing or failing image shows the package icon (never a broken image).
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setFailed(false); }, [src]);
   return (
     <div className={`aspect-square bg-gray-50 flex items-center justify-center overflow-hidden ${rounded}`}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      {src ? <img src={src} alt="" loading="lazy" className="w-full h-full object-cover" /> : <Package className={`${iconCls} text-gray-300`} aria-hidden="true" />}
+      {src && !failed ? <img src={src} alt="" loading="lazy" onError={() => setFailed(true)} className="w-full h-full object-cover" /> : <Package className={`${iconCls} text-gray-300`} aria-hidden="true" />}
     </div>
   );
 }
@@ -173,49 +176,133 @@ function WhatYouBuy({ t }) {
   );
 }
 
-/** Landing header + hero (real catalogue images of the offered packages) + included services. */
-function Landing({ t, packages, pkg }) {
-  const images = [];
-  for (const p of [pkg, ...packages].filter(Boolean)) for (const pr of p.products || []) if (pr.image && !images.includes(pr.image) && images.length < 3) images.push(pr.image);
-  const services = (pkg || packages[0])?.features?.slice(0, 4) || [];
+/** A pack image (first catalogue image of the pack); a missing or failing image shows the package icon. */
+function PackImage({ src, className = "" }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setFailed(false); }, [src]);
   return (
-    <div className="space-y-4">
-      <div className="text-center px-2">
-        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-violet-50 text-violet-700 text-[11px] font-bold"><GraduationCap className="w-3 h-3" aria-hidden="true" />{t("training_badge")}</span>
-        <h2 className="text-2xl sm:text-3xl font-black text-violet-950 leading-tight mt-2">{t("title")}</h2>
-        <p className="text-xl sm:text-2xl font-black text-violet-600 leading-tight" dir="ltr">{t("title_en")}</p>
-        <p className="text-sm font-semibold text-gray-800 mt-2">{t("landing_tagline")}</p>
-        <p className="text-xs text-gray-500 mt-1 leading-relaxed max-w-md mx-auto">{t("landing_intro")}</p>
-      </div>
+    <div className={`flex items-center justify-center overflow-hidden ${className}`}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      {src && !failed ? <img src={src} alt="" loading="lazy" onError={() => setFailed(true)} className="max-w-full max-h-full object-contain" />
+        : <Package className="w-10 h-10 text-violet-300" aria-hidden="true" />}
+    </div>
+  );
+}
 
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-fuchsia-300 via-pink-200 to-violet-400 h-44 sm:h-52" data-hero>
-        <div className="absolute -bottom-10 -start-6 w-40 h-40 rounded-full bg-white/30 blur-2xl" />
-        <div className="relative h-full flex items-center justify-between gap-3 p-5">
-          <div className="min-w-0">
-            <p className="text-xl sm:text-2xl font-black text-violet-950">{t("hero_label")}</p>
-            <p className="text-xs sm:text-sm font-semibold text-violet-900/80 mt-1 max-w-[11rem]">{t("hero_sub")}</p>
-          </div>
-          <div className="relative w-36 sm:w-44 h-full shrink-0" aria-hidden="true">
-            {images.length ? images.map((src, i) => (
-              <div key={src} className="absolute w-20 sm:w-24 rounded-2xl overflow-hidden shadow-lg ring-2 ring-white bg-white"
-                style={{ insetInlineEnd: `${i * 26}px`, top: `${10 + i * 18}px`, zIndex: 3 - i, transform: `rotate(${(i - 1) * 6}deg)` }}>
-                <Thumb src={src} iconCls="w-6 h-6" />
-              </div>
-            )) : <div className="absolute inset-0 flex items-center justify-center"><Store className="w-16 h-16 text-white/80" /></div>}
-          </div>
+/** Landing hero: purple gradient, title, training badge and real catalogue images of the offered packs (nothing invented). */
+function Landing({ t, packages }) {
+  const images = [];
+  for (const p of packages) for (const pr of p.products || []) if (pr.image && !images.includes(pr.image) && images.length < 3) images.push(pr.image);
+  return (
+    <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-violet-700 via-violet-600 to-fuchsia-500 text-white p-5 sm:p-6 shadow-lg shadow-violet-200" data-hero>
+      <div aria-hidden="true" className="absolute -top-10 -end-10 w-40 h-40 rounded-full bg-white/10" />
+      <div aria-hidden="true" className="absolute -bottom-12 end-24 w-28 h-28 rounded-full bg-fuchsia-300/20" />
+      <div className="relative flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white/15 text-white text-[11px] font-bold"><GraduationCap className="w-3 h-3" aria-hidden="true" />{t("training_badge")}</span>
+          <h2 className="text-2xl sm:text-3xl font-black leading-tight mt-2">{t("title")}</h2>
+          <p className="text-lg sm:text-xl font-black text-violet-100 leading-tight" dir="ltr">{t("title_en")}</p>
+          <p className="text-[13px] sm:text-sm text-violet-50/90 mt-2 leading-snug">{t("landing_intro")}</p>
+        </div>
+        <div className="relative w-24 sm:w-36 h-28 sm:h-36 shrink-0" aria-hidden="true">
+          {images.length ? images.map((src, i) => (
+            <div key={src} className="absolute w-16 sm:w-24 rounded-2xl overflow-hidden shadow-lg ring-2 ring-white bg-white"
+              style={{ insetInlineEnd: `${i * 14}px`, top: `${i * 16}px`, zIndex: 3 - i, transform: `rotate(${(i - 1) * 6}deg)` }}>
+              <Thumb src={src} iconCls="w-6 h-6" />
+            </div>
+          )) : <div className="absolute inset-0 flex items-center justify-center"><Store className="w-14 h-14 text-white/80" /></div>}
         </div>
       </div>
+    </section>
+  );
+}
 
-      {services.length > 0 && (
-        <ul className="grid grid-cols-2 sm:grid-cols-4 gap-2" data-services>
-          {services.map((f) => (
-            <li key={f} className={`${CARD} px-2 py-3 text-center`}>
-              <span className="mx-auto mb-1.5 w-9 h-9 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center"><CheckCircle className="w-5 h-5" aria-hidden="true" /></span>
-              <p dir="auto" className="text-[11px] font-semibold text-gray-700 leading-snug line-clamp-2">{f}</p>
+/**
+ * One pack in the comparison: image, name, product count, physical pieces (when
+ * configured), price, availability, main features. Its full details open in a
+ * sheet (PackDetailsSheet), so a card never changes size and never affects the
+ * others. Every value is the admin's configuration of THIS pack.
+ */
+function PackCard({ p, on, single, onSelect, onDetails, t, money }) {
+  const img = (p.products || []).find((x) => x.image)?.image || null;
+  return (
+    <div data-package-id={p.id} data-selected={on ? "true" : "false"}
+      className={`relative snap-start shrink-0 flex flex-col rounded-3xl border-2 bg-white p-3.5 transition-colors ${single ? "w-full" : "w-[80%] max-w-[300px] sm:w-auto sm:max-w-none"} ${on ? "border-violet-600 shadow-lg shadow-violet-100" : "border-gray-100 shadow-sm"}`}>
+      {on && <span className="absolute -top-3 end-3 w-8 h-8 rounded-full bg-violet-600 text-white flex items-center justify-center ring-4 ring-white" aria-hidden="true" data-check><Check className="w-4 h-4" /></span>}
+      <button type="button" role="radio" aria-checked={on} onClick={() => onSelect(p.id)}
+        className="text-center rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400">
+        <PackImage src={img} className="h-28 sm:h-32 rounded-2xl bg-gradient-to-b from-violet-50 to-white p-2" />
+        <p dir="auto" className="text-lg font-black text-gray-900 mt-2 leading-tight">{p.name}</p>
+        <p className="text-xs font-bold text-amber-700 mt-1">{t("package_products", { n: p.productCount })}</p>
+        {p.quantity ? <p className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 mt-0.5" data-pack-quantity><Boxes className="w-3.5 h-3.5" aria-hidden="true" />{t("pack_pieces", { n: p.quantity })}</p> : null}
+        <p className="mt-2 rounded-2xl bg-violet-50 py-1.5 text-2xl font-black text-violet-700" dir="ltr" data-pack-price>{money(p.price)}</p>
+        <p className="text-[11px] text-gray-500 mt-1">{t("total_payable_short")} : <span className="font-bold text-violet-700">{money(p.breakdown.total)}</span></p>
+        <span className="inline-flex items-center gap-1 mt-2 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-bold">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden="true" />{t("pack_available")}
+        </span>
+      </button>
+      {p.description && <p dir="auto" className="text-xs text-gray-600 mt-2 line-clamp-2">{p.description}</p>}
+      {p.features?.length > 0 && (
+        <ul className="space-y-1.5 mt-2 rounded-2xl bg-gray-50/80 p-2.5" aria-label={t("features_title")}>
+          {p.features.slice(0, 3).map((f) => (
+            <li key={f} dir="auto" className="flex items-start gap-2 text-xs text-gray-700">
+              <span className="w-4 h-4 mt-px rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0" aria-hidden="true"><Check className="w-2.5 h-2.5" /></span>{f}
             </li>
           ))}
         </ul>
       )}
+      <button type="button" onClick={() => onDetails(p.id)} aria-haspopup="dialog" data-pack-details-toggle
+        className="w-full inline-flex items-center justify-center gap-1 text-xs font-semibold text-violet-700 py-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 rounded-lg">
+        {t("package_details_show")}<ChevronDown className="w-4 h-4" aria-hidden="true" />
+      </button>
+      <button type="button" onClick={() => onSelect(p.id)} aria-pressed={on} data-pack-select
+        className={`mt-1 w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-2xl text-sm font-black focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 ${on ? "bg-violet-600 text-white" : "border-2 border-violet-600 text-violet-700 bg-white"}`}>
+        {on ? <><Check className="w-4 h-4" aria-hidden="true" />{t("pack_selected")}</> : t("pack_select")}
+      </button>
+    </div>
+  );
+}
+
+/** Full details of one pack (breakdown, pieces, simulated selling price, included products, all features) in a sheet; select from here too. */
+function PackDetailsSheet({ p, on, onSelect, onClose, t, money }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-gray-900/40" onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-labelledby="brand-pack-title" onClick={(e) => e.stopPropagation()} data-pack-details={p.id}
+        className="w-full sm:max-w-lg max-h-[88vh] bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col">
+        <div className="flex items-center justify-between gap-2 px-5 py-4 border-b border-gray-100">
+          <div className="min-w-0">
+            <h4 id="brand-pack-title" dir="auto" className="text-base font-black text-gray-900 truncate">{p.name}</h4>
+            <p className="text-xs font-bold text-violet-700" dir="ltr">{money(p.price)}</p>
+          </div>
+          <button type="button" onClick={onClose} autoFocus aria-label={t("pack_details_close")} data-pack-details-close
+            className="w-9 h-9 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"><XCircle className="w-5 h-5" aria-hidden="true" /></button>
+        </div>
+        <div className="overflow-y-auto px-5 py-4 space-y-3">
+          {p.description && <p dir="auto" className="text-sm text-gray-600 whitespace-pre-line">{p.description}</p>}
+          <Breakdown b={p.breakdown} t={t} money={money} />
+          <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-xs rounded-2xl border border-gray-100 p-2.5">
+            <dt className="text-gray-500">{t("pack_pieces_label")}</dt><dd className="font-bold text-gray-900 text-end">{p.quantity ?? "—"}</dd>
+            <dt className="text-gray-500">{t("pack_sim_price")}</dt><dd className="font-bold text-gray-900 text-end" dir="ltr">{p.simulatedSellingPrice ? money(p.simulatedSellingPrice) : "—"}</dd>
+          </dl>
+          {p.products?.length > 0 && (
+            <div><p className="text-xs font-black text-gray-900 mb-1.5">{t("pack_included_products")}</p><ProductList products={p.products} /></div>
+          )}
+          {p.features?.length > 0 && (
+            <ul className="space-y-1" aria-label={t("features_title")}>{p.features.map((f) => <li key={f} dir="auto" className="text-xs text-gray-700">• {f}</li>)}</ul>
+          )}
+        </div>
+        <div className="px-5 py-3 border-t border-gray-100 pb-[calc(12px+env(safe-area-inset-bottom))]">
+          <button type="button" onClick={() => { onSelect(p.id); onClose(); }} data-pack-details-select
+            className={`w-full inline-flex items-center justify-center gap-1.5 py-3 rounded-2xl text-sm font-black focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 ${on ? "bg-violet-600 text-white" : "border-2 border-violet-600 text-violet-700 bg-white"}`}>
+            {on ? <><Check className="w-4 h-4" aria-hidden="true" />{t("pack_selected")}</> : t("pack_select")}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -243,8 +330,9 @@ function Progress({ step, t }) {
 function Offer({ data, t, money, dir, onRequested, onStale }) {
   const packages = data.packages || [];
   const [step, setStep] = useState(0);
-  const [packageId, setPackageId] = useState(packages[0]?.id || null);
-  const [openDetails, setOpenDetails] = useState(packages[0]?.id || null);
+  // Nothing is pre-selected: the affiliate compares the packs and picks one.
+  const [packageId, setPackageId] = useState(null);
+  const [openDetails, setOpenDetails] = useState(null);
   const [selected, setSelected] = useState([]);
   const [brandName, setBrandName] = useState("");
   const [brandingOptionId, setBrandingOptionId] = useState("");
@@ -261,8 +349,7 @@ function Offer({ data, t, money, dir, onRequested, onStale }) {
 
   // After a reload (PRODUCT_NOT_AVAILABLE / PACKAGE_NOT_FOUND / TERMS_CHANGED): drop a vanished package or product.
   useEffect(() => {
-    if (packageId && !packages.some((p) => p.id === packageId)) { setPackageId(packages[0]?.id || null); setSelected([]); setStep(0); return; }
-    if (!packageId && packages[0]) setPackageId(packages[0].id);
+    if (packageId && !packages.some((p) => p.id === packageId)) { setPackageId(null); setSelected([]); setStep(0); return; }
     const ids = new Set(pkgProducts.map((p) => p.id));
     setSelected((cur) => cur.filter((id) => ids.has(id)));
   }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -271,8 +358,8 @@ function Offer({ data, t, money, dir, onRequested, onStale }) {
   // Each step starts at the top of the tab (phones).
   useEffect(() => { if (step > 0 && typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" }); }, [step]);
 
-  const pickPackage = (id) => { if (id !== packageId) { setPackageId(id); setSelected([]); } setOpenDetails(id); };
-  const choosePackage = (id) => { pickPackage(id); setStep(1); };
+  const pickPackage = (id) => { if (id !== packageId) { setPackageId(id); setSelected([]); } };
+  const detailsPack = packages.find((p) => p.id === openDetails) || null;
   const chosen = selected.map((id) => pkgProducts.find((p) => p.id === id)).filter(Boolean);
   const option = data.brandingOptions?.find((o) => o.id === brandingOptionId) || null;
   const terms = data.terms;
@@ -317,51 +404,30 @@ function Offer({ data, t, money, dir, onRequested, onStale }) {
   if (step === 0) {
     return (
       <div className="space-y-5">
-        <Landing t={t} packages={packages} pkg={pkg} />
+        <Landing t={t} packages={packages} />
         <WhatYouBuy t={t} />
 
-        <section className="space-y-3">
-          <h3 className="text-lg font-black text-gray-900">{t("package_title")}</h3>
+        <section className="space-y-3" data-packs>
+          <div>
+            <h3 className="text-xl font-black text-violet-950">{t("package_title")}</h3>
+            <p className="text-xs text-gray-500 mt-0.5">{t("pack_compare_sub")}</p>
+          </div>
           {packages.length ? (
-            <div className="grid gap-4 lg:grid-cols-2" role="radiogroup" aria-label={t("package_title")}>
-              {packages.map((p) => {
-                const on = p.id === packageId;
-                const open = openDetails === p.id;
-                return (
-                  <div key={p.id} data-package-id={p.id} className={`rounded-2xl border-2 bg-white p-4 space-y-3 transition-colors ${on ? "border-violet-500 shadow-md shadow-violet-100" : "border-gray-100 shadow-sm"}`}>
-                    <button type="button" role="radio" aria-checked={on} onClick={() => pickPackage(p.id)}
-                      className="w-full flex items-start justify-between gap-3 text-start focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 rounded-xl">
-                      <div className="min-w-0">
-                        <span className="inline-flex px-2 py-0.5 rounded-lg bg-violet-600 text-white text-[11px] font-bold">{t("package_products", { n: p.productCount })}</span>
-                        <p dir="auto" className="text-lg font-black text-violet-950 mt-2">{p.name}</p>
-                        <p className="text-2xl font-black text-violet-950 mt-0.5">{money(p.price)}</p>
-                        <p className="text-xs text-gray-500">{t("total_payable_short")} : <span className="font-bold text-violet-700">{money(p.breakdown.total)}</span></p>
-                      </div>
-                      <span className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${on ? "bg-violet-600 text-white" : "border-2 border-gray-200 text-transparent"}`} aria-hidden="true"><Check className="w-4 h-4" /></span>
-                    </button>
-                    {p.description && <p dir="auto" className="text-sm text-gray-600 whitespace-pre-line">{p.description}</p>}
-                    {p.features?.length > 0 && (
-                      <ul className="space-y-1.5" aria-label={t("features_title")}>
-                        {p.features.map((f) => (
-                          <li key={f} dir="auto" className="flex items-start gap-2 text-sm text-gray-700">
-                            <span className="w-4 h-4 mt-0.5 rounded-full bg-violet-600 text-white flex items-center justify-center shrink-0" aria-hidden="true"><Check className="w-2.5 h-2.5" /></span>{f}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    <button type="button" onClick={() => setOpenDetails(open ? null : p.id)} aria-expanded={open}
-                      className="w-full inline-flex items-center justify-center gap-1 text-sm font-semibold text-violet-700 py-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 rounded-lg">
-                      {open ? t("package_details_hide") : t("package_details_show")}<ChevronDown className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" />
-                    </button>
-                    {open && <Breakdown b={p.breakdown} t={t} money={money} />}
-                    <button type="button" onClick={() => choosePackage(p.id)} className={`w-full ${BTN_PRIMARY}`}>
-                      {on ? t("start_now") : t("package_choose")}<Fwd className="w-4 h-4" aria-hidden="true" />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          ) : <p className={`${CARD} text-sm text-gray-500 p-6 text-center`}>{t("no_packages")}</p>}
+            <>
+              <div role="radiogroup" aria-label={t("package_title")}
+                className={packages.length === 1 ? "pt-3" : "-mx-4 px-4 pt-3 pb-2 flex items-start gap-3 overflow-x-auto snap-x snap-mandatory sm:mx-0 sm:px-0 sm:grid sm:grid-cols-2 lg:grid-cols-3 sm:items-start sm:overflow-visible"}>
+                {packages.map((p) => (
+                  <PackCard key={p.id} p={p} on={p.id === packageId} single={packages.length === 1}
+                    onSelect={pickPackage} onDetails={setOpenDetails} t={t} money={money} />
+                ))}
+              </div>
+              {detailsPack && <PackDetailsSheet p={detailsPack} on={detailsPack.id === packageId} onSelect={pickPackage} onClose={() => setOpenDetails(null)} t={t} money={money} />}
+              <button type="button" onClick={() => { setError(null); setStep(1); }} disabled={!pkg} data-start
+                className={`w-full ${BTN_PRIMARY} py-4 text-base`}>
+                {pkg ? t("start_with_pack") : t("select_pack_first")}<Fwd className="w-5 h-5" aria-hidden="true" />
+              </button>
+            </>
+          ) : <p className={`${CARD} text-sm text-gray-500 p-6 text-center`} data-no-packs>{t("no_packages")}</p>}
         </section>
 
         <div className={`${CARD} p-4 sm:p-5`}>
@@ -690,13 +756,13 @@ function ActiveDashboard({ access, t, lang, dir, locale, money }) {
     if (r.ok) { setDash(r.data); setError(null); } else setError(errorText(r, t));
   }, [windowKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Real affiliate figures, read-only — the same /api/affiliate/me stats the main dashboard shows (no new calculation).
-  const [finance, setFinance] = useState(null);
-  useEffect(() => {
-    let on = true;
-    call("/api/affiliate/me").then((r) => { if (on && r.ok && r.data?.stats) setFinance(r.data.stats); });
-    return () => { on = false; };
-  }, []);
+  // "See all": one page of the simulated orders of the period the list was opened with, frozen at its
+  // `asOf` instant (same API, same dataset). The live dashboard above keeps polling normally.
+  const loadPage = useCallback(async (page, asOf, win, listId) => {
+    const w = win || windowKey;
+    const r = await call(`/api/affiliate/brand/dashboard?window=${w}&page=${page}${asOf ? `&asOf=${encodeURIComponent(asOf)}` : ""}${listId ? `&list=${listId}` : ""}`);
+    return r.ok ? r.data?.orders || null : null;
+  }, [windowKey]);
 
   const closed = access.status === "CLOSED";
   useEffect(() => {
@@ -708,8 +774,7 @@ function ActiveDashboard({ access, t, lang, dir, locale, money }) {
 
   return (
     <BrandDashboard access={access} dash={dash} error={error} loading={loading} windowKey={windowKey} onWindow={setWindowKey}
-      t={t} lang={lang} dir={dir} locale={locale} money={money} fmtDate={fmtDate} sinceDays={sinceDays}
-      finance={finance} />
+      t={t} lang={lang} dir={dir} locale={locale} money={money} fmtDate={fmtDate} sinceDays={sinceDays} loadPage={loadPage} />
   );
 }
 

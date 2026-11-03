@@ -84,7 +84,18 @@ console.log("\n2. Package validation");
     && codes({ features: Array.from({ length: BRAND_LIMITS.MAX_FEATURES + 1 }, (_, i) => `f${i}`) })["packages.0.features"] === "TOO_MANY_FEATURES");
   ok("duplicate ids rejected", validateBrandConfig(cfg({ packages: [pkg(), pkg()] })).errors["packages.1.id"] === "DUPLICATE_ID");
   const keys = Object.keys(validateBrandConfig(cfg({ packages: [pkg({ inventoryQuantity: 5, guarantee: { enabled: true }, advertising: {}, tax: {} })] })).value.packages[0]).sort().join();
-  ok("no inventory, unsold-stock guarantee or unknown field survives", keys === "active,deliveryCost,description,features,id,logisticsCost,name,percentages,price,productCount,productIds,sortOrder,vatPercent", keys);
+  ok("no inventory, unsold-stock guarantee or unknown field survives (only the pack's pieces + simulated price are added)", keys === "active,deliveryCost,description,features,id,logisticsCost,name,percentages,price,productCount,productIds,quantity,simulatedSellingPrice,sortOrder,vatPercent", keys);
+  {
+    const one = (o) => validateBrandConfig(cfg({ packages: [pkg(o)] }));
+    const v = (o) => one(o).value.packages[0];
+    ok("pack quantity (pieces): optional positive integer, independent of productCount",
+      v({ quantity: 50 }).quantity === 50 && v({ quantity: "100" }).quantity === 100 && v({}).quantity === null && v({ quantity: "" }).quantity === null
+      && one({ quantity: 0 }).errors["packages.0.quantity"] === "INVALID_QUANTITY" && one({ quantity: 2.5 }).errors["packages.0.quantity"] === "INVALID_QUANTITY"
+      && v({ quantity: 50 }).productCount === v({}).productCount);
+    ok("simulated selling price: optional, positive, may be below 65 MAD",
+      v({ simulatedSellingPrice: 299 }).simulatedSellingPrice === 299 && v({ simulatedSellingPrice: "49.5" }).simulatedSellingPrice === 49.5 && v({}).simulatedSellingPrice === null
+      && one({ simulatedSellingPrice: 0 }).errors["packages.0.simulatedSellingPrice"] === "INVALID_PRICE" && one({ simulatedSellingPrice: -5 }).errors["packages.0.simulatedSellingPrice"] === "INVALID_PRICE");
+  }
   ok("branding option needs id + label", validateBrandConfig(cfg({ brandingOptions: [{ id: "opt-1", label: "" }] })).errors["brandingOptions.0.label"] === "INVALID_NAME");
   ok("enabled must be a boolean", validateBrandConfig(cfg({ enabled: "yes" })).errors.enabled === "INVALID_BOOLEAN");
 }
@@ -122,7 +133,17 @@ console.log("\n4. What an affiliate can see");
   });
   const offer = publicBrandOffer(c, CAT);
   ok("only active packages, in display order", offer.packages.map((p) => p.id).join() === "a,b");
-  ok("package = name, description, features, price, product count, products, breakdown", Object.keys(offer.packages[0]).sort().join() === "breakdown,description,features,id,name,price,productCount,products");
+  ok("package = name, description, features, price, product count, pieces, simulated price, products, breakdown",
+    Object.keys(offer.packages[0]).sort().join() === "breakdown,description,features,id,name,price,productCount,products,quantity,simulatedSellingPrice");
+  {
+    const c2 = normalizeBrandConfig(validateBrandConfig(cfg({ packages: [pkg({ id: "q1", quantity: 50, simulatedSellingPrice: 299 }), pkg({ id: "q2", sortOrder: 1 })], simulation: SIM })).value);
+    const o2 = publicBrandOffer(c2, CAT);
+    ok("each offered pack carries its OWN pieces / simulated price (null when not configured)",
+      o2.packages.find((x) => x.id === "q1").quantity === 50 && o2.packages.find((x) => x.id === "q1").simulatedSellingPrice === 299
+      && o2.packages.find((x) => x.id === "q2").quantity === null && o2.packages.find((x) => x.id === "q2").simulatedSellingPrice === null);
+    const none = publicBrandOffer(normalizeBrandConfig(validateBrandConfig(cfg({ packages: [pkg({ id: "x", active: false })], simulation: SIM })).value), CAT);
+    ok("no active pack → empty list (nothing invented)", Array.isArray(none.packages) && none.packages.length === 0);
+  }
   ok("no package offered without enough eligible products", publicBrandOffer(c, CAT.slice(0, 2)).packages.length === 0);
   ok("simulation settings and audit stamps never exposed", !("simulation" in offer) && !JSON.stringify(offer).includes("admin@x"));
   ok("inactive branding options hidden", offer.brandingOptions.map((o) => o.id).join() === "o1");
@@ -383,21 +404,61 @@ console.log("\n10. Texts and labelling");
   const at = (k) => tab.indexOf(k);
   ok("flow order: package → products → brand name → review + Buy Now", stepOrder.every((i) => i > 0) && stepOrder.every((v, i) => i === 0 || stepOrder[i - 1] < v)
     && at('t("package_title")') < at('t("products_title")') && at('t("products_title")') < at('t("brand_name")') && at('t("brand_name")') < at('t("buy_now")'));
-  ok("each package card shows its price breakdown before any choice", /<Breakdown b=\{p\.breakdown\}/.test(tab) && at("<Breakdown b={p.breakdown}") < at('t("package_choose")'));
+  {
+    const card = tab.slice(tab.indexOf("function PackCard("), tab.indexOf("function PackDetailsSheet("));
+    const screenA = tab.slice(tab.indexOf("if (step === 0) {"), tab.indexOf("// ── Screen B"));
+    ok("pack cards: every offered pack shown (no hard-coded pack), each with its own image, name, product count, pieces, price, total, availability, features",
+      /\{packages\.map\(\(p\) => \(\s*<PackCard key=\{p\.id\} p=\{p\}/.test(screenA) && ["p.name", "p.productCount", "p.quantity", "p.price", "p.breakdown.total", "p.features", "p.description", 'pack_available'].every((k) => card.includes(k))
+      && /\(p\.products \|\| \[\]\)\.find\(\(x\) => x\.image\)\?\.image/.test(card) && !/Pack (Starter|Pro|Business)|2[,.]?500|3[,.]?500|4[,.]?500/.test(tab));
+    const sheet = tab.slice(tab.indexOf("function PackDetailsSheet("), tab.indexOf("const STEPS = ["));
+    ok("details of THAT pack in a sheet (breakdown, products, pieces, simulated price; closes on ✕ / Escape); the card itself never expands",
+      /<Breakdown b=\{p\.breakdown\}/.test(sheet) && /<ProductList products=\{p\.products\} \/>/.test(sheet)
+      && /p\.simulatedSellingPrice \? money\(p\.simulatedSellingPrice\) : "—"/.test(sheet) && /p\.quantity \?\? "—"/.test(sheet) && /e\.key === "Escape"/.test(sheet)
+      && /\{detailsPack && <PackDetailsSheet p=\{detailsPack\}/.test(screenA) && !/Breakdown|data-pack-details=|\{open &&/.test(card.slice(0, card.indexOf("function PackDetailsSheet("))));
+    ok("no pack pre-selected; selecting changes the selection; selected card = purple border + check",
+      /const \[packageId, setPackageId\] = useState\(null\);/.test(tab) && !/setPackageId\(packages\[0\]/.test(tab) && /on \? "border-violet-600/.test(card) && /\{on && <span[^>]*data-check/.test(card)
+      && /aria-checked=\{on\}/.test(card));
+    ok("one start button: disabled until a pack is selected, continues with the selected pack only (server re-validates the pack id)",
+      /onClick=\{\(\) => \{ setError\(null\); setStep\(1\); \}\} disabled=\{!pkg\} data-start/.test(screenA) && /packageId: pkg\.id/.test(tab)
+      && /pkg \? t\("start_with_pack"\) : t\("select_pack_first"\)/.test(screenA) && /data-no-packs>\{t\("no_packages"\)\}/.test(screenA));
+    ok("no invented claims from the reference image (refund %, guarantee, best seller, no stock)",
+      !/استرجاع ?٪?%? ?90|90 ?%|ضمان|الأكثر طلبا|bestseller|best seller|garantie|بدون مخزون/i.test(tab + JSON.stringify(BRAND_TEXT)));
+  }
   ok("review shows the breakdown; pending shows the snapshot breakdown", /<Breakdown b=\{pkg\.breakdown\}/.test(tab) && /<Breakdown b=\{access\.package\.breakdown\}/.test(tab));
   ok("Buy Now never sends an amount", !/amount|price|total/.test(tab.slice(at("body: {"), at("clientRequestId: requestId.current"))));
   ok("Buy Now sends product ids only (no product names or prices)", /productIds: chosen\.map\(\(p\) => p\.id\)/.test(tab) && !/price: p\.|title: p\./.test(tab.slice(tab.indexOf("const buy"), tab.indexOf("const nav"))));
   ok("selection capped in the UI at the package's count, Continue needs exactly that count", /cur\.length >= need \? cur/.test(tab) && /chosen\.length === need/.test(tab) && /nav\(countOk\)/.test(tab));
   ok("pending and active views show the brand name and the selected products",
     (tab.match(/<ProductList products=\{access\.products\} \/>/g) || []).length === 1 && /access\.brandName/.test(tab)
-    && /<MyPack breakdown=\{access\.package\?\.breakdown\} products=\{access\.products\} t=\{t\}/.test(dashUi) && /access\.brandName/.test(dashUi)
-    && /data-pack-products/.test(dashUi) && /<PackThumb src=\{p\.image\}/.test(dashUi) && !/function MyProducts|<MyProducts/.test(dashUi));
+    && /<MyPack breakdown=\{access\.package\?\.breakdown\} t=\{t\}/.test(dashUi) && /access\.brandName/.test(dashUi)
+    && !/data-pack-products|PackThumb/.test(dashUi) && !/function MyProducts|<MyProducts/.test(dashUi));
+  {
+    const myPack = dashUi.slice(dashUi.indexOf("function MyPack("), dashUi.indexOf("export default function BrandDashboard("));
+    const hero = dashUi.slice(dashUi.indexOf("function Hero("), dashUi.indexOf("function SimFinance("));
+    ok("hero: selected product image (request snapshot selectedProducts[0]) opens a lightbox; none in the training pack card",
+      /<HeroImage src=\{access\.products\?\.\[0\]\?\.image \|\| null\} d=\{d\} \/>/.test(hero) && !/<img|Thumb|image/.test(myPack)
+      && /onClick=\{\(\) => setOpen\(true\)\}/.test(dashUi) && /<Lightbox src=\{src\}/.test(dashUi) && /object-contain/.test(dashUi.slice(dashUi.indexOf("function Lightbox("), dashUi.indexOf("function HeroImage(")))
+      && /if \(!src \|\| failed\)/.test(dashUi)
+      // Escape: the lightbox registers with the shared overlay stack (Escape closes the TOPMOST overlay only)
+      && /^  useOverlay\(onClose\);$/m.test(dashUi.slice(dashUi.indexOf("function Lightbox("), dashUi.indexOf("function HeroImage(")))
+      && /if \(e\.key !== "Escape" \|\| overlayStack\[overlayStack\.length - 1\] !== id\) return;/.test(dashUi.slice(dashUi.indexOf("function useOverlay("), dashUi.indexOf("function Thumb("))));
+    ok("hero: pieces chip from the pack quantity frozen in the request (never productCount, never hard-coded); unknown → —",
+      /const qty = access\.package\?\.quantity;/.test(hero) && /d\("hero_quantity", \{ n: qty\.toLocaleString\(locale\) \}\)/.test(hero) && /d\("hero_quantity_unknown"\)/.test(hero)
+      && !/\.productCount/.test(hero) && !/hero_no_stock/.test(dashUi) && /d\("hero_training"\)/.test(hero));
+    const acc = read("../src/lib/services/brandAccessService.js");
+    ok("quantity + simulated price frozen in NEW request snapshots; public view reads the snapshot only (no live pack fallback)",
+      /quantity: pkg\.quantity \?\? null, simulatedSellingPrice: pkg\.simulatedSellingPrice \?\? null,/.test(acc)
+      && /quantity: Number\.isInteger\(pkg\.quantity\) && pkg\.quantity > 0 \? pkg\.quantity : null,/.test(acc));
+  }
   const apiCalls = [...tab.matchAll(/["`](\/api\/[^"`?$]*)/g)].map((m) => m[1]);
-  ok("the tab only calls brand APIs + reads the bank details and the affiliate's own stats (never products, orders, payouts or wallet writes)",
-    apiCalls.length > 0 && apiCalls.every((u) => u.startsWith("/api/affiliate/brand") || ["/api/setting", "/api/affiliate/me"].includes(u))
+  ok("the tab only calls brand APIs + reads the bank details (never real account figures, store products, orders, payouts or wallet)",
+    apiCalls.length > 0 && apiCalls.every((u) => u.startsWith("/api/affiliate/brand") || u === "/api/setting")
     && [...tab.matchAll(/["`]\/api\/setting([^"`]*)["`]/g)].map((m) => m[1]).join() === "?type=bank-settings", apiCalls.join());
-  ok("the extra read is GET only: /api/affiliate/me (stats); no store products API",
-    /call\("\/api\/affiliate\/me"\)\.then/.test(tab) && !/call\("\/api\/affiliate\/me",/.test(tab) && !/\/api\/products/.test(tab));
+  ok("no /api/affiliate/me and no /api/products read in the brand tab; 'see all' pages come from the same dashboard API",
+    !/\/api\/affiliate\/me|\/api\/products/.test(tab)
+    && /call\(`\/api\/affiliate\/brand\/dashboard\?window=\$\{w\}&page=\$\{page\}\$\{asOf \? `&asOf=\$\{encodeURIComponent\(asOf\)\}` : ""\}\$\{listId \? `&list=\$\{listId\}` : ""\}`\)/.test(tab)
+    && /const loadPage = useCallback\(async \(page, asOf, win, listId\) =>/.test(tab) && /const w = win \|\| windowKey;/.test(tab)
+    && (tab.match(/\/api\/affiliate\/brand\/dashboard/g) || []).length === 2);
   ok("the proof is uploaded to the BRAND proof route (never the deposit route)", /\/api\/affiliate\/brand\/access\/\$\{encodeURIComponent\(access\.id\)\}\/proof/.test(tab) && !/\/api\/affiliate\/deposits/.test(tab));
   ok("no wallet / earnings / commission code imported by the tab", !/balance|wallet|commission|payout|earning/i.test(tab.split("\n").filter((l) => l.startsWith("import")).join("\n")));
   ok("no real-profit, refund-guarantee or withdrawal promise in the brand UI", ![tab, stats, dashUi].map((src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "")).some((src) => /أرباح حقيقية|ضمان استرجاع|سحب الأرباح|withdraw|retirer vos gains|profits? r[ée]els?/i.test(src))
@@ -410,31 +471,45 @@ console.log("\n10. Texts and labelling");
   {
     const code = dashUi.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
     ok("dashboard UI calls no API (data comes from BrandTab's brand + dashboard calls)", !/fetch\(|\/api\//.test(code));
-    ok("no amount per simulated order, no gain / stock / availability shown",
-      !/money\(o\.|money\(order\.|money\(dash|money\(stats\?\.by|gain|stock|availab|disponib/i.test(code.replace(/hero_no_stock/g, "")));
-    const fin = code.slice(code.indexOf("function Finance("), code.indexOf("function Analyses("));
-    ok("finance cards: Balance = stats.balance, Profit = stats.totalCommission, Total CA = stats.totalRevenue (shown as-is, no calculation)",
-      /key: "balance", value: stats\?\.balance,/.test(fin) && /key: "profit", value: stats\?\.totalCommission,/.test(fin) && /key: "revenue", value: stats\?\.totalRevenue,/.test(fin)
-      && !/[+*/]\s*stats|stats\?\.\w+\s*[-+*/]/.test(fin) && (fin.match(/stats\?\./g) || []).length === 3);
-    ok("finance cards sit directly above Analyses & Performances",
-      /<Finance stats=\{finance\} d=\{d\} money=\{money\} \/>\s*<Analyses /.test(code));
-    ok("revenue / profit wording only in the finance cards", !/revenue|profit|chiffre/i.test(code.replace(fin, "").replace(/finance/g, "")));
+    ok("money shown is the API's simulated money only (per order: o.money / order.money; totals: stats.money + finance.balance); no stock / availability",
+      !/gain|stock|availab|disponib/i.test(code) && /m=\{o\.money\}/.test(code) && /m=\{order\.money\}/.test(code)
+      && /finance \? finance\.balance : null/.test(code) && /finance \? stats\?\.money\?\.profit : null/.test(code) && /finance \? stats\?\.money\?\.revenue : null/.test(code)
+      && !/[-+*/]\s*(m|o\.money|stats\?\.money)\b|\.net\s*[-+*/]|\.price\s*[-+*/]/.test(code));
+    ok("simulated finance (balance / profit / revenue) sits inside Analytics & Performance, no separate finance cards",
+      /<SimFinance stats=\{stats\} finance=\{finance\} d=\{d\} money=\{money\} \/>/.test(code.slice(code.indexOf("function Analyses("), code.indexOf("function OrderMoney(")))
+      && !/function Finance\(|<Finance /.test(code) && /finance=\{dash\.finance \|\| null\}/.test(code));
+    ok("simulated figures labelled as training: badge + note (never credited / never withdrawable); no price → — and an explanation",
+      /d\("fin_note"\)/.test(code) && /d\("fin_no_price"\)/.test(code) && /simul/i.test(DASHBOARD_TEXT.fr.fin_balance) && /التجريبي/.test(DASHBOARD_TEXT.ar.fin_balance)
+      && /jamais retirables/.test(DASHBOARD_TEXT.fr.fin_note) && /لا يمكن سحبها/.test(DASHBOARD_TEXT.ar.fin_note));
+    ok("order card: product, reference, status, time, simulated price, expenses and net (green when realized, 'expected' otherwise)",
+      ["data-order-ref", "data-order-time", "data-order-money", "data-order-net"].every((k) => code.includes(k)) && /<StatusChip status=\{o\.status\}/.test(code)
+      && /m\.kind === "realized" \? \{ label: d\("fin_net"\), value: money\(m\.net\), cls: m\.net < 0 \? "text-red-600" : "text-green-600" \}/.test(code)
+      && /: \{ label: d\("fin_expected"\), value: money\(m\.net\), cls: "text-amber-600" \}/.test(code) && !/fin_none/.test(code + JSON.stringify(DASHBOARD_TEXT)));
     {
-      const thumb = code.slice(code.indexOf("function Thumb("), code.indexOf("function SectionTitle("));
-      const packThumb = code.slice(code.indexOf("function PackThumb("), code.indexOf("function MyPack("));
-      const myPack = code.slice(code.indexOf("function MyPack("), code.indexOf("export default function BrandDashboard("));
-      ok("image fallback only in the pack card: shared Thumb unchanged, PackThumb used only inside MyPack",
-        !/onError|failed/.test(thumb) && /onError=\{\(\) => setFailed\(true\)\}/.test(packThumb) && /src && !failed \?/.test(packThumb)
-        && (code.match(/<PackThumb /g) || []).length === 1 && /<PackThumb src=\{p\.image\}/.test(myPack) && (code.match(/onError/g) || []).length === 1);
+      // W2: refused / returned / no response / cancelled → no price, no expense, no profit at all (display only)
+      const om = code.slice(code.indexOf("const NO_AMOUNT_STATUSES"), code.indexOf("function OrderCard("));
+      const early = om.slice(om.indexOf("if (NO_AMOUNT_STATUSES.includes(status))"), om.indexOf("const n = (v)"));
+      ok("non-qualifying statuses (refused, returned, noResponse, cancelled) show only a 'no amount' note — returned before any price / expense / net is built",
+        /const NO_AMOUNT_STATUSES = \["refused", "returned", "noResponse", "cancelled"\];/.test(om)
+        && /return <p[^>]*data-order-no-amount>\{d\("fin_no_amount"\)\}<\/p>;/.test(early) && !/money\(|fin_price|fin_exp|fin_net|fin_expected|−/.test(early)
+        && /<OrderMoney m=\{o\.money\} status=\{o\.status\}/.test(code) && /<OrderMoney m=\{order\.money\} status=\{order\.status\}/.test(code));
+      ok("the 'no amount' note is FR / AR, carries no figure, and keeps the simulation wording",
+        /Aucun montant/.test(DASHBOARD_TEXT.fr.fin_no_amount) && /لا يوجد أي مبلغ/.test(DASHBOARD_TEXT.ar.fin_no_amount)
+        && /simulée/.test(DASHBOARD_TEXT.fr.fin_no_amount) && /التجريبي/.test(DASHBOARD_TEXT.ar.fin_no_amount) && !/\d/.test(DASHBOARD_TEXT.fr.fin_no_amount + DASHBOARD_TEXT.ar.fin_no_amount));
     }
-    ok("Confirmées card added; the other six cards unchanged",
-      /\{ key: "confirmed", value: stats\?\.byStatus\?\.confirmed, label: t\("status_confirmed"\)/.test(code)
-      && ["total", "delivered", "refused", "noResponse", "inDelivery", "cancelled", "confirmed"].join() === [...code.slice(code.indexOf("const kpis = ["), code.indexOf("];", code.indexOf("const kpis = ["))).matchAll(/\{ key: "(\w+)"/g)].map((m) => m[1]).join());
-    ok("periods are the existing 24 h / 7 d / 30 d windows only (no all time), no 'see all orders' action",
-      /Object\.entries\(SIM_WINDOWS\)/.test(code) && !/all ?time|voir toutes/i.test(code));
-    ok("six real counts: orders, delivered, refused, no response, in delivery, cancelled",
-      ["stats?.total", "byStatus?.delivered", "byStatus?.refused", "byStatus?.noResponse", "byStatus?.inDelivery", "byStatus?.cancelled"].every((k) => code.includes(k))
-      && /d\("kpi_inDelivery"\)/.test(code) && /d\("kpi_cancelled"\)/.test(code));
+    ok("see all: full list of the selected period, frozen when opened (same asOf + period on every page), from the same dashboard API",
+      /data-see-all/.test(code) && /<AllOrdersSheet first=\{dash\.orders\} loadPage=\{loadPage\}/.test(code)
+      && /const \[frozen\] = useState\(\(\) => \(\{ asOf: first\?\.asOf \|\| null, window: first\?\.window \|\| null, listId: first\?\.listId \|\| null, total: first\?\.total \|\| 0 \}\)\);/.test(code)
+      && /await loadPage\(page \+ 1, frozen\.asOf, frozen\.window, frozen\.listId\)/.test(code) && /const total = frozen\.total;/.test(code)
+      && (code.match(/loadPage\(/g) || []).length === 1 && /if \(!next\?\.items\) \{ setExpired\(true\); return; \}/.test(code)
+      && /!seen\.has\(o\.ref\)/.test(code) && /data-all-expired>\{d\("all_expired"\)\}/.test(code));
+    ok("every brand image falls back to the package icon (no broken image)", /src && !failed \? <img/.test(code) && (code.match(/onError=\{\(\) => setFailed\(true\)\}/g) || []).length === 2);
+    ok("status cards: total + one card per simulated status (they add up to the total), in the requested order",
+      ["total", "confirmed", "inDelivery", "delivered", "refused", "noResponse", "cancelled", "returned", "pending"].join()
+        === [...code.slice(code.indexOf("const kpis = ["), code.indexOf("];", code.indexOf("const kpis = ["))).matchAll(/\{ key: "(\w+)"/g)].map((m) => m[1]).join()
+      && SIM_STATUSES.every((x) => code.includes(`byStatus?.${x}`)));
+    ok("periods are the existing 24 h / 7 d / 30 d windows only (no all time)",
+      /Object\.entries\(SIM_WINDOWS\)/.test(code) && !/all ?time/i.test(code));
     ok("chart: existing total line + inDelivery and cancelled series, with a legend",
       /<LineChart stats=\{stats\} t=\{t\} locale=\{locale\} series=\{series\} \/>/.test(code) && /key: "inDelivery"[^}]*STATUS_COLOR\.inDelivery\.hex/.test(code)
       && /key: "cancelled"[^}]*STATUS_COLOR\.cancelled\.hex/.test(code) && /data-chart-legend/.test(code)
@@ -471,8 +546,10 @@ console.log("\n10. Texts and labelling");
     const simTab = read("../src/app/admin/brand/SimulationTab.jsx");
     ok("admin outcome distribution: still the five final outcomes (no inDelivery), validated at 100 %",
       /SIM_OUTCOMES\.reduce\(/.test(simTab) && /\{SIM_OUTCOMES\.map\(\(k\) =>/.test(simTab) && /total === 100/.test(simTab) && !/inDelivery|SIM_STATUSES/.test(simTab));
-    ok("order details show only reference, product, status and time", /d\("detail_ref"\)/.test(code) && /d\("detail_product"\)/.test(code) && /d\("detail_status"\)/.test(code) && /d\("detail_time"\)/.test(code)
-      && (code.slice(code.indexOf("function OrderSheet"), code.indexOf("function LiveOrders")).match(/\{row\(/g) || []).length === 4);
+    ok("order details: reference, status, Casablanca time + the three simulated expenses in detail",
+      /d\("detail_ref"\)/.test(code) && /d\("detail_status"\)/.test(code) && /d\("detail_time"\)/.test(code) && /timeZone: "Africa\/Casablanca"/.test(code)
+      && /<OrderMoney m=\{order\.money\} status=\{order\.status\} d=\{d\} money=\{money\} locale=\{locale\} detailed \/>/.test(code)
+      && ["fin_exp_delivery", "fin_exp_notification", "fin_exp_confirmation"].every((k) => code.includes(`d("${k}")`)));
   }
   ok("in delivery / cancellation labels (FR / AR) on the affiliate cards, the badges, the admin tiles and the shared status list",
     DASHBOARD_TEXT.fr.kpi_inDelivery === "En cours de livraison" && DASHBOARD_TEXT.ar.kpi_inDelivery === "قيد التوصيل"
@@ -488,15 +565,145 @@ console.log("\n10. Texts and labelling");
     && !/\d/.test(JSON.stringify(DASHBOARD_TEXT).replace(/\{\w+\}/g, ""))
     && !/"hero_sim_delivery"|"hero_safe_sim"|since_days/.test(dashUi) && !/s.occupe de la livraison/i.test(JSON.stringify(DASHBOARD_TEXT))
     && !/profit|gain|chiffre|revenu|retir|ربح|أرباح|سحب/i.test(JSON.stringify(["fr", "ar"].map((l) => Object.entries(DASHBOARD_TEXT[l]).filter(([k]) => !/^fin_/.test(k)))))
-    && DASHBOARD_TEXT.fr.fin_balance === "Solde" && DASHBOARD_TEXT.fr.fin_profit === "Profit" && DASHBOARD_TEXT.fr.fin_revenue === "Total chiffre d'affaires"
+    && DASHBOARD_TEXT.ar.fin_balance === "الرصيد التجريبي" && DASHBOARD_TEXT.ar.fin_profit === "الأرباح التجريبية" && DASHBOARD_TEXT.ar.fin_revenue === "إجمالي رقم المعاملات التجريبي"
+    && DASHBOARD_TEXT.ar.hero_quantity === "{n} قطعة" && DASHBOARD_TEXT.ar.see_all === "عرض الكل" && DASHBOARD_TEXT.ar.fin_expected === "ربح متوقع"
+    && !("hero_no_stock" in DASHBOARD_TEXT.fr)
     && !Object.keys(DASHBOARD_TEXT.fr).some((k) => /^stock_/.test(k)));
   ok("hero uses real catalogue product images (no stock imagery)", /data-hero/.test(tab) && !/https?:\/\//.test(tab.replace(/\/\*[\s\S]*?\*\//g, "")) && /pr\.image/.test(tab));
-  ok("included services on the landing come from the package's configured features", /features\?\.slice\(0, 4\)/.test(tab));
+  ok("pack features come from each pack's configuration (shown on its own card)", /p\.features\.slice\(0, 3\)\.map/.test(tab) && /\{p\.features\.map\(\(f\) => <li key=\{f\}/.test(tab));
   const pageSrc = read("../src/app/affiliate/dashboard/page.jsx");
   ok("dashboard renders BrandTab only on its own tab (no props: no earnings data passed in)", /\{activeTab === "brand" && <BrandTab \/>\}/.test(pageSrc) && (pageSrc.match(/<BrandTab/g) || []).length === 1);
   const pkgTab = read("../src/app/admin/brand/PackagesTab.jsx");
   const empty = (pkgTab.match(/export function emptyPackage\(\) \{([\s\S]*?)\n\}/) || [])[1] || "";
   ok("a new admin package is pre-filled with nothing (no figure, inactive)", empty.length > 0 && !/[1-9]/.test(empty) && /active: false/.test(empty));
+}
+
+// ── 11. Final hardening: W5 price warning, W9 admin / chart labels, Escape, W3 guard ──
+console.log("\n11. Final hardening (W5, W9, Escape, W3)");
+{
+  const { simulatedSellingPriceIssue } = await import("../src/lib/brandProgram.js");
+  const stats = read("../src/components/brand/BrandSimStats.jsx"), dashUi = read("../src/app/affiliate/dashboard/_brand/BrandDashboard.jsx");
+  const M = BRAND_LIMITS.MAX_PRICE;
+  const CASES = [
+    ["valid", null, [299, "299", 49.9, "0.01", M]],
+    ["missing", "MISSING", [undefined, null, "", "   "]],
+    ["zero / non-positive", "NOT_POSITIVE", [0, "0", 0.004, -0]],
+    ["negative", "NOT_POSITIVE", [-5, "-5"]],
+    ["malformed", "INVALID", ["abc", "12abc", NaN, Infinity, {}, M + 1]],
+  ];
+  for (const [label, want, vals] of CASES) {
+    const got = vals.map((v) => simulatedSellingPriceIssue(v));
+    ok(`W5 simulatedSellingPriceIssue — ${label} → ${want}`, got.every((g) => g === want), JSON.stringify(got));
+  }
+  // the warning and the save rule agree: no issue ⇔ the save keeps a positive number (never a substitute)
+  const saved = (v) => { const r = validateBrandConfig(cfg({ packages: [pkg({ simulatedSellingPrice: v })] }));
+    return { err: r.errors?.["packages.0.simulatedSellingPrice"] || null, val: r.value?.packages?.[0]?.simulatedSellingPrice }; };
+  const all = CASES.flatMap(([, , vals]) => vals);
+  ok("W5 property: issue === null ⇔ the save accepts it as a positive number (same value, never the pack price)",
+    all.every((v) => { const s = saved(v); const accepted = !s.err && typeof s.val === "number" && s.val > 0;
+      return (simulatedSellingPriceIssue(v) === null) === accepted && (!accepted || (s.val === Number(v) && s.val !== pkg().price)); }));
+  ok("W5 property: every NOT_POSITIVE / INVALID value is REFUSED by the save (INVALID_PRICE), so it can never be stored",
+    CASES.filter(([, w]) => w === "NOT_POSITIVE" || w === "INVALID").flatMap(([, , v]) => v).every((v) => saved(v).err === "INVALID_PRICE"));
+  ok("W5 property: absent / null / empty → saved as null (optional field, no substitute) but flagged MISSING by the warning; whitespace-only is refused by the save",
+    [undefined, null, ""].every((v) => saved(v).err === null && saved(v).val === null && simulatedSellingPriceIssue(v) === "MISSING")
+    && saved("   ").err === "INVALID_PRICE" && simulatedSellingPriceIssue("   ") === "MISSING");
+  const progSrc = read("../src/lib/brandProgram.js");
+  ok("W5: the save rule itself is unchanged (optional amount ≥ 0.01, ≤ MAX_PRICE) and the pack purchase price keeps its own rule",
+    /const simulatedSellingPrice = optionalAmount\(p\.simulatedSellingPrice, 0\.01, L\.MAX_PRICE\);/.test(progSrc)
+    && saved(299).val === 299 && validateBrandConfig(cfg({ packages: [pkg({ simulatedSellingPrice: 299 })] })).value.packages[0].price === pkg().price);
+
+  // W5 admin UI (static; the component is a client component)
+  const pt = read("../src/app/admin/brand/PackagesTab.jsx");
+  const warn = pt.slice(pt.indexOf("{simIssue && (\n"), pt.indexOf(")}", pt.indexOf("data-sim-price-warning")));
+  const objOf = (name) => (pt.match(new RegExp(`const ${name} = \\{([\\s\\S]*?)\\};`)) || [])[1] || "";
+  ok("W5 admin: issue computed only for ACTIVE packs with the shared helper (same rule as the save)",
+    /const simIssue = pkg\.active \? simulatedSellingPriceIssue\(pkg\.simulatedSellingPrice\) : null;/.test(pt) && /import \{[^}]*simulatedSellingPriceIssue[^}]*\} from "@\/lib\/brandProgram";/.test(pt));
+  ok("W5 admin: header chip and role=alert warning render only when simIssue is set",
+    /\{simIssue && <span[^>]*data-sim-price-chip=\{simIssue\}/.test(pt) && /\{simIssue && \(\s*<div role="alert"[^>]*data-sim-price-warning=\{simIssue\}/.test(pt)
+    && (pt.match(/data-sim-price-chip|data-sim-price-warning/g) || []).length === 2);
+  ok("W5 admin: FR and AR warning texts for MISSING, INVALID and NOT_POSITIVE; the AR block is RTL",
+    ["MISSING", "INVALID", "NOT_POSITIVE"].every((k) => new RegExp(`\\b${k}: "[^"]{10,}"`).test(objOf("SIM_PRICE_WARNING_FR")) && new RegExp(`\\b${k}: "[^"]{10,}"`).test(objOf("SIM_PRICE_WARNING_AR")))
+    && /[؀-ۿ]/.test(objOf("SIM_PRICE_WARNING_AR")) && /\{SIM_PRICE_WARNING_FR\[simIssue\]\}/.test(warn) && /dir="rtl" lang="ar"[^>]*>\{SIM_PRICE_WARNING_AR\[simIssue\]\}/.test(warn));
+  ok("W5 admin: the warning explains the missing simulated figures and never reads or substitutes another price",
+    warn.length > 0 && /chiffre d’affaires ni de profit simulés/.test(warn) && /Aucun autre prix/.test(warn) && /لا يُستعمل أي ثمن آخر/.test(warn)
+    && !/pkg\.price|productPrice|regularPrice|salePrice|breakdown/.test(warn));
+
+  // W9: admin tab bar + chart labels
+  const page = read("../src/app/admin/brand/page.jsx");
+  const bar = (page.match(/<div className="([^"]*)" role="tablist"[^>]*>/) || [])[1];
+  ok("W9 admin tab bar: wraps on narrow screens (no horizontal scroller), role=tablist; every tab is a type=button role=tab with aria-selected",
+    bar !== undefined && /\bflex-wrap\b/.test(bar) && !/overflow-x-auto/.test(bar) && !/overflow-x-auto[^"]*"[^>]*role="tablist"/.test(page)
+    && /<button key=\{t\.id\} type="button" role="tab" aria-selected=\{tab === t\.id\} onClick=\{\(\) => setTab\(t\.id\)\}/.test(page) && /\{TABS\.map\(\(t\) => \(/.test(page));
+  const marksSrc = (stats.match(/const BIDI_MARKS = \/(\[[^\]]+\])\/g;/) || [])[1];
+  const MARKS = marksSrc ? new RegExp(marksSrc, "g") : null;
+  ok("W9 chart labels: BIDI_MARKS covers LRM, RLM, ALM, embeddings/overrides (U+202A–E) and isolates (U+2066–9)",
+    MARKS !== null && ["‎", "‏", "؜", "‪", "‫", "‬", "‭", "‮", "⁦", "⁧", "⁨", "⁩"].every((c) => c.match(MARKS))
+    && !"27/10 14:30".match(MARKS));
+  const lineSrc = stats.slice(stats.indexOf("export function LineChart"), stats.indexOf("export default function BrandSimStats") > 0 ? stats.indexOf("export default function BrandSimStats") : undefined);
+  ok("W9 chart labels: every axis / tooltip / aria label goes through fmt, which formats in Africa/Casablanca, shows minutes for hours and strips the marks",
+    /\.replace\(BIDI_MARKS, ""\)/.test(lineSrc) && (lineSrc.match(/toLocale(Date|Time)String\(/g) || []).length === 2
+    && /toLocaleTimeString\(locale, \{ hour: "2-digit", minute: "2-digit", timeZone: SIM_TZ \}\)/.test(lineSrc)
+    && /timeZone: SIM_TZ \}\)/.test(lineSrc.slice(lineSrc.indexOf("toLocaleDateString("))) && /const SIM_TZ = "Africa\/Casablanca";/.test(stats)
+    && (lineSrc.match(/\{fmt\(b\.start\)\}/g) || []).length === 1 && (lineSrc.match(/fmt\(cur\.start, true\)/g) || []).length === 2);
+  {
+    // behaviour: the exact formatting options, in Arabic and French, give clean dd/mm and HH:MM in Casablanca time
+    const day = (loc, iso) => new Date(iso).toLocaleDateString(loc, { day: "2-digit", month: "2-digit", timeZone: "Africa/Casablanca" }).replace(MARKS, "");
+    const hour = (loc, iso) => new Date(iso).toLocaleTimeString(loc, { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Casablanca" }).replace(MARKS, "");
+    const latin = (x) => x.replace(/[٠-٩]/g, (c) => String(c.charCodeAt(0) - 0x0660));
+    const iso = "2026-10-27T23:30:00Z"; // Casablanca (UTC+1): 28/10 00:30
+    ok("W9 chart labels (ar-MA / fr-FR): no bidi mark left, day/month order dd/mm, Casablanca time HH:MM",
+      MARKS && ["ar-MA", "fr-FR"].every((l) => !day(l, iso).match(MARKS) && !hour(l, iso).match(MARKS))
+      && latin(day("fr-FR", iso)) === "28/10" && /^28\D10$/.test(latin(day("ar-MA", iso)))
+      && latin(hour("fr-FR", iso)) === "00:30" && /^00\D30$/.test(latin(hour("ar-MA", iso))),
+      JSON.stringify(MARKS ? ["ar-MA", "fr-FR"].map((l) => [day(l, iso), hour(l, iso)]) : null));
+  }
+
+  // Escape: one shared overlay stack, topmost only, focus back to the opener
+  const ov = dashUi.slice(dashUi.indexOf("function useOverlay("), dashUi.indexOf("function Thumb("));
+  ok("Escape: useOverlay closes ONLY the topmost overlay (module stack + id check), preventDefault, latest onClose via ref",
+    /^const overlayStack = \[\];$/m.test(dashUi) && /const id = \+\+overlaySeq;/.test(ov) && /overlayStack\.push\(id\);/.test(ov)
+    && /if \(e\.key !== "Escape" \|\| overlayStack\[overlayStack\.length - 1\] !== id\) return;/.test(ov) && /e\.preventDefault\(\);\s*close\.current\(\);/.test(ov)
+    && /close\.current = onClose;/.test(ov));
+  ok("Escape: cleanup removes the listener and this overlay's id from the stack",
+    /return \(\) => \{\s*document\.removeEventListener\("keydown", onKey\);/.test(ov) && /const i = overlayStack\.lastIndexOf\(id\);\s*if \(i !== -1\) overlayStack\.splice\(i, 1\);/.test(ov));
+  ok("Escape focus: opener read during the FIRST render (before React autoFocuses the ✕), restored only if focus was lost and the opener still exists",
+    /const \[opener\] = useState\(\(\) => \(typeof document !== "undefined" \? document\.activeElement : null\)\);/.test(ov)
+    && /const lost = !document\.activeElement \|\| document\.activeElement === document\.body;/.test(ov)
+    && /if \(lost && opener && opener !== document\.body && typeof opener\.focus === "function" && document\.contains\(opener\)\) opener\.focus\(\);/.test(ov)
+    && /\}, \[opener\]\);/.test(ov) && !/document\.activeElement/.test(ov.slice(ov.indexOf("useEffect("), ov.indexOf("return () =>"))));
+  const body = (name, next) => dashUi.slice(dashUi.indexOf(`function ${name}(`), dashUi.indexOf(`function ${next}(`));
+  ok("Escape: Lightbox, OrderSheet and AllOrdersSheet all register with useOverlay; no other keydown listener in the dashboard",
+    /^  useOverlay\(onClose\);$/m.test(body("Lightbox", "HeroImage")) && /^  useOverlay\(onClose\);$/m.test(body("OrderSheet", "AllOrdersSheet"))
+    && /^  useOverlay\(onClose\);$/m.test(body("AllOrdersSheet", "LiveOrders")) && (dashUi.match(/^  useOverlay\(onClose\);$/gm) || []).length === 3
+    && (dashUi.match(/addEventListener\("keydown"/g) || []).length === 1 && ov.includes('document.addEventListener("keydown", onKey);'));
+  ok("Escape / W3: the open list and details are dropped when the period changes (fresh snapshot next time)",
+    /const period = dash\.orders\?\.window;\s*useEffect\(\(\) => \{ setAll\(false\); setOpen\(null\); \}, \[period\]\);/.test(body("LiveOrders", "MyPack")));
+
+  // W3 guard: status codes, validation, handler wiring + runtime of the exported helpers
+  const hs = read("../src/lib/brandRouteHandlers.js");
+  ok("W3: LIST_CHANGED → 409, INVALID_AS_OF → 400 in the STATUS map; both labelled FR + AR",
+    /\bLIST_CHANGED: +409,/.test(hs) && /\bINVALID_AS_OF: +400,/.test(hs)
+    && ["LIST_CHANGED", "INVALID_AS_OF"].every((c) => BRAND_TEXT.fr[`code_${c}`] && BRAND_TEXT.ar[`code_${c}`] && /[؀-ۿ]/.test(BRAND_TEXT.ar[`code_${c}`])));
+  ok("W3: the dashboard handler compares the recomputed listId with &list= and refuses a mismatch; the brand comes from the token only",
+    /const LIST_ID_RE = \/\^\[0-9a-f\]\{16\}\$\/;/.test(hs)
+    && /if \(expected !== null && dash\.orders\.listId !== expected\) throw Object\.assign\(new Error\('La liste a changé\.'\), \{ code: 'LIST_CHANGED' \}\);/.test(hs)
+    && /const clock = now\(\);\s*const dash = await getAffiliateSimulationDashboard\(me, \{ db, now: asOfOf\(req, clock\), clock, window: windowOf\(req\), page: pageOf\(req\) \}\);/.test(hs)
+    && !/searchParams\.get\('(access|accessId|brand|affiliateId|id)'\)/.test(hs.slice(hs.indexOf("export function affiliateBrandHandlers(")))
+    && /const me = await activeMe\(decoded\);\s*const expected = expectedListOf\(req\);/.test(hs));
+  {
+    const { asOfOf, expectedListOf } = await import("../src/lib/brandRouteHandlers.js");
+    const r = (q) => new Request(`http://x/api/affiliate/brand/dashboard?${q}`);
+    const code = (f) => { try { f(); return "OK"; } catch (e) { return e.code; } };
+    const now = new Date("2026-10-28T10:20:00.000Z");
+    ok("W3 runtime: &list= absent/empty → no guard; 16 lowercase hex → expected; anything else → LIST_CHANGED",
+      expectedListOf(r("window=24h")) === null && expectedListOf(r("list=")) === null && expectedListOf(r("list=0123456789abcdef")) === "0123456789abcdef"
+      && ["0123456789ABCDEF", "0123456789abcde", "0123456789abcdef0", "zz23456789abcdef", "%20123456789abcdef"].every((v) => code(() => expectedListOf(r(`list=${v}`))) === "LIST_CHANGED"));
+    ok("W3 runtime: asOf absent → now; valid ISO ≤ 24 h old → used as given; malformed / future / > 24 h old → INVALID_AS_OF",
+      asOfOf(r("window=24h"), now) === now && asOfOf(r("asOf=2026-10-28T05:20:00.000Z"), now).toISOString() === "2026-10-28T05:20:00.000Z"
+      && asOfOf(r("asOf=2026-10-27T10:20:00.000Z"), now).toISOString() === "2026-10-27T10:20:00.000Z"
+      && ["2026-10-28", "1761600000000", "2026-10-28T10:21:00.000Z", "2026-10-27T10:19:59.999Z", "2026-10-28T10:20:00+01:00", "garbage", "2026-13-45T99:99:99Z"]
+        .every((v) => code(() => asOfOf(r(`asOf=${encodeURIComponent(v)}`), now)) === "INVALID_AS_OF"));
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

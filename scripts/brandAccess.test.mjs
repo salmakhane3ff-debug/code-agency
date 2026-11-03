@@ -195,6 +195,67 @@ console.log("\n3b. Immutable request snapshot");
     && db._tables.brandAccess[0].amount === "1890.00");
 }
 
+// ── 3c. Simulated selling price: invalid values never reach a request (W5) ────
+console.log("\n3c. Simulated selling price → request snapshot (W5)");
+{
+  const { getAffiliateSimulationDashboard } = await import("../src/lib/services/brandSimulationService.js");
+  const P1 = config().packages[0];
+  const withPrice = (v, extra = {}) => config({ packages: [{ ...P1, simulatedSellingPrice: v, ...extra }, ...config().packages.slice(1)] });
+  // 1. the admin save refuses zero, negative and malformed values; nothing is stored or audited
+  const db = newDb({ config: withPrice(299) });
+  await saveBrandConfig(withPrice(299), { db, actorId: "admin-1", now: NOW });
+  const before = JSON.stringify(db._tables.setting.find((r) => r.id === BRAND_SETTING_ID).data);
+  const audits = db._tables.brandAuditLog.length, versions = db._tables.brandSimSettingsVersion.length;
+  for (const bad of [0, -5, "abc", "12abc", "0", -0.01, "   "]) {
+    const e = await rejects(saveBrandConfig(withPrice(bad), { db, actorId: "admin-1", now: NOW }));
+    ok(`admin save refuses simulatedSellingPrice ${JSON.stringify(bad)} (INVALID_INPUT, INVALID_PRICE on the pack field)`,
+      e?.code === "INVALID_INPUT" && e?.errors?.["packages.0.simulatedSellingPrice"] === "INVALID_PRICE");
+  }
+  ok("refused saves change nothing: stored config, audit log and settings versions identical",
+    JSON.stringify(db._tables.setting.find((r) => r.id === BRAND_SETTING_ID).data) === before && db._tables.brandAuditLog.length === audits
+    && db._tables.brandSimSettingsVersion.length === versions && JSON.parse(before).packages[0].simulatedSellingPrice === 299);
+
+  // 2. a bad value already in storage (written around the save rule) is dropped to null — never replaced by another price
+  for (const bad of [0, -5, "abc", "12abc", 1e9, NaN]) {
+    const d = newDb({ config: withPrice(bad) });
+    await requestBrandAccess("a1", input(), { db: d, now: NOW });
+    const snap = d._tables.brandAccess[0].packageSnapshot;
+    ok(`stored invalid price ${JSON.stringify(bad) ?? String(bad)} → request snapshot simulatedSellingPrice null (not the pack price, not a product price)`,
+      snap.simulatedSellingPrice === null && snap.price === 1500 && d._tables.brandAccess[0].amount === "1890.00");
+  }
+
+  // 3. missing price: the request is accepted (optional field), the snapshot is null and the dashboard shows no figure
+  {
+    const d = newDb({ config: withPrice(undefined) });
+    await saveBrandConfig(withPrice(undefined), { db: d, actorId: "admin-1", now: new Date(NOW.getTime() - 24 * HOUR) });
+    const acc = await requestBrandAccess("a1", input(), { db: d, now: NOW });
+    await payAndAccept(d, "a1", acc.id, { now: NOW });
+    const dash = await getAffiliateSimulationDashboard("a1", { db: d, now: new Date(NOW.getTime() + 30 * HOUR), window: "7d" });
+    ok("missing price → snapshot null; dashboard finance null and every order without money (no substitute, pack price untouched)",
+      d._tables.brandAccess[0].packageSnapshot.simulatedSellingPrice === null && acc.package.simulatedSellingPrice === null
+      && dash.finance === null && dash.stats.money === null && dash.orders.total > 0 && dash.orders.items.every((o) => o.money === null)
+      && d._tables.brandAccess[0].packageSnapshot.price === 1500, JSON.stringify({ finance: dash.finance, total: dash.orders.total }));
+  }
+
+  // 4. valid price: frozen in the request; a later admin edit never changes an existing request
+  {
+    const d = newDb({ config: withPrice(299) });
+    await saveBrandConfig(withPrice(299), { db: d, actorId: "admin-1", now: new Date(NOW.getTime() - 24 * HOUR) });
+    const acc = await requestBrandAccess("a1", input(), { db: d, now: NOW });
+    await payAndAccept(d, "a1", acc.id, { now: NOW });
+    await saveBrandConfig(withPrice(49.9, { price: 1600 }), { db: d, actorId: "admin-1", now: new Date(NOW.getTime() + HOUR) });
+    const dash = await getAffiliateSimulationDashboard("a1", { db: d, now: new Date(NOW.getTime() + 30 * HOUR), window: "7d" });
+    const snap = d._tables.brandAccess[0].packageSnapshot;
+    ok("valid 299 → snapshot 299; after the admin changes it to 49.9 (and the pack price to 1600) the request keeps 299, 1500 and 1890.00",
+      acc.package.simulatedSellingPrice === 299 && snap.simulatedSellingPrice === 299 && snap.price === 1500 && d._tables.brandAccess[0].amount === "1890.00"
+      && dash.finance?.price === 299 && dash.orders.items.every((o) => o.money === null || o.money.price === 299));
+    const fresh = newDb({ config: withPrice(49.9, { price: 1600 }) });
+    const later = await requestBrandAccess("a2", input({ clientRequestId: "req-00000077" }), { db: fresh, now: NOW });
+    ok("a NEW request after the edit snapshots the new values (49.9 simulated, pack price 1600 unchanged in meaning)",
+      later.package.simulatedSellingPrice === 49.9 && fresh._tables.brandAccess[0].packageSnapshot.price === 1600);
+  }
+}
+
 // ── 4. Participant cancellation ───────────────────────────────────────────────
 console.log("\n4. Participant cancellation (pending only)");
 {

@@ -92,7 +92,8 @@ export function LineChart({ stats, t, locale, series = [] }) {
   const niceMax = max <= 5 ? 5 : Math.ceil(max / 5) * 5;
   const peak = buckets.reduce((best, b, i) => (b.total > (buckets[best]?.total ?? -1) ? i : best), 0);
   const [active, setActive] = useState(null);
-  const idx = active ?? peak;
+  // A point picked in another period may not exist in this one (24 → 7 buckets): fall back to the peak.
+  const idx = active !== null && active < buckets.length ? active : peak;
   const x = (i) => P.l + (buckets.length <= 1 ? 0 : (i * (W - P.l - P.r)) / (buckets.length - 1));
   const y = (v) => P.t + (H - P.t - P.b) * (1 - v / niceMax);
   const pts = buckets.map((b, i) => [x(i), y(b.total)]);
@@ -102,9 +103,13 @@ export function LineChart({ stats, t, locale, series = [] }) {
     const sp = buckets.map((b, i) => [x(i), y(Number(b.byStatus?.[s.key]) || 0)]);
     return { ...s, pts: sp, d: sp.map(([px, py], i) => `${i ? "L" : "M"}${px.toFixed(1)},${py.toFixed(1)}`).join(" ") };
   });
+  // Labels live in an LTR SVG: Intl adds bidi marks for Arabic (e.g. "27\u200F/10"), which the SVG would reorder
+  // into "2710/" — they are stripped, so "27/10" reads day/month in both languages. Hour buckets start at any
+  // minute (exact rolling 24 h), so hours always show minutes.
   const fmt = (iso, long = false) => (stats?.unit === "hour"
-    ? new Date(iso).toLocaleTimeString(locale, { hour: "2-digit", ...(long ? { minute: "2-digit" } : {}) })
-    : new Date(iso).toLocaleDateString(locale, long ? { day: "2-digit", month: "short" } : { day: "2-digit", month: "2-digit" }));
+    ? new Date(iso).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", timeZone: SIM_TZ })
+    : new Date(iso).toLocaleDateString(locale, { ...(long ? { day: "2-digit", month: "short" } : { day: "2-digit", month: "2-digit" }), timeZone: SIM_TZ })
+  ).replace(BIDI_MARKS, "");
   const every = Math.max(1, Math.ceil(buckets.length / 6));
   const cur = buckets[idx];
   const onMove = (e) => {
@@ -194,6 +199,11 @@ export function StatusDonut({ stats, t, locale }) {
 /** Admin chart lines for confirmed / in delivery: clearly different hues (the shared STATUS_COLOR blue and sky are too close as lines). */
 const CHART_LINE_COLOR = { confirmed: "#1d4ed8", inDelivery: "#0d9488" };
 
+/** Bucket labels in the simulator's timezone (day buckets start at Casablanca midnight). */
+const SIM_TZ = "Africa/Casablanca";
+/** Invisible bidi controls Intl may insert (LRM, RLM, ALM, isolates / embeddings). */
+const BIDI_MARKS = /[\u200E\u200F\u061C\u202A-\u202E\u2066-\u2069]/g;
+
 /** Full block: summary tiles, analytics (period + line chart) and order details donut. */
 export default function BrandSimStats({ stats, windowKey, onWindow, t, locale = "fr-FR", loading = false }) {
   // Extra chart lines (same per-status counts as the tiles and the donut); total line unchanged.
@@ -209,7 +219,7 @@ export default function BrandSimStats({ stats, windowKey, onWindow, t, locale = 
       <section className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <h3 className="text-base font-black text-gray-900">{t("analytics_title")}</h3>
-          <div className="flex items-center gap-2"><SimulatedBadge t={t} /><WindowSelect windowKey={windowKey} onWindow={onWindow} t={t} /></div>
+          <div className="flex flex-wrap items-center gap-2"><SimulatedBadge t={t} /><WindowSelect windowKey={windowKey} onWindow={onWindow} t={t} /></div>
         </div>
         <p className="text-[11px] text-gray-500 mb-2">{t("total_orders")} · {windowLabel(windowKey, t)} · {stats?.unit === "hour" ? t("chart_hour") : t("chart_day")}</p>
         {stats?.total ? (

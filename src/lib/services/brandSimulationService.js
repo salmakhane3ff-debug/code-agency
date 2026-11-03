@@ -30,9 +30,10 @@
 
 import prisma from '../prisma.js';
 import {
-  buildHourRows, liveHourCounts, windowBuckets, windowStats, recentSimulatedOrders, floorHour, ceilHour, DAY_MS,
+  buildHourRows, liveHourCounts, windowBuckets, simulatedOrders, ordersStats, deliveredInRows, simulatedBalanceOf, settledHoursBefore, simulatedListId,
+  floorHour, ceilHour, DAY_MS,
 } from '../brandSimulation.js';
-import { accessWindows, generableHours, incompleteRanges, dayParams, delaysForHour, hourEnabled } from '../brandSimTimeline.js';
+import { accessWindows, generableHours, incompleteRanges, dayParams, hourEnabled } from '../brandSimTimeline.js';
 import { getSettingsTimeline, advisoryXactLock, accessLockKey } from './brandSimSettingsService.js';
 import { ACCESS_STATUS, getAffiliateAccessRow } from './brandAccessService.js';
 
@@ -93,10 +94,21 @@ export async function materializeAccessSimulation(access, {
  * Dashboard data for one access and one window ('24h' | '7d' | '30d').
  * Everything returned is SIMULATED training data (`simulated: true`).
  */
-export async function getSimulationDashboard(access, { db = prisma, now = new Date(), window = '24h' } = {}) {
+/** Simulated orders per page of the full list ("see all"). */
+export const SIM_ORDERS_PAGE_SIZE = 20;
+
+/** The pack's simulated selling price frozen in this access's request snapshot (null if absent → no figures). */
+export function snapshotSimPrice(access) {
+  const v = access?.packageSnapshot?.simulatedSellingPrice;
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+}
+
+export async function getSimulationDashboard(access, { db = prisma, now = new Date(), window = '24h', page = 1, clock = now } = {}) {
   const at = ms(now);
   if (!windowBuckets(window, at)) throw err('INVALID_WINDOW', 'Période invalide.');
-  const timeline = await getSettingsTimeline(db, { now });
+  // `now` = the instant the dashboard is computed for (a "see all" asOf may be up to 24 h old);
+  // `clock` = the real current time: the one-time timeline reconstruction (persisted) is dated with it, never with an asOf.
+  const timeline = await getSettingsTimeline(db, { now: clock });
   const gen = await materializeAccessSimulation(access, { db, now, timeline });
 
   const closed = access.status === ACCESS_STATUS.CLOSED;
@@ -104,10 +116,19 @@ export async function getSimulationDashboard(access, { db = prisma, now = new Da
   const periods = await db.brandAccessPeriod.findMany({ where: { accessId: access.id }, orderBy: { startedAt: 'asc' } });
   const windows = accessWindows(periods, access.simulationStartsAt, anchor);
   const b = windowBuckets(window, anchor);
-  const rows = await db.brandSimHour.findMany({
-    where: { accessId: access.id, hourStart: { gte: new Date(b.from), lt: new Date(anchor) } },
-    orderBy: { hourStart: 'asc' },
-  });
+  // Hours before `splitAt` are SETTLED at the anchor (their last minute is older than the longest
+  // confirmation / delivery delay any settings version ever had), so their delivered orders are
+  // exactly the stored `delivered` outcome counts: one SUM instead of reading every hour of history.
+  // Later hours (the window + the still-moving ones before it) are read row by row.
+  const maxDelayHours = timeline.reduce((m, v) => Math.max(m, Number(v.settings?.deliveryDelayHours) || 0, Number(v.settings?.confirmationDelayHours) || 0), 0);
+  const splitAt = settledHoursBefore(anchor, b.from, maxDelayHours);
+  const [settled, rows] = await Promise.all([
+    db.brandSimHour.aggregate({ where: { accessId: access.id, hourStart: { lt: new Date(splitAt) } }, _sum: { delivered: true } }),
+    db.brandSimHour.findMany({
+      where: { accessId: access.id, hourStart: { gte: new Date(splitAt), lt: new Date(anchor) } },
+      orderBy: { hourStart: 'asc' },
+    }),
+  ]);
 
   // Live (unfinished) hour: active access only, inside the open period, settings enabled + verified.
   const liveHour = floorHour(at);
@@ -116,11 +137,30 @@ export async function getSimulationDashboard(access, { db = prisma, now = new Da
   const liveParams = running && liveHour >= ceilHour(open.from) ? dayParams(timeline, liveHour) : null;
   const live = liveParams ? liveHourCounts(access.id, at, liveParams) : null;
 
-  const delays = (h) => delaysForHour(timeline, h);
   const products = Array.isArray(access.selectedProducts)
     ? access.selectedProducts.map((p) => ({ id: p.id, title: p.title || '', image: p.image || null }))
     : [];
   const counted = rows.filter((r) => r.created > 0).map((r) => ms(r.hourStart));
+
+  // ONE dataset: the window's simulated orders. The list, the status counts, the
+  // chart and the simulated revenue / profit are all derived from it.
+  const price = snapshotSimPrice(access);
+  const sim = (d) => dayParams(timeline, d);
+  const liveAt = live?.created ? liveHour : null;
+  const orders = simulatedOrders(access.id, { fromMs: b.from, nowMs: anchor, countedHours: counted, liveHour: liveAt, sim, products, price });
+  const stats = ordersStats(orders, anchor, window, price);
+  // Balance = every delivered order since the start: settled history (SUM) + orders created before the
+  // window start (settled hour → stored count, else order by order; a clock hour straddling the start
+  // only contributes its orders before it) + the window's delivered orders (the list).
+  const delivered = (Number(settled?._sum?.delivered) || 0)
+    + deliveredInRows(access.id, { rows: rows.filter((r) => ms(r.hourStart) < b.from), nowMs: anchor, sim, beforeMs: b.from })
+    + stats.byStatus.delivered;
+  const bal = simulatedBalanceOf(delivered, price);
+  const pageNo = Math.max(1, Math.min(Number.isInteger(page) ? page : 1, Math.max(1, Math.ceil(orders.length / SIM_ORDERS_PAGE_SIZE))));
+  const pub = ({ atMs: _atMs, ...o }) => o; // internal sort key, not part of the API
+  // Identity of the WHOLE ordered list (window, bounds, snapshot price and products, every order's reference
+  // and status): "see all" sends it back with each page; any difference means the list changed → refused.
+  const listId = simulatedListId([access.id, window, b.from, anchor, price, products.map((p) => p.id)], orders);
 
   return {
     simulated: true,
@@ -132,20 +172,28 @@ export async function getSimulationDashboard(access, { db = prisma, now = new Da
     anchor: new Date(anchor).toISOString(),
     started: access.simulationStartsAt ? anchor >= ms(access.simulationStartsAt) : false,
     running,
-    stats: windowStats(rows, live, anchor, window, delays),
-    recent: !counted.length && !live?.created ? [] : recentSimulatedOrders(access.id, {
-      countedHours: counted, liveHour: live ? liveHour : null, nowMs: anchor, sim: (d) => dayParams(timeline, d), products,
-    }),
+    stats,
+    recent: orders.slice(0, 8).map(pub),
+    orders: {
+      // asOf: the instant this list was computed for; "see all" sends it back so every page uses the same period.
+      asOf: new Date(at).toISOString(), window, listId,
+      page: pageNo, pageSize: SIM_ORDERS_PAGE_SIZE, total: orders.length,
+      items: orders.slice((pageNo - 1) * SIM_ORDERS_PAGE_SIZE, pageNo * SIM_ORDERS_PAGE_SIZE).map(pub),
+    },
+    // SIMULATED training figures (never a wallet, never withdrawable); null when the request snapshot has no simulated price.
+    finance: price === null ? null : {
+      simulated: true, price, revenue: stats.money.revenue, profit: stats.money.profit, balance: bal.balance,
+    },
     incomplete: incompleteRanges(timeline, windows, b.from, anchor),
     catchUpPending: gen.pending,
   };
 }
 
 /** The participant's LATEST brand: ACTIVE, or CLOSED (read-only). @throws NO_ACTIVE_ACCESS | INVALID_WINDOW */
-export async function getAffiliateSimulationDashboard(affiliateId, { db = prisma, now = new Date(), window = '24h' } = {}) {
+export async function getAffiliateSimulationDashboard(affiliateId, { db = prisma, now = new Date(), window = '24h', page = 1, clock = now } = {}) {
   const access = await getAffiliateAccessRow(affiliateId, db);
   if (!access || !SIM_STATES.includes(access.status)) throw err('NO_ACTIVE_ACCESS', 'Aucun accès actif.');
-  return getSimulationDashboard(access, { db, now, window });
+  return getSimulationDashboard(access, { db, now, window, page, clock });
 }
 
 /** Admin view of one access's simulated data (ACTIVE or CLOSED). @throws ACCESS_NOT_FOUND | NO_ACTIVE_ACCESS | INVALID_WINDOW */

@@ -1,12 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, Plus, X, Package } from "lucide-react";
-import { BRAND_LIMITS } from "@/lib/brandProgram";
+import { ChevronDown, Plus, X, Package, AlertTriangle } from "lucide-react";
+import { BRAND_LIMITS, simulatedSellingPriceIssue } from "@/lib/brandProgram";
 import { PERCENT_BASES, PERCENT_KEYS, missingPricingFields, packageBreakdown } from "@/lib/brandPricing";
 import { api, inputCls, btnGhost, Field, Check, FieldError, newId } from "./ui";
 
 const PERCENT_LABEL = { confirmation: "Taux de confirmation", advertising: "Publicité", companyShare: "Part de la société" };
+/** Admin warning for an ACTIVE pack whose simulated selling price is missing / invalid / not positive (FR + AR). */
+const SIM_PRICE_WARNING_FR = {
+  MISSING: "Pack actif sans prix de vente simulé.",
+  INVALID: "Pack actif : prix de vente simulé invalide.",
+  NOT_POSITIVE: "Pack actif : le prix de vente simulé doit être supérieur à 0.",
+};
+const SIM_PRICE_WARNING_AR = {
+  MISSING: "باقة نشطة بدون ثمن بيع تجريبي.",
+  INVALID: "باقة نشطة: ثمن البيع التجريبي غير صالح.",
+  NOT_POSITIVE: "باقة نشطة: يجب أن يكون ثمن البيع التجريبي أكبر من 0.",
+};
 const BASE_LABEL = {
   [PERCENT_BASES.PACKAGE_PRICE]: "Prix du pack",
   [PERCENT_BASES.SUBTOTAL]: "Sous-total HT (prix + livraison + logistique)",
@@ -15,6 +26,7 @@ const BASE_LABEL = {
 };
 const FIELD_LABEL = {
   price: "prix", deliveryCost: "frais de livraison", logisticsCost: "frais logistiques", vatPercent: "TVA", productCount: "nombre de produits",
+  quantity: "nombre de pièces", simulatedSellingPrice: "prix de vente simulé",
   ...Object.fromEntries(PERCENT_KEYS.flatMap((k) => [[`percentages.${k}.value`, `${PERCENT_LABEL[k]} (%)`], [`percentages.${k}.base`, `${PERCENT_LABEL[k]} (base)`]])),
 };
 
@@ -22,7 +34,7 @@ const FIELD_LABEL = {
 export function emptyPackage() {
   return {
     id: newId("pkg"), name: "", description: "", price: "", features: [], active: false, sortOrder: 0,
-    productCount: "", productIds: [], deliveryCost: "", logisticsCost: "", vatPercent: "",
+    productCount: "", productIds: [], deliveryCost: "", logisticsCost: "", vatPercent: "", quantity: "", simulatedSellingPrice: "",
     percentages: { confirmation: { value: "", base: "" }, advertising: { value: "", base: "" }, companyShare: { value: "", base: "" } },
   };
 }
@@ -69,6 +81,8 @@ function PackageEditor({ pkg, index, errors, saved, onChange, onRemove, pool }) 
   const productIds = Array.isArray(pkg.productIds) ? pkg.productIds : [];
   const toggleProduct = (id) => set("productIds", productIds.includes(id) ? productIds.filter((x) => x !== id) : [...productIds, id]);
   const missing = missingPricingFields(asNumbers(pkg));
+  // Active pack whose simulated selling price cannot drive the simulator (display only: validation unchanged).
+  const simIssue = pkg.active ? simulatedSellingPriceIssue(pkg.simulatedSellingPrice) : null;
   const eligibleListed = productIds.filter((id) => pool.find((p) => p.id === id)?.eligible).length;
   const features = Array.isArray(pkg.features) ? pkg.features : [];
   const addFeature = () => {
@@ -89,6 +103,7 @@ function PackageEditor({ pkg, index, errors, saved, onChange, onRemove, pool }) 
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {missing.length > 0 && <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">Incomplet</span>}
+          {simIssue && <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200" data-sim-price-chip={simIssue}>Prix simulé {simIssue === "MISSING" ? "manquant" : "invalide"}</span>}
           {errorCount > 0 && <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-50 text-red-700 border border-red-200">{errorCount} erreur(s)</span>}
           <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border ${pkg.active ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-gray-100 text-gray-600 border-gray-200"}`}>
             {pkg.active ? "Actif" : "Inactif"}
@@ -177,6 +192,22 @@ function PackageEditor({ pkg, index, errors, saved, onChange, onRemove, pool }) 
               </Field>
               <p className="text-xs text-gray-500 self-end">{productIds.length} produit(s) dans ce pack, dont {eligibleListed} proposable(s) maintenant.</p>
             </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Nombre de pièces (quantité physique du pack)" error={e("quantity")}>
+                <input className={inputCls} type="number" min="1" step="1" value={pkg.quantity ?? ""} onChange={(ev) => set("quantity", ev.target.value)} />
+              </Field>
+              <Field label="Prix de vente simulé (MAD) — commandes d’entraînement uniquement" error={e("simulatedSellingPrice")}>
+                <input className={inputCls} type="number" min="0.01" step="0.01" value={pkg.simulatedSellingPrice ?? ""} onChange={(ev) => set("simulatedSellingPrice", ev.target.value)} />
+              </Field>
+            </div>
+            {simIssue && (
+              <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 space-y-1.5" data-sim-price-warning={simIssue}>
+                <p className="font-bold flex items-center gap-1.5"><AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />{SIM_PRICE_WARNING_FR[simIssue]}</p>
+                <p>Tant que ce prix n’est pas renseigné, le simulateur ne peut pas calculer de chiffre d’affaires ni de profit simulés significatifs pour les nouvelles demandes de ce pack : ils s’affichent « — ». Aucun autre prix (prix du pack, prix d’un produit) n’est utilisé à sa place.</p>
+                <p dir="rtl" lang="ar" className="text-start">{SIM_PRICE_WARNING_AR[simIssue]} ما دام هذا الثمن غير محدد، لا يستطيع المحاكي حساب رقم معاملات أو أرباح تجريبية ذات معنى للطلبات الجديدة لهذه الباقة: تظهر «—». لا يُستعمل أي ثمن آخر مكانه (ثمن الباقة أو ثمن منتج).</p>
+              </div>
+            )}
+            <p className="text-[11px] text-gray-500">Figés dans chaque nouvelle demande. Le prix de vente simulé sert uniquement aux chiffres d’entraînement (frais simulés fixes : 65 MAD par commande) ; aucun montant réel n’est crédité.</p>
             <FieldError code={e("productIds")} />
             {pool.length === 0 && <p className="text-xs text-gray-500">Ajoutez d’abord des produits dans l’onglet « Catalogue produits ».</p>}
             <div className="grid gap-2 sm:grid-cols-2">

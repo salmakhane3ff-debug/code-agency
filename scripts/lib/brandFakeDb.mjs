@@ -282,6 +282,11 @@ export function makeBrandFakeDb({ affiliates = [], settings = {}, products = [],
         return sortRows(T.brandSimHour.filter(where('brandSimHour', w)), orderBy).map((r) => pick(r, select));
       },
       async count({ where: w } = {}) { return T.brandSimHour.filter(where('brandSimHour', w)).length; },
+      /** Like Prisma: { _sum: { field: total } }, null when no row matches. */
+      async aggregate({ where: w, _sum = {} } = {}) {
+        const rows = T.brandSimHour.filter(where('brandSimHour', w));
+        return { _sum: Object.fromEntries(Object.keys(_sum).filter((k) => _sum[k]).map((k) => [k, rows.length ? rows.reduce((a, r) => a + (Number(r[k]) || 0), 0) : null])) };
+      },
       async createMany({ data, skipDuplicates }) {
         let count = 0;
         for (const d of data) {
