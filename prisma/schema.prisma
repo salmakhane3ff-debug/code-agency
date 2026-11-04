@@ -328,6 +328,9 @@ model Affiliate {
   // "Create Your Own Brand" training simulator (additive back-relation — no DB column).
   brandAccesses        BrandAccess[]
   brandRequestAuthorizations BrandRequestAuthorization[]
+  // Affiliate Recruiter System (additive back-relations — no DB column).
+  recruiterLink        RecruiterAffiliateLink?
+  recruiterRewards     RecruiterRewardLedger[]
 
   @@index([username])
   @@index([isActive])
@@ -1887,4 +1890,110 @@ model PaymentProofEvent {
 
   @@index([proofId, at])
   @@map("payment_proof_events")
+}
+
+// ── Affiliate Recruiter System ─────────────────────────────────────────────────
+// Recruiters are a SEPARATE principal (own table, own login, JWT type "recruiter"),
+// never a User role and never an Affiliate. A recruiter CREATES affiliate accounts
+// (inactive / pending verification) and links each one to the affiliate who brought
+// them (affiliates.parentId). Existing affiliates can never be assigned to a recruiter.
+// Nothing here changes an existing affiliates column, balance, commission, reward or payout.
+
+/// A recruiter account, created and disabled by an admin.
+model Recruiter {
+  id                  String                     @id @default(uuid())
+  username            String                     @unique
+  name                String
+  phone               String?                    @unique
+  passwordHash        String
+  isActive            Boolean                    @default(true)
+  canCreateAffiliates Boolean                    @default(true)
+  canViewOrders       Boolean                    @default(true)
+  disabledAt          DateTime?
+  disabledBy          String?
+  disabledReason      String?
+  lastLoginAt         DateTime?
+  createdBy           String
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
+  affiliateLinks      RecruiterAffiliateLink[]
+  rewards             RecruiterRewardLedger[]
+  auditLogs           RecruiterAuditLog[]
+
+  @@index([isActive])
+  @@map("recruiters")
+}
+
+/// The recruiter who CREATED an affiliate (one per affiliate). Only insertable in the
+/// same transaction that creates that (inactive) affiliate — so an existing affiliate
+/// can never be assigned — and immutable afterwards (DB triggers).
+model RecruiterAffiliateLink {
+  affiliateId String    @id
+  recruiterId String
+  createdBy   String
+  createdAt   DateTime  @default(now())
+  affiliate   Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+  recruiter   Recruiter @relation(fields: [recruiterId], references: [id], onDelete: Restrict)
+
+  @@index([recruiterId, createdAt])
+  @@map("recruiter_affiliate_links")
+}
+
+/// Append-only reward ledger of recruiters, in MAD only (integer cents) — completely
+/// separate from affiliate balances, commissions, reward points and payouts.
+/// One RECRUIT_REWARD (and at most one REVERSAL) per affiliate; idempotencyKey unique.
+model RecruiterRewardLedger {
+  id              String     @id @default(uuid())
+  seq             BigInt     @unique @default(autoincrement())
+  recruiterId     String
+  affiliateId     String?
+  type            String // RECRUIT_REWARD | REVERSAL | ADMIN_ADJUSTMENT
+  amountCents     Int // MAD cents (1500 = 15.00 MAD)
+  idempotencyKey  String     @unique
+  reason          String?
+  actorType       String // SYSTEM | ADMIN
+  actorId         String?
+  settingsVersion Int?
+  createdAt       DateTime   @default(now())
+  recruiter       Recruiter  @relation(fields: [recruiterId], references: [id], onDelete: Restrict)
+  affiliate       Affiliate? @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+
+  @@index([recruiterId, createdAt])
+  @@index([affiliateId])
+  @@map("recruiter_reward_ledger")
+}
+
+/// Append-only audit log of the recruiter system (recruiter, admin and system actions).
+model RecruiterAuditLog {
+  id          String     @id @default(uuid())
+  seq         BigInt     @unique @default(autoincrement())
+  recruiterId String?
+  actorType   String // RECRUITER | ADMIN | SYSTEM
+  actorId     String
+  action      String
+  entityType  String?
+  entityId    String?
+  details     Json?
+  createdAt   DateTime   @default(now())
+  recruiter   Recruiter? @relation(fields: [recruiterId], references: [id], onDelete: Restrict)
+
+  @@index([recruiterId, createdAt])
+  @@index([entityType, entityId])
+  @@map("recruiter_audit_log")
+}
+
+/// Append-only, consecutive versions of the recruiter settings set by the admin: the
+/// reward amount (MAD cents) and the number of real delivered orders required (default
+/// 10). A reward is due when the affiliate created by the recruiter has that many real
+/// delivered orders AND an APPROVED CIN (existing IdentityVerification). Current =
+/// highest version; a reward row records the version it was computed with.
+model RecruiterSettingsVersion {
+  version           Int      @id
+  enabled           Boolean
+  rewardAmountCents Int
+  minDeliveredSales Int
+  createdBy         String
+  createdAt         DateTime @default(now())
+
+  @@map("recruiter_settings_versions")
 }
