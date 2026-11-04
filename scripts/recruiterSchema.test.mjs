@@ -3,7 +3,7 @@
  * scripts/recruiterSchema.test.mjs
  * ─────────────────────────────────────────────────────────────────────────────
  * Affiliate Recruiter System — Phase 1 (schema + settings rules). No database,
- * no I/O beyond reading repository files and `git show HEAD:…` / `git diff HEAD`.
+ * no I/O beyond reading repository files and `git show <base>:…` / `git diff <base>` (base = ef79c6b, the commit before the recruiter system).
  * Proves:
  *   • recruiterSettings.js: MAD only (cents), parseMadToCents, defaults (rewards OFF,
  *     10 orders), admin input validation (amount required when enabled, 1–100000
@@ -15,7 +15,7 @@
  *   • the data sources: DELIVERED_ORDER_STATUS 'delivered' + isFake = false (docs,
  *     schema), deliveredOrdersCount NOT used; APPROVED is set in src ONLY by
  *     adminApproveIdentity (admin route, withAdminAuth) — never by a login or a
- *     submission; identity / UGC code unchanged versus HEAD
+ *     submission; identity / UGC code unchanged versus the base
  *   • the UGC / timing removal is REAL: no UGC, video, release, jitter, hmac or delay
  *     identifier in recruiterSettings.js, the migration or the recruiter schema section
  *   • the migration only CREATEs its 5 new tables (no ALTER / DROP / UPDATE / DELETE /
@@ -219,8 +219,8 @@ console.log('\n1e. Data sources: real delivered orders (isFake = false) and the 
     loginBody.length > 200 && !/identity|APPROVED/i.test(stripJs(loginBody)) && !/identity|APPROVED/i.test(stripJs(authRoute)) && /loginAffiliate\(/.test(authRoute));
   ok('the affiliate identity route only reads the status / submits (getIdentityStatus, submitIdentity — no admin function)',
     (() => { const r = stripJs(read('src/app/api/affiliate/identity/route.js')); return /submitIdentity/.test(r) && !/adminApproveIdentity|adminRejectIdentity|adminResetIdentity|status:\s*'APPROVED'/.test(r); })());
-  ok('identityService.js, the identity / login routes, affiliateSystemService.js, ugcService.js and ugcStatus.js are unchanged versus HEAD (git diff empty)',
-    git(['diff', 'HEAD', '--', 'src/lib/services/identityService.js', 'src/app/api/admin/identity/route.js', 'src/app/api/affiliate/identity/route.js',
+  ok('identityService.js, the identity / login routes, affiliateSystemService.js, ugcService.js and ugcStatus.js are unchanged versus the base ef79c6b (git diff empty)',
+    git(['diff', 'ef79c6bb1e445c964f915effe558e817844db9f0', '--', 'src/lib/services/identityService.js', 'src/app/api/admin/identity/route.js', 'src/app/api/affiliate/identity/route.js',
       'src/app/api/affiliate/auth/route.js', 'src/lib/services/affiliateSystemService.js', 'src/lib/services/ugcService.js', 'src/lib/ugcStatus.js']) === '');
   ok('recruiterSettings.js has no bank logic (no requireBankDetails / bankName / accountName / rib / bank)', !/requireBankDetails|bankName|accountName|\brib\b|bank/i.test(settingsSrc));
 }
@@ -305,11 +305,11 @@ const NEW_TABLES = ['recruiters', 'recruiter_affiliate_links', 'recruiter_reward
     !/requireBankDetails|requireAccountActive|requireIdentityApproved|bankName|accountName|\brib\b|bank/i.test(sql));
 }
 
-// ── 3. Prisma schema vs HEAD ──────────────────────────────────────────────────
-console.log('\n3. Prisma schema (vs HEAD)');
+// ── 3. Prisma schema vs the pre-recruiter base (ef79c6b) ─────────────────────
+console.log('\n3. Prisma schema (vs pre-recruiter base ef79c6b)');
 {
   const now = read('prisma/schema.prisma');
-  const head = git(['show', 'HEAD:prisma/schema.prisma']);
+  const head = git(['show', 'ef79c6bb1e445c964f915effe558e817844db9f0:prisma/schema.prisma']);
   const blocks = (s) => {
     const out = new Map();
     for (const m of s.matchAll(/^(model|enum)\s+(\w+)\s*\{[\s\S]*?^\}/gm)) out.set(`${m[1]} ${m[2]}`, m[0]);

@@ -81,7 +81,7 @@ export function toRecruiterAuditView(entry, recruiterId) {
 /** Error codes a recruiter may receive (with their own fixed Arabic text, Phase 2+). */
 export const RECRUITER_ERROR_CODES = Object.freeze([
   'UNAUTHORIZED', 'RECRUITER_DISABLED', 'FORBIDDEN', 'NOT_FOUND', 'INVALID_INPUT', 'USERNAME_TAKEN',
-  'PHONE_TAKEN', 'PARENT_NOT_IN_NETWORK', 'RATE_LIMITED',
+  'PHONE_TAKEN', 'PARENT_NOT_IN_NETWORK', 'RATE_LIMITED', 'INVALID_CREDENTIALS',
 ]);
 
 /** Any error → { code } safe for a recruiter (unknown codes become SERVER_ERROR; messages never pass). */

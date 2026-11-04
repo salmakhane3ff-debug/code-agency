@@ -47,7 +47,7 @@ const view = (reward, s = ON, reversal = null) => V.toRecruiterQualificationView
 // ── 0. the removal is real ────────────────────────────────────────────────────
 console.log('\n0. Removed features are gone (exports and code)');
 {
-  ok('exports are exactly the 8 projections / allowlists (no rewardReleaseDay, isRewardReleased, RELEASE_BASE_DAYS, RELEASE_JITTER_DAYS)',
+  ok('exports are exactly the 9 projections / allowlists (the recruiter profile view lives in recruiterProfileView.js; no rewardReleaseDay, isRewardReleased, RELEASE_BASE_DAYS, RELEASE_JITTER_DAYS)',
     eq(Object.keys(V).sort(), ['RECRUITER_ERROR_CODES', 'RECRUITER_REWARD_STATUS', 'RECRUITER_VISIBLE_AUDIT_ACTIONS', 'toRecruiterAuditView', 'toRecruiterError',
       'toRecruiterQualificationView', 'toRecruiterRewardTotals', 'toRecruiterRewardView', 'toRecruiterSettingsView']), Object.keys(V).sort().join(','));
   ok('no exported name of either module mentions release / jitter / delay / hmac / UGC / video',
@@ -212,7 +212,8 @@ console.log('\n6. Errors — code only, never the message');
   ok('unknown / internal codes → { code: "SERVER_ERROR" }', eq(outs[0], { code: 'SERVER_ERROR' }) && eq(outs[1], { code: 'SERVER_ERROR' }));
   ok('allowlisted codes pass but NEVER the message, details, stack or extra keys', eq(outs[2], { code: 'INVALID_INPUT' }) && eq(outs[3], { code: 'FORBIDDEN' }) && eq(outs[4], { code: 'RATE_LIMITED' }));
   ok('every error output is exactly { code } (incl. plain Error, null, undefined, string, number)', outs.every((o) => eq(keys(o), ['code'])) && eq(outs[5], { code: 'SERVER_ERROR' }) && eq(outs[8], { code: 'SERVER_ERROR' }));
-  ok('error allowlist unchanged (9 codes, frozen)', eq([...V.RECRUITER_ERROR_CODES], ['UNAUTHORIZED', 'RECRUITER_DISABLED', 'FORBIDDEN', 'NOT_FOUND', 'INVALID_INPUT', 'USERNAME_TAKEN', 'PHONE_TAKEN', 'PARENT_NOT_IN_NETWORK', 'RATE_LIMITED']) && Object.isFrozen(V.RECRUITER_ERROR_CODES));
+  ok('error allowlist is exactly these 10 codes (Phase 2 adds INVALID_CREDENTIALS for the login), frozen',
+    eq([...V.RECRUITER_ERROR_CODES], ['UNAUTHORIZED', 'RECRUITER_DISABLED', 'FORBIDDEN', 'NOT_FOUND', 'INVALID_INPUT', 'USERNAME_TAKEN', 'PHONE_TAKEN', 'PARENT_NOT_IN_NETWORK', 'RATE_LIMITED', 'INVALID_CREDENTIALS']) && Object.isFrozen(V.RECRUITER_ERROR_CODES));
   ok('no internal gate / unmet reason is a recruiter error code',
     ['REWARDS_DISABLED', 'NO_AMOUNT', 'NOT_LINKED', 'AFFILIATE_NOT_FOUND', 'NOT_ENOUGH_SALES', 'CIN_NOT_APPROVED', 'INVALID_COUNT', 'INVALID_AMOUNT'].every((c) => !V.RECRUITER_ERROR_CODES.includes(c) && eq(E({ code: c }), { code: 'SERVER_ERROR' })));
 }

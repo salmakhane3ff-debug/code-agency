@@ -42,6 +42,10 @@ const INTENTIONALLY_PUBLIC_WRITES = new Set([
   "POST /api/login",
   "POST /api/logout",
   "POST /api/affiliate/auth",
+  // Recruiter login (rate-limited, sets the HttpOnly recruiter_token cookie) and
+  // logout (only clears that cookie; audits when its own token is valid).
+  "POST /api/recruiter/auth",
+  "DELETE /api/recruiter/auth",
 
   // Customer checkout & order creation. createOrder() ignores client prices and
   // resolves every financial value from the database.
@@ -317,7 +321,7 @@ console.log("9) counts:");
   console.log(`     writes=${writes.length}  protected=${writes.length - publicWrites.length}  public=${publicWrites.length}`);
   ok("public writes == allowlist + temporary exceptions",
      publicWrites.length === INTENTIONALLY_PUBLIC_WRITES.size + TEMPORARY_PUBLIC_SECURITY_EXCEPTIONS.size);
-  ok("intentionally-public list is exactly 33", INTENTIONALLY_PUBLIC_WRITES.size === 33);
+  ok("intentionally-public list is exactly 35", INTENTIONALLY_PUBLIC_WRITES.size === 35);
 }
 
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
