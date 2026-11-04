@@ -47,9 +47,9 @@ const view = (reward, s = ON, reversal = null) => V.toRecruiterQualificationView
 // ── 0. the removal is real ────────────────────────────────────────────────────
 console.log('\n0. Removed features are gone (exports and code)');
 {
-  ok('exports are exactly the 9 projections / allowlists (the recruiter profile view lives in recruiterProfileView.js; no rewardReleaseDay, isRewardReleased, RELEASE_BASE_DAYS, RELEASE_JITTER_DAYS)',
-    eq(Object.keys(V).sort(), ['RECRUITER_ERROR_CODES', 'RECRUITER_REWARD_STATUS', 'RECRUITER_VISIBLE_AUDIT_ACTIONS', 'toRecruiterAuditView', 'toRecruiterError',
-      'toRecruiterQualificationView', 'toRecruiterRewardTotals', 'toRecruiterRewardView', 'toRecruiterSettingsView']), Object.keys(V).sort().join(','));
+  ok('exports are exactly the 11 projections / allowlists (Phase 3 adds RECRUITER_FIELD_ERROR_CODES and toRecruiterNetworkAffiliateView; the recruiter profile view lives in recruiterProfileView.js; no rewardReleaseDay, isRewardReleased, RELEASE_BASE_DAYS, RELEASE_JITTER_DAYS)',
+    eq(Object.keys(V).sort(), ['RECRUITER_ERROR_CODES', 'RECRUITER_FIELD_ERROR_CODES', 'RECRUITER_REWARD_STATUS', 'RECRUITER_VISIBLE_AUDIT_ACTIONS', 'toRecruiterAuditView', 'toRecruiterError',
+      'toRecruiterNetworkAffiliateView', 'toRecruiterQualificationView', 'toRecruiterRewardTotals', 'toRecruiterRewardView', 'toRecruiterSettingsView']), Object.keys(V).sort().join(','));
   ok('no exported name of either module mentions release / jitter / delay / hmac / UGC / video',
     [...Object.keys(V), ...Object.keys(R)].every((k) => !REMOVED.test(k)));
   const code = stripJs(read('src/lib/recruiterVisibility.js'));
@@ -212,8 +212,8 @@ console.log('\n6. Errors — code only, never the message');
   ok('unknown / internal codes → { code: "SERVER_ERROR" }', eq(outs[0], { code: 'SERVER_ERROR' }) && eq(outs[1], { code: 'SERVER_ERROR' }));
   ok('allowlisted codes pass but NEVER the message, details, stack or extra keys', eq(outs[2], { code: 'INVALID_INPUT' }) && eq(outs[3], { code: 'FORBIDDEN' }) && eq(outs[4], { code: 'RATE_LIMITED' }));
   ok('every error output is exactly { code } (incl. plain Error, null, undefined, string, number)', outs.every((o) => eq(keys(o), ['code'])) && eq(outs[5], { code: 'SERVER_ERROR' }) && eq(outs[8], { code: 'SERVER_ERROR' }));
-  ok('error allowlist is exactly these 10 codes (Phase 2 adds INVALID_CREDENTIALS for the login), frozen',
-    eq([...V.RECRUITER_ERROR_CODES], ['UNAUTHORIZED', 'RECRUITER_DISABLED', 'FORBIDDEN', 'NOT_FOUND', 'INVALID_INPUT', 'USERNAME_TAKEN', 'PHONE_TAKEN', 'PARENT_NOT_IN_NETWORK', 'RATE_LIMITED', 'INVALID_CREDENTIALS']) && Object.isFrozen(V.RECRUITER_ERROR_CODES));
+  ok('error allowlist is exactly these 11 codes (Phase 2 adds INVALID_CREDENTIALS for the login, Phase 3 IDEMPOTENCY_CONFLICT), frozen',
+    eq([...V.RECRUITER_ERROR_CODES], ['UNAUTHORIZED', 'RECRUITER_DISABLED', 'FORBIDDEN', 'NOT_FOUND', 'INVALID_INPUT', 'USERNAME_TAKEN', 'PHONE_TAKEN', 'PARENT_NOT_IN_NETWORK', 'RATE_LIMITED', 'INVALID_CREDENTIALS', 'IDEMPOTENCY_CONFLICT']) && Object.isFrozen(V.RECRUITER_ERROR_CODES));
   ok('no internal gate / unmet reason is a recruiter error code',
     ['REWARDS_DISABLED', 'NO_AMOUNT', 'NOT_LINKED', 'AFFILIATE_NOT_FOUND', 'NOT_ENOUGH_SALES', 'CIN_NOT_APPROVED', 'INVALID_COUNT', 'INVALID_AMOUNT'].every((c) => !V.RECRUITER_ERROR_CODES.includes(c) && eq(E({ code: c }), { code: 'SERVER_ERROR' })));
 }
@@ -240,6 +240,54 @@ console.log('\n7. Exact allowlisted key sets (hostile input)');
     && eq(V.toRecruiterRewardView(evil), { type: 'RECRUIT_REWARD', amountCents: 100, currency: 'MAD', affiliateId: 'n9', createdAt: '2026-11-04T00:00:00.000Z' })
     && V.toRecruiterSettingsView(evil).requiredDeliveredOrders === 3 && V.toRecruiterRewardTotals([evil, evil]).earnedCents === 200);
   ok('no global prototype pollution after all projections', !('polluted' in {}) && !('x' in {}));
+}
+
+// ── 7b. Phase 3: field errors and the network affiliate view ─────────────────
+console.log('\n7b. Phase 3 — allowlisted field errors and the network affiliate view');
+{
+  const E = V.toRecruiterError;
+  const F = V.RECRUITER_FIELD_ERROR_CODES;
+  ok('field-code allowlist: exactly 7 fields with their codes, deeply frozen',
+    eq(Object.keys(F).sort(), ['body', 'name', 'parentId', 'password', 'phone', 'requestId', 'username'])
+    && eq(F.username, ['INVALID_USERNAME']) && eq(F.name, ['INVALID_NAME']) && eq(F.password, ['INVALID_PASSWORD']) && eq(F.phone, ['INVALID_PHONE'])
+    && eq(F.parentId, ['INVALID_PARENT']) && eq(F.requestId, ['INVALID_REQUEST_ID']) && eq(F.body, ['UNKNOWN_FIELD'])
+    && Object.isFrozen(F) && Object.values(F).every(Object.isFrozen));
+  const inv = (fields) => Object.assign(new Error('x'), { code: 'INVALID_INPUT', fields });
+  ok('INVALID_INPUT with allowlisted fields → { code, fields } with exactly those fields',
+    eq(E(inv({ username: 'INVALID_USERNAME', password: 'INVALID_PASSWORD' })), { code: 'INVALID_INPUT', fields: { username: 'INVALID_USERNAME', password: 'INVALID_PASSWORD' } }));
+  ok('unknown fields and codes are dropped (wrong code for a field, foreign field, non-string value)',
+    eq(E(inv({ username: 'INVALID_NAME', email: 'INVALID_EMAIL', isActive: 'UNKNOWN_FIELD', name: 42, phone: ['INVALID_PHONE'], parentId: 'INVALID_PARENT' })), { code: 'INVALID_INPUT', fields: { parentId: 'INVALID_PARENT' } }));
+  ok('INVALID_INPUT whose fields are all dropped (or not an object) → exactly { code }',
+    eq(E(inv({ x: 'y' })), { code: 'INVALID_INPUT' }) && eq(E(inv('INVALID_NAME')), { code: 'INVALID_INPUT' }) && eq(E(inv(null)), { code: 'INVALID_INPUT' }) && eq(E(inv({})), { code: 'INVALID_INPUT' }));
+  ok('any other code never carries fields (USERNAME_TAKEN / PARENT_NOT_IN_NETWORK / unknown)',
+    eq(E({ code: 'USERNAME_TAKEN', fields: { username: 'INVALID_USERNAME' } }), { code: 'USERNAME_TAKEN' })
+    && eq(E({ code: 'PARENT_NOT_IN_NETWORK', fields: { parentId: 'INVALID_PARENT' } }), { code: 'PARENT_NOT_IN_NETWORK' })
+    && eq(E({ code: 'P2002', fields: { username: 'INVALID_USERNAME' } }), { code: 'SERVER_ERROR' }) && eq(E({ code: 'IDEMPOTENCY_CONFLICT' }), { code: 'IDEMPOTENCY_CONFLICT' }));
+  const evilFields = JSON.parse('{"code":"INVALID_INPUT","message":"m","fields":{"__proto__":{"polluted":"yes"},"constructor":{"prototype":{"x":"y"}},"username":"INVALID_USERNAME","toString":"INVALID_NAME"}}');
+  const ef = E(evilFields);
+  ok('hostile fields (__proto__ / constructor / toString): only the allowlisted field passes; plain objects; no pollution',
+    eq(ef, { code: 'INVALID_INPUT', fields: { username: 'INVALID_USERNAME' } }) && Object.getPrototypeOf(ef.fields) === Object.prototype
+    && !('polluted' in ef.fields) && !('polluted' in {}) && !('x' in {}) && !Object.prototype.hasOwnProperty.call(ef, 'message'), JSON.stringify(ef));
+  const inheritedOnly = Object.assign(new Error('x'), { code: 'INVALID_INPUT', fields: Object.create({ username: 'INVALID_USERNAME' }) });
+  ok('an inherited (prototype) field is never read — own properties only', eq(E(inheritedOnly), { code: 'INVALID_INPUT' }));
+
+  const N = V.toRecruiterNetworkAffiliateView;
+  const row = { id: 'a1', username: 'amina', name: 'Amina', parentId: 'p1', createdAt: new Date('2026-11-05T10:00:00.000Z'),
+    password: '$2a$12$hash', phone: '+212600000000', isActive: false, commissionRate: 0.5, bankName: 'b', rib: 'r', totalCommission: 9, bonusBalance: 3 };
+  const v1 = N(row, new Set(['p1', 'a1']));
+  ok('network view: exactly id, username, name, parentId, createdAt (ISO)',
+    eq(keys(v1), ['createdAt', 'id', 'name', 'parentId', 'username']) && eq(v1, { id: 'a1', username: 'amina', name: 'Amina', parentId: 'p1', createdAt: '2026-11-05T10:00:00.000Z' }), JSON.stringify(v1));
+  ok('network view: a parentId outside the network ids → null (never another network\'s id)',
+    N(row, new Set(['a1'])).parentId === null && N(row, new Set()).parentId === null && N(row, undefined).parentId === null && N(row, ['p1']).parentId === null && N(row, { has: () => true }).parentId === null);
+  ok('network view: root (no parent) → parentId null', N({ ...row, parentId: null }, new Set([null, 'a1'])).parentId === null);
+  const evilRow = JSON.parse('{"__proto__":{"polluted":"yes"},"id":7,"username":["x"],"name":{"a":1},"parentId":"p1","createdAt":"not a date","password":"h","isActive":true,"constructor":{"prototype":{"x":"y"}}}');
+  const v2 = N(evilRow, new Set(['p1']));
+  ok('network view with hostile input: non-strings → null, bad date → null, exactly 5 keys, no pollution',
+    eq(v2, { id: null, username: null, name: null, parentId: 'p1', createdAt: null }) && Object.getPrototypeOf(v2) === Object.prototype && !('polluted' in {}) && !('x' in {}), JSON.stringify(v2));
+  ok('network view of null / undefined → all-null 5 keys', eq(N(null, new Set()), { id: null, username: null, name: null, parentId: null, createdAt: null }) && eq(keys(N(undefined)), ['createdAt', 'id', 'name', 'parentId', 'username']));
+  ok('network view never contains password / phone / isActive / any amount, for any input',
+    [v1, v2, N(row, new Set(['p1']))].every((o) => ['password', 'phone', 'isActive', 'commissionRate', 'bankName', 'rib', 'totalCommission', 'bonusBalance'].every((k) => !Object.prototype.hasOwnProperty.call(o, k))));
+  ok('network view takes (row, networkIds) only — 2 parameters, pure', N.length === 2);
 }
 
 // ── 8. static checks ──────────────────────────────────────────────────────────

@@ -81,11 +81,49 @@ export function toRecruiterAuditView(entry, recruiterId) {
 /** Error codes a recruiter may receive (with their own fixed Arabic text, Phase 2+). */
 export const RECRUITER_ERROR_CODES = Object.freeze([
   'UNAUTHORIZED', 'RECRUITER_DISABLED', 'FORBIDDEN', 'NOT_FOUND', 'INVALID_INPUT', 'USERNAME_TAKEN',
-  'PHONE_TAKEN', 'PARENT_NOT_IN_NETWORK', 'RATE_LIMITED', 'INVALID_CREDENTIALS',
+  'PHONE_TAKEN', 'PARENT_NOT_IN_NETWORK', 'RATE_LIMITED', 'INVALID_CREDENTIALS', 'IDEMPOTENCY_CONFLICT',
 ]);
 
-/** Any error → { code } safe for a recruiter (unknown codes become SERVER_ERROR; messages never pass). */
+/** Per-field validation codes of the affiliate-creation form (Phase 3): field → allowed codes. */
+export const RECRUITER_FIELD_ERROR_CODES = Object.freeze({
+  username: Object.freeze(['INVALID_USERNAME']),
+  name: Object.freeze(['INVALID_NAME']),
+  password: Object.freeze(['INVALID_PASSWORD']),
+  phone: Object.freeze(['INVALID_PHONE']),
+  parentId: Object.freeze(['INVALID_PARENT']),
+  requestId: Object.freeze(['INVALID_REQUEST_ID']),
+  body: Object.freeze(['UNKNOWN_FIELD']),
+});
+
+/**
+ * Any error → { code } safe for a recruiter (unknown codes become SERVER_ERROR; messages never pass).
+ * INVALID_INPUT may carry `fields` — only allowlisted field names with allowlisted codes.
+ */
 export function toRecruiterError(err) {
   const code = RECRUITER_ERROR_CODES.includes(err?.code) ? err.code : 'SERVER_ERROR';
-  return { code };
+  if (code !== 'INVALID_INPUT' || !err?.fields || typeof err.fields !== 'object') return { code };
+  const fields = {};
+  for (const field of Object.keys(RECRUITER_FIELD_ERROR_CODES)) {
+    const v = Object.prototype.hasOwnProperty.call(err.fields, field) ? err.fields[field] : undefined;
+    if (typeof v === 'string' && RECRUITER_FIELD_ERROR_CODES[field].includes(v)) fields[field] = v;
+  }
+  return Object.keys(fields).length ? { code, fields } : { code };
+}
+
+/**
+ * Recruiter-facing view of an affiliate of THEIR OWN network (Phase 3: parent selector and
+ * creation result). Identity only — never the password hash, phone, activation, bank,
+ * verification or any amount. `networkIds` = ids linked to this recruiter: a parentId outside
+ * it is never shown (null). Filtering rows by recruiter is the caller's job.
+ */
+export function toRecruiterNetworkAffiliateView(row, networkIds) {
+  const at = row?.createdAt ? new Date(row.createdAt) : null;
+  const inNetwork = (id) => typeof id === 'string' && networkIds instanceof Set && networkIds.has(id);
+  return {
+    id: typeof row?.id === 'string' ? row.id : null,
+    username: typeof row?.username === 'string' ? row.username : null,
+    name: typeof row?.name === 'string' ? row.name : null,
+    parentId: inNetwork(row?.parentId) ? row.parentId : null,
+    createdAt: at && Number.isFinite(at.getTime()) ? at.toISOString() : null,
+  };
 }

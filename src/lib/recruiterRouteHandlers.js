@@ -2,6 +2,7 @@
  * src/lib/recruiterRouteHandlers.js
  * ─────────────────────────────────────────────────────────────────────────────
  * HTTP bodies of the Affiliate Recruiter System, Phase 2 (accounts + login).
+ * (Phase 3 handlers live in recruiterAffiliateRouteHandlers.js and reuse the helpers below.)
  * The route files only wrap them with withAdminAuth / withRecruiterAuth; tests
  * inject a fake db, clock and rate limiter.
  *
@@ -26,7 +27,7 @@ import { RECRUITER_COOKIE, readRecruiterToken } from './middleware/withRecruiter
 export const RECRUITER_COOKIE_MAX_AGE = 7 * 24 * 3600; // = JWT lifetime (authService: 7d)
 
 const noStore = { 'Cache-Control': 'no-store' };
-const json = (body, status = 200, headers = {}) => Response.json(body, { status, headers: { ...noStore, ...headers } });
+export const json = (body, status = 200, headers = {}) => Response.json(body, { status, headers: { ...noStore, ...headers } });
 
 function cookieHeader(value, maxAge) {
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
@@ -35,13 +36,14 @@ function cookieHeader(value, maxAge) {
 
 const RECRUITER_STATUS = {
   UNAUTHORIZED: 401, INVALID_CREDENTIALS: 401, RECRUITER_DISABLED: 403, FORBIDDEN: 403, NOT_FOUND: 404,
-  INVALID_INPUT: 400, RATE_LIMITED: 429,
+  INVALID_INPUT: 400, PARENT_NOT_IN_NETWORK: 400, USERNAME_TAKEN: 409, PHONE_TAKEN: 409, IDEMPOTENCY_CONFLICT: 409,
+  RATE_LIMITED: 429,
 };
-/** Recruiter-facing error: { code } only (allowlisted by toRecruiterError). */
-function recruiterErrorResponse(e, toRecruiterError = defaultToRecruiterError) {
-  const { code } = toRecruiterError(e);
-  if (code === 'SERVER_ERROR') console.error('[recruiter]', e?.code ?? e);
-  return json({ code }, RECRUITER_STATUS[code] ?? 500);
+/** Recruiter-facing error: { code, fields? } only (allowlisted by toRecruiterError). */
+export function recruiterErrorResponse(e, toRecruiterError = defaultToRecruiterError) {
+  const body = toRecruiterError(e);
+  if (body.code === 'SERVER_ERROR') console.error('[recruiter]', e?.code ?? e);
+  return json(body, RECRUITER_STATUS[body.code] ?? 500);
 }
 
 const ADMIN_ERRORS = {
