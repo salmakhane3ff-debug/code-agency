@@ -49,6 +49,9 @@ Every recruiter-facing endpoint, page payload, statistic and error MUST be built
 | Audit entry | `toRecruiterAuditView` | own allowlisted actions only, else `null` |
 | Error | `toRecruiterError` | `{ code }` from the allowlist, else `SERVER_ERROR` (INVALID_INPUT may add allowlisted `fields`) |
 | Affiliate of their own network (Phase 3) | `toRecruiterNetworkAffiliateView` | id, username, name, parentId (only if in their network), createdAt |
+| Network tree node (Phase 4) | `toRecruiterNetworkNodeView` | id, username, name, level, account status, identity STATUS, children / descendants counts, order COUNTS (real and fake separate) |
+| Breadcrumb (Phase 4) | `toRecruiterNetworkPathView` | id, username, name, level |
+| Network statistics (Phase 4) | `toRecruiterNetworkStatsView` | totals, per-level counts, identity status counts, order counts (real and fake separate) |
 
 Forbidden in recruiter-facing code: returning raw rows of `recruiter_settings_versions`,
 `recruiter_reward_ledger` or `recruiter_audit_log`; reading any UGC table or field for recruiter
@@ -84,3 +87,30 @@ as active on every request). Service: `src/lib/services/recruiterAffiliateServic
   `recruiterAffiliateLink.create` exists only in this service (enforced by a test).
 - **Abuse protection.** 20 creations per minute per recruiter and IP (`429 RATE_LIMITED`); no total cap.
 - **Not in Phase 3:** the network tree, statistics and rewards UI (Phase 4).
+
+## 5. Phase 4 — network tree and statistics (read-only)
+
+`GET /api/recruiter/network/nodes?parentId=&cursor=&limit=&view=unplaced` and `GET /api/recruiter/network/stats?rootId=`
+(both `withRecruiterAuth`, account re-checked as active, 120 requests / minute per recruiter and IP).
+Service: `src/lib/services/recruiterNetworkService.js`. Nothing in Phase 4 writes anything.
+
+- **Network = ownership.** Only affiliates linked to the recruiter (`recruiter_affiliate_links`) are part of it; the
+  hierarchy is the existing `affiliates.parentId`, unlimited depth. A linked affiliate whose parent is empty or not
+  linked to the same recruiter is a network root (level 1). An unlinked affiliate (e.g. created by an admin under a
+  network member) is never shown or counted. Any `parentId` / `rootId` outside the network → `404 NOT_FOUND`.
+- **One recursive query.** One `WITH RECURSIVE` query walks the network from its roots (index on `parentId`, links
+  primary key); everything else is batched by 5000 ids (orders `groupBy`, identity status `findMany`, names of the
+  page only): the number of queries does not grow with the depth or the number of nodes on a page (no N+1).
+- **Malformed data.** Each affiliate has one `parentId`, so a walk from the roots can never loop; the depth is also
+  capped by the network size. Members no root reaches (a parent cycle) are counted as `unplaced` and listed separately
+  (`view=unplaced`), never placed in the tree.
+- **Orders.** Counts only, by bucket of the existing `AffiliateOrder.status`: delivered (exactly `delivered`, the
+  reward rule; any other spelling is `other`), pending, confirmed, shipped,
+  cancelled (`cancelled` / `canceled`), returned (`returned` / `refused`), other. Real (`isFake = false`) and fake
+  (`isFake = true`) are ALWAYS reported separately; a fake order is never a real delivered sale. No customer name,
+  phone, address, amount or any order field is returned. The order lifecycle is unchanged.
+- **Identity.** The status only (APPROVED / PENDING / REJECTED / NONE when no row); never a document or file key.
+- **Statistics.** Totals (affiliates, direct, active / inactive, deepest level, unplaced), identity counts, orders
+  real / fake by bucket, and the same per level; per affiliate on the tree nodes. `rootId` scopes them to one
+  sub-network (levels relative to it: 1 = its direct affiliates).
+- **Not in Phase 4:** rewards payout / withdrawal, reward rule changes, affiliate creation or re-parenting.

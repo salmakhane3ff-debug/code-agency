@@ -1,7 +1,8 @@
 "use client";
 /**
  * /recruiter — recruiter dashboard (Phase 2: account information + menu skeleton;
- * Phase 3: "إضافة أفلييت جديد" links to /recruiter/affiliates/new).
+ * Phase 3: "إضافة أفلييت جديد" links to /recruiter/affiliates/new; Phase 4: the network
+ * tree /recruiter/network and its statistics / order tracking /recruiter/network/stats).
  * Arabic, RTL. Data comes ONLY from GET /api/recruiter/me (toRecruiterProfileView);
  * 401 / 403 → back to the login page. The other sections arrive in later phases and
  * are shown disabled ("قريباً").
@@ -10,18 +11,18 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  Home, Users, UserPlus, GitBranch, ShieldCheck, PackageCheck, Gift, History, LogOut, Menu, X, UserCog,
+  Home, Users, UserPlus, GitBranch, ShieldCheck, PackageCheck, Gift, History, LogOut, Menu, X, UserCog, BarChart3,
 } from "lucide-react";
 import { toRecruiterError } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel } from "./errorLabels";
 
 const SECTIONS = [
   { id: "home", label: "الرئيسية والإحصائيات", Icon: Home, active: true },
-  { id: "network", label: "شبكة الأفلييت ديالي", Icon: Users },
+  { id: "network", label: "شبكة الأفلييت ديالي", Icon: Users, href: "/recruiter/network" },
   { id: "add", label: "إضافة أفلييت جديد", Icon: UserPlus, href: "/recruiter/affiliates/new" },
-  { id: "tree", label: "شجرة المستويات", Icon: GitBranch },
+  { id: "tree", label: "شجرة المستويات", Icon: GitBranch, href: "/recruiter/network" },
   { id: "verification", label: "طلبات التحقق", Icon: ShieldCheck },
-  { id: "orders", label: "الطلبات المسلّمة وغير المسلّمة", Icon: PackageCheck },
+  { id: "orders", label: "الطلبات المسلّمة وغير المسلّمة", Icon: PackageCheck, href: "/recruiter/network/stats" },
   { id: "rewards", label: "مكافآتي", Icon: Gift },
   { id: "log", label: "سجل العمليات", Icon: History },
 ];
@@ -190,8 +191,27 @@ export default function RecruiterDashboardPage() {
             </section>
           )}
 
+          <section className="grid grid-cols-1 sm:grid-cols-2 gap-4" data-network-cta>
+            <Link href="/recruiter/network" data-network-link
+              className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex items-start gap-3 hover:border-emerald-300 min-w-0">
+              <GitBranch className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" aria-hidden="true" />
+              <span className="min-w-0">
+                <span className="block text-base font-bold">شبكتي</span>
+                <span className="block text-sm text-slate-500 mt-0.5">شجرة الأفلييت ديالك بجميع المستويات.</span>
+              </span>
+            </Link>
+            <Link href="/recruiter/network/stats" data-stats-link
+              className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex items-start gap-3 hover:border-emerald-300 min-w-0">
+              <BarChart3 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" aria-hidden="true" />
+              <span className="min-w-0">
+                <span className="block text-base font-bold">الإحصائيات وتتبّع الطلبات</span>
+                <span className="block text-sm text-slate-500 mt-0.5">الأفلييت حسب المستوى، التحقق، والطلبات الحقيقية والتجريبية.</span>
+              </span>
+            </Link>
+          </section>
+
           <section className="bg-white rounded-2xl border border-dashed border-slate-300 p-5 text-sm text-slate-600" data-coming-soon>
-            باقي الأقسام (الشبكة، الطلبات، المكافآت، السجل) ستكون متاحة قريباً.
+            باقي الأقسام (طلبات التحقق، المكافآت، السجل) ستكون متاحة قريباً.
           </section>
         </main>
       </div>

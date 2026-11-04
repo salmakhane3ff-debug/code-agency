@@ -9,6 +9,14 @@
  *   Phase 3 ({ phase3: true }): adds `affiliate` (create / findUnique / findFirst —
  *                       NO update / upsert: any such call throws), `recruiterAffiliateLink`
  *                       and `$queryRaw` (only the recruiter row lock statement).
+ *   Phase 4 ({ phase4: true }, implies phase 3): READ-ONLY network reads — `affiliate.findMany`
+ *                       (id IN + select), `recruiterAffiliateLink.count`, `affiliateOrder.groupBy`
+ *                       (counts only: by ⊆ affiliateId/status/isFake, `_count._all`; no amount
+ *                       aggregate, no findMany, no write), `identityVerification.findMany`
+ *                       (select ⊆ affiliateId/status — a document field or a write throws), and the
+ *                       `/* recruiter-network-tree *\/` recursive query, emulated row for row
+ *                       (roots, linked children only, depth < bound). `_queryCount()` = number of
+ *                       database calls so far (every model call and every raw query).
  *
  * Mirrors the migration's guarantees: unique username / phone (P2002 with meta.target),
  * the recruiters CHECKs (username format, name length, bcrypt-only passwordHash,
@@ -96,8 +104,9 @@ function matchScalar(v, cond) {
   return true;
 }
 
-export function makeRecruiterFakeDb({ failAuditCreate = false, phase3 = false, failOnce = {}, hooks = {} } = {}) {
-  const T = { recruiter: [], recruiterAuditLog: [], affiliate: [], recruiterAffiliateLink: [] };
+export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In = false, phase4 = false, failOnce = {}, hooks = {} } = {}) {
+  const phase3 = phase3In || phase4;
+  const T = { recruiter: [], recruiterAuditLog: [], affiliate: [], recruiterAffiliateLink: [], affiliateOrder: [], identityVerification: [] };
   let seq = 0;
   let txSeq = 0;
   const log = [];
@@ -263,6 +272,18 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3 = false, f
   for (const op of ['update', 'updateMany', 'upsert', 'delete', 'deleteMany', 'createMany', 'findMany', 'count', 'groupBy']) {
     affiliate[op] = async () => { throw new Error(`fake db: affiliate.${op} is not allowed in recruiter code`); };
   }
+  if (phase4) {
+    // Phase 4: names of a page of nodes (id IN …), never a sensitive column.
+    const AFF_READ = new Set(['id', 'username', 'name']);
+    affiliate.findMany = async ({ where, select } = {}) => {
+      await before('affiliate', 'findMany', { where });
+      const keys = Object.keys(where || {});
+      if (keys.length !== 1 || keys[0] !== 'id' || !Array.isArray(where.id?.in)) throw new Error(`fake affiliate.findMany: unsupported where ${JSON.stringify(where)}`);
+      if (!select || !Object.keys(select).every((k) => AFF_READ.has(k))) throw new Error(`fake affiliate.findMany: select must be a subset of id/username/name (got ${JSON.stringify(select)})`);
+      const wanted = new Set(where.id.in);
+      return rows('affiliate').filter((r) => wanted.has(r.id)).map((r) => pick(r, select));
+    };
+  }
 
   const linkMatch = (l, where) => Object.entries(where || {}).every(([k, v]) => {
     if (k === 'affiliate') {
@@ -321,6 +342,96 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3 = false, f
   for (const op of ['update', 'updateMany', 'upsert', 'delete', 'deleteMany']) {
     recruiterAffiliateLink[op] = async () => { throw triggerErr('recruiter_affiliate_links is append-only'); };
   }
+  if (phase4) {
+    recruiterAffiliateLink.count = async ({ where } = {}) => {
+      await before('recruiterAffiliateLink', 'count', { where });
+      return rows('recruiterAffiliateLink').filter((l) => linkMatch(l, where)).length;
+    };
+  }
+
+  // ── Phase 4 models (read-only) ──────────────────────────────────────────────
+  const ORDER_BY = new Set(['affiliateId', 'status', 'isFake']);
+  const affiliateOrder = {
+    async groupBy(args = {}) {
+      await before('affiliateOrder', 'groupBy', { where: args.where });
+      const { by, where, _count, ...rest } = args;
+      if (Object.keys(rest).length) throw new Error(`fake affiliateOrder.groupBy: only by / where / _count are allowed (got ${Object.keys(rest).join(',')}) — no amount aggregate`);
+      if (!Array.isArray(by) || !by.length || !by.every((k) => ORDER_BY.has(k))) throw new Error(`fake affiliateOrder.groupBy: by must be a subset of affiliateId/status/isFake (got ${JSON.stringify(by)})`);
+      if (!_count || Object.keys(_count).join() !== '_all' || _count._all !== true) throw new Error('fake affiliateOrder.groupBy: only _count: { _all: true }');
+      const wk = Object.keys(where || {});
+      if (wk.length !== 1 || wk[0] !== 'affiliateId' || !Array.isArray(where.affiliateId?.in)) throw new Error(`fake affiliateOrder.groupBy: unsupported where ${JSON.stringify(where)}`);
+      const wanted = new Set(where.affiliateId.in);
+      const groups = new Map();
+      for (const o of rows('affiliateOrder')) {
+        if (!wanted.has(o.affiliateId)) continue;
+        const key = JSON.stringify(by.map((k) => o[k]));
+        if (!groups.has(key)) groups.set(key, { ...Object.fromEntries(by.map((k) => [k, o[k]])), _count: { _all: 0 } });
+        groups.get(key)._count._all += 1;
+      }
+      return [...groups.values()];
+    },
+  };
+  for (const op of ['findMany', 'findFirst', 'findUnique', 'count', 'aggregate', 'create', 'createMany', 'update', 'updateMany', 'upsert', 'delete', 'deleteMany']) {
+    affiliateOrder[op] = async () => { throw new Error(`fake db: affiliateOrder.${op} is not allowed in recruiter code (counts via groupBy only)`); };
+  }
+  const IDV_READ = new Set(['affiliateId', 'status']);
+  const identityVerification = {
+    async findMany({ where, select, ...rest } = {}) {
+      await before('identityVerification', 'findMany', { where });
+      if (Object.keys(rest).length) throw new Error(`fake identityVerification.findMany: unsupported args ${Object.keys(rest).join(',')}`);
+      if (!select || !Object.keys(select).length || !Object.keys(select).every((k) => IDV_READ.has(k))) {
+        throw new Error(`fake identityVerification.findMany: select must be a subset of affiliateId/status (got ${JSON.stringify(select)}) — no document / file key`);
+      }
+      const wk = Object.keys(where || {});
+      if (wk.length !== 1 || wk[0] !== 'affiliateId' || !Array.isArray(where.affiliateId?.in)) throw new Error(`fake identityVerification.findMany: unsupported where ${JSON.stringify(where)}`);
+      const wanted = new Set(where.affiliateId.in);
+      return rows('identityVerification').filter((r) => wanted.has(r.affiliateId)).map((r) => pick(r, select));
+    },
+  };
+  for (const op of ['findFirst', 'findUnique', 'count', 'groupBy', 'aggregate', 'create', 'createMany', 'update', 'updateMany', 'upsert', 'delete', 'deleteMany']) {
+    identityVerification[op] = async () => { throw new Error(`fake db: identityVerification.${op} is not allowed in recruiter code`); };
+  }
+
+  // The recursive network query, emulated exactly like the SQL (a working table per iteration).
+  const TREE_FRAGMENTS = [
+    'WITH RECURSIVE tree AS (',
+    'FROM "recruiter_affiliate_links" l JOIN "affiliates" a ON a."id" = l."affiliateId" WHERE l."recruiterId" = $?',
+    'AND (a."parentId" IS NULL OR NOT EXISTS ( SELECT 1 FROM "recruiter_affiliate_links" pl WHERE pl."affiliateId" = a."parentId" AND pl."recruiterId" = $?))',
+    'UNION ALL',
+    'FROM tree t JOIN "affiliates" c ON c."parentId" = t."id" JOIN "recruiter_affiliate_links" cl ON cl."affiliateId" = c."id" AND cl."recruiterId" = $?',
+    'WHERE t.depth < $?::int',
+    'SELECT "id", "parentId", "isActive", "createdAt", depth::int AS depth FROM tree',
+  ];
+  function networkTree(norm, values) {
+    for (const f of TREE_FRAGMENTS) if (!norm.includes(f)) throw new Error(`fake $queryRaw: the network query changed (missing: ${f}) — update the emulation`);
+    if (values.length !== 4 || values[0] !== values[1] || values[1] !== values[2]) throw new Error('fake $queryRaw: the network query must bind the same recruiterId 3 times, then the bound');
+    const [rid, , , bound] = values;
+    const links = rows('recruiterAffiliateLink');
+    const linked = new Set(links.filter((l) => l.recruiterId === rid).map((l) => l.affiliateId));
+    const affs = rows('affiliate');
+    const byId = new Map(affs.map((a) => [a.id, a]));
+    const childrenOf = new Map();
+    for (const a of affs) { if (a.parentId != null) { if (!childrenOf.has(a.parentId)) childrenOf.set(a.parentId, []); childrenOf.get(a.parentId).push(a); } }
+    const out = [];
+    let work = [];
+    for (const id of linked) {
+      const a = byId.get(id);
+      if (!a) continue;
+      if (a.parentId == null || !linked.has(a.parentId)) work.push({ id: a.id, parentId: a.parentId, isActive: a.isActive, createdAt: a.createdAt, depth: 1 });
+    }
+    let guard = 0;
+    while (work.length) {
+      out.push(...work);
+      if (++guard > 1_000_000) throw new Error('fake $queryRaw: runaway recursion');
+      const next = [];
+      for (const t of work) {
+        if (!(t.depth < bound)) continue;
+        for (const c of childrenOf.get(t.id) || []) if (linked.has(c.id)) next.push({ id: c.id, parentId: c.parentId, isActive: c.isActive, createdAt: c.createdAt, depth: t.depth + 1 });
+      }
+      work = next;
+    }
+    return out.map((r) => ({ ...r, createdAt: r.createdAt ? new Date(r.createdAt) : null }));
+  }
 
   async function $queryRaw(strings, ...values) {
     const sql = Array.isArray(strings) ? strings.join('$?') : String(strings);
@@ -336,6 +447,7 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3 = false, f
       const r = rows('recruiter').find((x) => x.id === id); // re-read after the wait (latest committed row)
       return r ? [{ isActive: r.isActive, canCreateAffiliates: r.canCreateAffiliates }] : [];
     }
+    if (phase4 && norm.startsWith('/* recruiter-network-tree */')) return networkTree(norm, values);
     throw new Error(`fake $queryRaw: unsupported statement ${norm}`);
   }
 
@@ -369,6 +481,8 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3 = false, f
       return clone(r);
     },
     link(data) { const l = { createdAt: new Date(), createdBy: data.recruiterId, ...clone(data) }; T.recruiterAffiliateLink.push(l); return clone(l); },
+    order(data) { const o = { id: randomUUID(), status: 'pending', isFake: false, total: 0, clientName: null, clientPhone: null, createdAt: new Date(), ...clone(data) }; T.affiliateOrder.push(o); return clone(o); },
+    identity(data) { const r = { id: randomUUID(), status: 'PENDING', cinFrontFile: 'secret/front.jpg', cinBackFile: 'secret/back.jpg', ...clone(data) }; T.identityVerification.push(r); return clone(r); },
     recruiter(data) {
       const now = new Date();
       const r = {
@@ -384,6 +498,8 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3 = false, f
   const base = {
     recruiter, recruiterAuditLog, $transaction,
     ...(phase3 ? { affiliate, recruiterAffiliateLink, $queryRaw } : {}),
+    ...(phase4 ? { affiliateOrder, identityVerification } : {}),
+    _queryCount: () => log.filter((l) => l.model !== '$transaction').length,
     _tables: T, _log: log, _state: state, _seed: seed, _openTx: openTx, _locks: locks,
   };
 

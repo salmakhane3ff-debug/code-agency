@@ -127,3 +127,67 @@ export function toRecruiterNetworkAffiliateView(row, networkIds) {
     createdAt: at && Number.isFinite(at.getTime()) ? at.toISOString() : null,
   };
 }
+
+// ── Phase 4: network tree and statistics (counts only) ─────────────────────────
+const NETWORK_ORDER_KEYS = Object.freeze(['delivered', 'pending', 'confirmed', 'shipped', 'cancelled', 'returned', 'other', 'total']);
+const NETWORK_IDENTITY_KEYS = Object.freeze(['APPROVED', 'PENDING', 'REJECTED', 'NONE']);
+const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
+const str = (v) => (typeof v === 'string' ? v : null);
+const level = (v) => (Number.isInteger(v) && v >= 1 ? v : null);
+function ordersCountView(o) {
+  const out = {};
+  for (const k of NETWORK_ORDER_KEYS) out[k] = count(o?.[k]);
+  return out;
+}
+/** Real and fake orders, ALWAYS separate: a fake order is never a real delivered sale. */
+function realFakeView(o) {
+  return { real: ordersCountView(o?.real), fake: ordersCountView(o?.fake) };
+}
+function identityCountView(o) {
+  const out = {};
+  for (const k of NETWORK_IDENTITY_KEYS) out[k] = count(o?.[k]);
+  return out;
+}
+
+/**
+ * Recruiter-facing node of their network tree: identity, level, account status, identity
+ * STATUS only, counts of children / descendants and order counts (real vs fake) — never a
+ * document, password, phone, customer field, amount or any order detail.
+ */
+export function toRecruiterNetworkNodeView(node) {
+  return {
+    id: str(node?.id),
+    username: str(node?.username),
+    name: str(node?.name),
+    level: level(node?.level),
+    status: node?.status === 'ACTIVE' || node?.status === 'INACTIVE' ? node.status : null,
+    identityStatus: NETWORK_IDENTITY_KEYS.includes(node?.identityStatus) ? node.identityStatus : 'NONE',
+    childrenCount: count(node?.childrenCount),
+    descendantsCount: count(node?.descendantsCount),
+    orders: realFakeView(node?.orders),
+  };
+}
+
+/** Breadcrumb entry (an ancestor in the recruiter's own network). */
+export function toRecruiterNetworkPathView(entry) {
+  return { id: str(entry?.id), username: str(entry?.username), name: str(entry?.name), level: level(entry?.level) };
+}
+
+/** Recruiter-facing statistics of their network (or of one of their sub-networks). */
+export function toRecruiterNetworkStatsView(stats) {
+  const t = stats?.totals;
+  const levels = Array.isArray(stats?.levels) ? stats.levels : [];
+  return {
+    rootId: str(stats?.rootId),
+    totals: {
+      affiliates: count(t?.affiliates), direct: count(t?.direct), active: count(t?.active), inactive: count(t?.inactive),
+      maxLevel: count(t?.maxLevel), unplaced: count(t?.unplaced),
+    },
+    identity: identityCountView(stats?.identity),
+    orders: realFakeView(stats?.orders),
+    levels: levels.map((l) => ({
+      level: level(l?.level), affiliates: count(l?.affiliates), active: count(l?.active), inactive: count(l?.inactive),
+      identity: identityCountView(l?.identity), orders: realFakeView(l?.orders),
+    })),
+  };
+}

@@ -47,9 +47,10 @@ const view = (reward, s = ON, reversal = null) => V.toRecruiterQualificationView
 // ── 0. the removal is real ────────────────────────────────────────────────────
 console.log('\n0. Removed features are gone (exports and code)');
 {
-  ok('exports are exactly the 11 projections / allowlists (Phase 3 adds RECRUITER_FIELD_ERROR_CODES and toRecruiterNetworkAffiliateView; the recruiter profile view lives in recruiterProfileView.js; no rewardReleaseDay, isRewardReleased, RELEASE_BASE_DAYS, RELEASE_JITTER_DAYS)',
+  ok('exports are exactly the 14 projections / allowlists (Phase 3 adds RECRUITER_FIELD_ERROR_CODES and toRecruiterNetworkAffiliateView; Phase 4 adds toRecruiterNetworkNodeView, toRecruiterNetworkPathView and toRecruiterNetworkStatsView; the recruiter profile view lives in recruiterProfileView.js; no rewardReleaseDay, isRewardReleased, RELEASE_BASE_DAYS, RELEASE_JITTER_DAYS)',
     eq(Object.keys(V).sort(), ['RECRUITER_ERROR_CODES', 'RECRUITER_FIELD_ERROR_CODES', 'RECRUITER_REWARD_STATUS', 'RECRUITER_VISIBLE_AUDIT_ACTIONS', 'toRecruiterAuditView', 'toRecruiterError',
-      'toRecruiterNetworkAffiliateView', 'toRecruiterQualificationView', 'toRecruiterRewardTotals', 'toRecruiterRewardView', 'toRecruiterSettingsView']), Object.keys(V).sort().join(','));
+      'toRecruiterNetworkAffiliateView', 'toRecruiterNetworkNodeView', 'toRecruiterNetworkPathView', 'toRecruiterNetworkStatsView',
+      'toRecruiterQualificationView', 'toRecruiterRewardTotals', 'toRecruiterRewardView', 'toRecruiterSettingsView']), Object.keys(V).sort().join(','));
   ok('no exported name of either module mentions release / jitter / delay / hmac / UGC / video',
     [...Object.keys(V), ...Object.keys(R)].every((k) => !REMOVED.test(k)));
   const code = stripJs(read('src/lib/recruiterVisibility.js'));
@@ -288,6 +289,24 @@ console.log('\n7b. Phase 3 — allowlisted field errors and the network affiliat
   ok('network view never contains password / phone / isActive / any amount, for any input',
     [v1, v2, N(row, new Set(['p1']))].every((o) => ['password', 'phone', 'isActive', 'commissionRate', 'bankName', 'rib', 'totalCommission', 'bonusBalance'].every((k) => !Object.prototype.hasOwnProperty.call(o, k))));
   ok('network view takes (row, networkIds) only — 2 parameters, pure', N.length === 2);
+}
+
+// ── 7c. Phase 4 network projections (counts only) ───────────────────────────────
+console.log('\n7c. Phase 4 network projections');
+{
+  const node = V.toRecruiterNetworkNodeView({ id: 'a1', username: 'u', name: 'N', level: 2, status: 'ACTIVE', identityStatus: 'PENDING', childrenCount: 1, descendantsCount: 3,
+    orders: { real: { delivered: 2, total: 2 }, fake: { delivered: 5, total: 5 } }, password: 'h', phone: '+2126', cinFrontFile: 'k', clientName: 'c', total: 99.5 });
+  ok('node view: exactly 9 keys, real and fake order counts kept apart, no password / phone / CIN / customer / amount',
+    eq(Object.keys(node).sort(), ['childrenCount', 'descendantsCount', 'id', 'identityStatus', 'level', 'name', 'orders', 'status', 'username'])
+    && node.orders.real.delivered === 2 && node.orders.fake.delivered === 5 && !/password|phone|cinFront|clientName|99\.5/.test(JSON.stringify(node)));
+  ok('node view: status only ACTIVE / INACTIVE (else null), identity only APPROVED / PENDING / REJECTED / NONE (else NONE)',
+    V.toRecruiterNetworkNodeView({ status: 'active' }).status === null && V.toRecruiterNetworkNodeView({ status: 'INACTIVE' }).status === 'INACTIVE'
+    && V.toRecruiterNetworkNodeView({ identityStatus: 'approved' }).identityStatus === 'NONE' && V.toRecruiterNetworkNodeView({ identityStatus: 'REJECTED' }).identityStatus === 'REJECTED');
+  const st = V.toRecruiterNetworkStatsView({ rootId: null, totals: { affiliates: 3, direct: 1, active: 2, inactive: 1, maxLevel: 2, unplaced: 0, balance: 9 }, identity: { APPROVED: 1 },
+    orders: { real: { delivered: 1, total: 1 }, fake: { delivered: 1, total: 1 } }, levels: [{ level: 1, affiliates: 1 }], commission: 5 });
+  ok('stats view: exact keys, unknown keys (balance / commission) dropped', eq(Object.keys(st).sort(), ['identity', 'levels', 'orders', 'rootId', 'totals'])
+    && eq(Object.keys(st.totals).sort(), ['active', 'affiliates', 'direct', 'inactive', 'maxLevel', 'unplaced']) && !/balance|commission/.test(JSON.stringify(st)));
+  ok('path view: exactly id / username / name / level', eq(Object.keys(V.toRecruiterNetworkPathView({ id: 'a', username: 'u', name: 'n', level: 1, password: 'x' })).sort(), ['id', 'level', 'name', 'username']));
 }
 
 // ── 8. static checks ──────────────────────────────────────────────────────────
