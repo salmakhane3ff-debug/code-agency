@@ -16,6 +16,7 @@ import DepositTab from "./DepositTab";
 import BoosterTab from "./BoosterTab";
 import BrandTab from "./BrandTab";
 import RewardsTab from "./RewardsTab";
+import PaymentProofsSlider from "@/components/affiliate/PaymentProofsSlider";
 import LiveActivity from "@/components/LiveActivity";
 import { diffNewItems, shouldPlaySaleSound } from "@/lib/liveFeed";
 import { createSaleSound } from "./saleSound";
@@ -1892,6 +1893,9 @@ export default function AffiliateDashboard() {
                 </div>
               </div>
             )}
+
+            {/* ── Recent payment proofs (last 72 h, server-side) — the only slider ── */}
+            <PaymentProofsSlider lang={lang} />
 
             {/* ── BOUTIQUE (store / order) earnings — unchanged calculations ── */}
             <div className="flex items-center gap-2 px-0.5">

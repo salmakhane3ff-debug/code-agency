@@ -1,0 +1,230 @@
+/**
+ * src/lib/paymentProofs.js
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Payment Proofs — PURE rules (no database, no files): statuses, the 72-hour
+ * visibility window, input validation, Africa/Casablanca local time → UTC for
+ * manual scheduling, feed pagination cursors and the public (affiliate) shape.
+ *
+ * A payment proof is an admin-managed DISPLAY / ANNOUNCEMENT record: a display
+ * name and amount typed by the admin plus a receipt image the admin uploads. It is
+ * completely independent of affiliates, users, payouts, balances, commissions,
+ * rewards and every other financial record — it reads and writes none of them.
+ *
+ * ONE global feed: every active affiliate sees exactly the same proofs, in the same
+ * order. Visibility (server-side, the only rule the slider uses):
+ *   status = PUBLISHED  AND  publishedAt <= now  AND  publishedAt > now − 72 h
+ * i.e. a proof published exactly 72 h ago is no longer visible. publishedAt is
+ * the ACTUAL publication instant (written when the proof is published), never the
+ * creation, upload, transfer or scheduled date.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+export const PROOF_STATUS = Object.freeze({
+  SCHEDULED: 'SCHEDULED',
+  PUBLISHED: 'PUBLISHED',
+  CANCELLED: 'CANCELLED',
+  FAILED: 'FAILED',
+});
+export const PROOF_STATUSES = Object.freeze(Object.values(PROOF_STATUS));
+
+export const PROOF_TIMEZONE = 'Africa/Casablanca';
+export const HOUR_MS = 3_600_000;
+export const VISIBILITY_HOURS = 72;
+export const VISIBILITY_MS = VISIBILITY_HOURS * HOUR_MS;
+
+export const PROOF_LIMITS = Object.freeze({
+  MAX_AMOUNT_CENTS: 100_000_000,       // 1,000,000.00 MAD (DB CHECK mirrors it)
+  ALIAS_MIN: 2,
+  ALIAS_MAX: 40,
+  MAX_BATCH_ITEMS: 200,
+  MAX_SCHEDULE_AHEAD_DAYS: 366,
+  MIN_LEAD_MS: 60_000,                 // a new / edited schedule must be ≥ 1 min in the future
+  FEED_PAGE_SIZE: 50,                  // feed page size (cursor pagination — nothing is ever omitted)
+  PUBLISH_BATCH_LIMIT: 200,            // bounded publication pass
+  ADMIN_PAGE_SIZE: 50,
+});
+
+const err = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra });
+export { err as proofError };
+
+// ── Visibility ────────────────────────────────────────────────────────────────
+
+/** [from (exclusive), to (inclusive)] bounds of the affiliate window at `nowMs`. */
+export function visibilityWindow(nowMs) {
+  return { fromExclusive: nowMs - VISIBILITY_MS, toInclusive: nowMs };
+}
+
+/** The single visibility rule (mirrors the database query). */
+export function isVisibleAt(proof, nowMs) {
+  if (!proof || proof.status !== PROOF_STATUS.PUBLISHED || !proof.publishedAt) return false;
+  const p = new Date(proof.publishedAt).getTime();
+  return Number.isFinite(p) && p <= nowMs && p > nowMs - VISIBILITY_MS;
+}
+
+// ── Input validation ──────────────────────────────────────────────────────────
+
+/** Amount in MAD (number or "1500", "1500.5", "1500,50") → integer cents, or NaN. */
+export function parseAmountCents(value) {
+  let s;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return NaN;
+    s = String(value);
+  } else if (typeof value === 'string') {
+    s = value.trim().replace(',', '.');
+  } else return NaN;
+  if (!/^\d{1,7}(\.\d{1,2})?$/.test(s)) return NaN;
+  const [whole, frac = ''] = s.split('.');
+  const cents = Number(whole) * 100 + Number(frac.padEnd(2, '0'));
+  return cents > 0 && cents <= PROOF_LIMITS.MAX_AMOUNT_CENTS ? cents : NaN;
+}
+
+/** Display alias: trimmed, single spaces, 2–40 chars, no control characters or markup. */
+export function normalizeAlias(value) {
+  if (typeof value !== 'string') return null;
+  const s = value.normalize('NFC').replace(/\s+/g, ' ').trim();
+  if (s.length < PROOF_LIMITS.ALIAS_MIN || s.length > PROOF_LIMITS.ALIAS_MAX) return null;
+  if (/[\u0000-\u001f\u007f-\u009f<>{}\\]/.test(s) || /[‪-‮⁦-⁩]/.test(s)) return null;
+  return s;
+}
+
+const ID_RE = /^[A-Za-z0-9_-]{1,100}$/;
+const REF_RE = /^[A-Za-z0-9_-]{8,100}$/;
+export const isValidId = (v) => typeof v === 'string' && ID_RE.test(v);
+/** The two mandatory admin declarations arrive as true / "true" (checkbox). */
+export const isConfirmed = (v) => v === true || v === 'true';
+export const isValidClientRef = (v) => typeof v === 'string' && REF_RE.test(v);
+export const isValidPublicToken = (v) => typeof v === 'string' && /^[a-f0-9]{32}$/.test(v);
+
+// ── Africa/Casablanca local time ──────────────────────────────────────────────
+
+const FMT = new Intl.DateTimeFormat('en-US', {
+  timeZone: PROOF_TIMEZONE, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+});
+
+/** Casablanca wall-clock parts of an instant. */
+export function casablancaParts(ms) {
+  const p = {};
+  for (const { type, value } of FMT.formatToParts(new Date(ms))) if (type !== 'literal') p[type] = Number(value);
+  if (p.hour === 24) p.hour = 0;
+  return p; // { year, month, day, hour, minute }
+}
+
+/** "YYYY-MM-DD" and "HH:MM" of an instant in Casablanca. */
+export function casablancaLocal(ms) {
+  const p = casablancaParts(ms);
+  const z = (n) => String(n).padStart(2, '0');
+  return { date: `${p.year}-${z(p.month)}-${z(p.day)}`, time: `${z(p.hour)}:${z(p.minute)}` };
+}
+
+/**
+ * Casablanca wall-clock date + time → UTC instant (ms).
+ *   • a time that does not exist (skipped by a clock change) → NONEXISTENT_LOCAL_TIME
+ *   • a time that occurs twice (clock set back) → the EARLIER instant
+ * Returns { ms } or { error }.
+ */
+export function casablancaToUtc(date, time) {
+  const dm = typeof date === 'string' && /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  const tm = typeof time === 'string' && /^(\d{2}):(\d{2})$/.exec(time);
+  if (!dm || !tm) return { error: 'INVALID_DATETIME' };
+  const [y, mo, d, h, mi] = [dm[1], dm[2], dm[3], tm[1], tm[2]].map(Number);
+  const asUtc = Date.UTC(y, mo - 1, d, h, mi);
+  const check = new Date(asUtc);
+  if (check.getUTCFullYear() !== y || check.getUTCMonth() !== mo - 1 || check.getUTCDate() !== d || h > 23 || mi > 59) {
+    return { error: 'INVALID_DATETIME' };
+  }
+  // Candidate offsets: every offset Casablanca uses around that day (−1 h … +2 h covers all its history).
+  const candidates = [];
+  for (let offsetMin = -60; offsetMin <= 120; offsetMin += 15) {
+    const t = asUtc - offsetMin * 60_000;
+    const p = casablancaParts(t);
+    if (p.year === y && p.month === mo && p.day === d && p.hour === h && p.minute === mi) candidates.push(t);
+  }
+  if (!candidates.length) return { error: 'NONEXISTENT_LOCAL_TIME' };
+  return { ms: Math.min(...candidates) };
+}
+
+/**
+ * Validate one proof's fields. `nowMs` = server clock. Display name and amount are
+ * presentation data typed by the admin; both declarations (privacy masked,
+ * authenticity) are mandatory.
+ * Returns { value: { displayName, amountCents, scheduledAt, clientRef, batchId }, errors: {field: code} }.
+ */
+export function validateProofInput(input, { nowMs }) {
+  const src = input && typeof input === 'object' ? input : {};
+  const errors = {};
+  const displayName = normalizeAlias(src.displayName);
+  if (!displayName) errors.displayName = 'INVALID_ALIAS';
+  const amountCents = parseAmountCents(src.amount);
+  if (Number.isNaN(amountCents)) errors.amount = 'INVALID_AMOUNT';
+  let scheduledAt = null;
+  const local = casablancaToUtc(src.date, src.time);
+  if (local.error) errors.scheduledAt = local.error;
+  else if (local.ms < nowMs + PROOF_LIMITS.MIN_LEAD_MS) errors.scheduledAt = 'SCHEDULE_IN_PAST';
+  else if (local.ms > nowMs + PROOF_LIMITS.MAX_SCHEDULE_AHEAD_DAYS * 24 * HOUR_MS) errors.scheduledAt = 'SCHEDULE_TOO_FAR';
+  else scheduledAt = new Date(local.ms);
+  const clientRef = isValidClientRef(src.clientRef) ? src.clientRef : null;
+  if (!clientRef) errors.clientRef = 'INVALID_CLIENT_REF';
+  let batchId = null;
+  if (src.batchId !== undefined && src.batchId !== null && src.batchId !== '') {
+    if (isValidClientRef(src.batchId)) batchId = src.batchId; else errors.batchId = 'INVALID_BATCH';
+  }
+  if (!isConfirmed(src.privacyConfirmed)) errors.privacyConfirmed = 'PRIVACY_CONFIRMATION_REQUIRED';
+  if (!isConfirmed(src.authenticityConfirmed)) errors.authenticityConfirmed = 'AUTHENTICITY_CONFIRMATION_REQUIRED';
+  return { value: { displayName, amountCents, scheduledAt, clientRef, batchId }, errors };
+}
+
+// ── Shapes ────────────────────────────────────────────────────────────────────
+
+export const centsToAmount = (c) => Math.round(Number(c)) / 100;
+
+/** Affiliate-facing proof: display name, amount, publication time and an opaque image token — nothing else. */
+export function publicProof(row) {
+  return {
+    token: row.publicToken,
+    name: row.displayName,
+    amount: centsToAmount(row.displayAmountCents),
+    publishedAt: new Date(row.publishedAt).toISOString(),
+  };
+}
+
+/**
+ * Feed order, identical for every affiliate: publishedAt DESC, then publicToken ASC
+ * (unique, already public — so a cursor never reveals an internal id).
+ * Cursor = base64url("<publishedAt ms>.<publicToken>") of the last item of a page.
+ */
+export function encodeFeedCursor(item) {
+  return Buffer.from(`${new Date(item.publishedAt).getTime()}.${item.token}`).toString('base64url');
+}
+export function decodeFeedCursor(raw) {
+  if (raw === null || raw === undefined || raw === '') return null;
+  if (typeof raw !== 'string' || raw.length > 80 || !/^[A-Za-z0-9_-]+$/.test(raw)) return { invalid: true };
+  const m = /^(\d{13})\.([a-f0-9]{32})$/.exec(Buffer.from(raw, 'base64url').toString('latin1'));
+  return m ? { publishedAtMs: Number(m[1]), token: m[2] } : { invalid: true };
+}
+
+/** Admin shape (no storage key, no fingerprint). */
+export const PROOF_EVENT_ACTIONS = Object.freeze(['CREATE', 'CONFIRM_PRIVACY', 'CONFIRM_AUTHENTICITY', 'EDIT', 'CANCEL', 'PUBLISH', 'FAIL']);
+export function adminProof(row) {
+  const iso = (d) => (d ? new Date(d).toISOString() : null);
+  return {
+    id: row.id,
+    displayName: row.displayName,
+    amount: centsToAmount(row.displayAmountCents),
+    status: row.status,
+    scheduledAt: iso(row.scheduledAt),
+    scheduledLocal: row.scheduledAt ? casablancaLocal(new Date(row.scheduledAt).getTime()) : null,
+    publishedAt: iso(row.publishedAt),
+    cancelledAt: iso(row.cancelledAt),
+    failedAt: iso(row.failedAt),
+    failureReason: row.failureReason || null,
+    publishAttempts: row.publishAttempts ?? 0,
+    privacyConfirmedAt: iso(row.privacyConfirmedAt),
+    privacyConfirmedBy: row.privacyConfirmedBy || null,
+    authenticityConfirmedAt: iso(row.authenticityConfirmedAt),
+    authenticityConfirmedBy: row.authenticityConfirmedBy || null,
+    batchId: row.batchId || null,
+    clientRef: row.clientRef,
+    createdAt: iso(row.createdAt),
+    updatedAt: iso(row.updatedAt),
+  };
+}

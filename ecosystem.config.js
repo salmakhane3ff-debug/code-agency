@@ -75,5 +75,15 @@ module.exports = {
       script: 'scripts/brand-simulation-engine.mjs',
       ...engineDefaults,
     },
+    {
+      // Payment Proofs publisher (admin-managed display feed of the affiliate
+      // dashboard slider). Publishes due proofs exactly once; writes only
+      // payment_proofs / payment_proof_events. Own advisory lock ("PPPF") —
+      // never scale. Add to a live host with:
+      //   pm2 start ecosystem.config.js --only payment-proofs-publisher && pm2 save
+      name:   'payment-proofs-publisher',
+      script: 'scripts/payment-proofs-publisher.mjs',
+      ...engineDefaults,
+    },
   ],
 };

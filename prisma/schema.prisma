@@ -1832,3 +1832,59 @@ model BrandAccessConsent {
   @@index([accessId])
   @@map("brand_access_consents")
 }
+
+/// Payment Proofs — an admin-managed DISPLAY / ANNOUNCEMENT feed shown to all
+/// active affiliates in the dashboard slider. Completely independent: no relation
+/// to affiliates, users, payouts, balances, commissions, rewards or any financial
+/// record. displayName / displayAmountCents are presentation data typed by the admin.
+/// Lifecycle: SCHEDULED → PUBLISHED | CANCELLED | FAILED; FAILED → SCHEDULED | CANCELLED.
+/// PUBLISHED and CANCELLED are final (DB trigger). Rows are never deleted (DB trigger).
+/// Visible to affiliates only while publishedAt <= now < publishedAt + 72 h.
+/// Partial unique index (migration): one non-cancelled proof per receipt fingerprint.
+model PaymentProof {
+  id                      String              @id @default(uuid())
+  displayName             String
+  displayAmountCents      Int
+  fileKey                 String              @unique
+  fingerprint             String
+  publicToken             String              @unique
+  status                  String              @default("SCHEDULED")
+  scheduledAt             DateTime
+  publishedAt             DateTime?
+  cancelledAt             DateTime?
+  failedAt                DateTime?
+  failureReason           String?
+  publishAttempts         Int                 @default(0)
+  batchId                 String?
+  clientRef               String              @unique
+  privacyConfirmedAt      DateTime
+  privacyConfirmedBy      String
+  authenticityConfirmedAt DateTime
+  authenticityConfirmedBy String
+  createdBy               String?
+  updatedBy               String?
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+  events                  PaymentProofEvent[]
+
+  @@index([status, scheduledAt])
+  @@index([status, publishedAt])
+  @@index([batchId])
+  @@map("payment_proofs")
+}
+
+/// Append-only audit history of one payment proof (DB trigger: no UPDATE / DELETE).
+model PaymentProofEvent {
+  id      String       @id @default(uuid())
+  /// Insertion order (events of one transaction share the same `at`).
+  seq     BigInt       @unique @default(autoincrement())
+  proofId String
+  action  String
+  actor   String
+  at      DateTime     @default(now())
+  details Json?
+  proof   PaymentProof @relation(fields: [proofId], references: [id], onDelete: Restrict)
+
+  @@index([proofId, at])
+  @@map("payment_proof_events")
+}
