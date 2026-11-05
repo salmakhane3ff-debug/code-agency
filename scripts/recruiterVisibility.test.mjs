@@ -47,10 +47,12 @@ const view = (reward, s = ON, reversal = null) => V.toRecruiterQualificationView
 // ── 0. the removal is real ────────────────────────────────────────────────────
 console.log('\n0. Removed features are gone (exports and code)');
 {
-  ok('exports are exactly the 14 projections / allowlists (Phase 3 adds RECRUITER_FIELD_ERROR_CODES and toRecruiterNetworkAffiliateView; Phase 4 adds toRecruiterNetworkNodeView, toRecruiterNetworkPathView and toRecruiterNetworkStatsView; the recruiter profile view lives in recruiterProfileView.js; no rewardReleaseDay, isRewardReleased, RELEASE_BASE_DAYS, RELEASE_JITTER_DAYS)',
-    eq(Object.keys(V).sort(), ['RECRUITER_ERROR_CODES', 'RECRUITER_FIELD_ERROR_CODES', 'RECRUITER_REWARD_STATUS', 'RECRUITER_VISIBLE_AUDIT_ACTIONS', 'toRecruiterAuditView', 'toRecruiterError',
+  ok('exports are exactly the 19 projections / allowlists (Phase 3 adds RECRUITER_FIELD_ERROR_CODES and toRecruiterNetworkAffiliateView; Phase 4 adds toRecruiterNetworkNodeView, toRecruiterNetworkPathView and toRecruiterNetworkStatsView; Phase 5 adds RECRUITER_WITHDRAWAL_STATUS, toRecruiterWithdrawalView, toRecruiterRewardHistoryView, toRecruiterBankView and toRecruiterWalletView; the recruiter profile view lives in recruiterProfileView.js; no rewardReleaseDay, isRewardReleased, RELEASE_BASE_DAYS, RELEASE_JITTER_DAYS)',
+    eq(Object.keys(V).sort(), ['RECRUITER_ERROR_CODES', 'RECRUITER_FIELD_ERROR_CODES', 'RECRUITER_REWARD_STATUS', 'RECRUITER_VISIBLE_AUDIT_ACTIONS', 'RECRUITER_WITHDRAWAL_STATUS', 'toRecruiterAuditView',
+      'toRecruiterBankView', 'toRecruiterError',
       'toRecruiterNetworkAffiliateView', 'toRecruiterNetworkNodeView', 'toRecruiterNetworkPathView', 'toRecruiterNetworkStatsView',
-      'toRecruiterQualificationView', 'toRecruiterRewardTotals', 'toRecruiterRewardView', 'toRecruiterSettingsView']), Object.keys(V).sort().join(','));
+      'toRecruiterQualificationView', 'toRecruiterRewardHistoryView', 'toRecruiterRewardTotals', 'toRecruiterRewardView', 'toRecruiterSettingsView',
+      'toRecruiterWalletView', 'toRecruiterWithdrawalView']), Object.keys(V).sort().join(','));
   ok('no exported name of either module mentions release / jitter / delay / hmac / UGC / video',
     [...Object.keys(V), ...Object.keys(R)].every((k) => !REMOVED.test(k)));
   const code = stripJs(read('src/lib/recruiterVisibility.js'));
@@ -213,8 +215,9 @@ console.log('\n6. Errors — code only, never the message');
   ok('unknown / internal codes → { code: "SERVER_ERROR" }', eq(outs[0], { code: 'SERVER_ERROR' }) && eq(outs[1], { code: 'SERVER_ERROR' }));
   ok('allowlisted codes pass but NEVER the message, details, stack or extra keys', eq(outs[2], { code: 'INVALID_INPUT' }) && eq(outs[3], { code: 'FORBIDDEN' }) && eq(outs[4], { code: 'RATE_LIMITED' }));
   ok('every error output is exactly { code } (incl. plain Error, null, undefined, string, number)', outs.every((o) => eq(keys(o), ['code'])) && eq(outs[5], { code: 'SERVER_ERROR' }) && eq(outs[8], { code: 'SERVER_ERROR' }));
-  ok('error allowlist is exactly these 11 codes (Phase 2 adds INVALID_CREDENTIALS for the login, Phase 3 IDEMPOTENCY_CONFLICT), frozen',
-    eq([...V.RECRUITER_ERROR_CODES], ['UNAUTHORIZED', 'RECRUITER_DISABLED', 'FORBIDDEN', 'NOT_FOUND', 'INVALID_INPUT', 'USERNAME_TAKEN', 'PHONE_TAKEN', 'PARENT_NOT_IN_NETWORK', 'RATE_LIMITED', 'INVALID_CREDENTIALS', 'IDEMPOTENCY_CONFLICT']) && Object.isFrozen(V.RECRUITER_ERROR_CODES));
+  ok('error allowlist is exactly these 13 codes (Phase 2 adds INVALID_CREDENTIALS for the login, Phase 3 IDEMPOTENCY_CONFLICT, Phase 5 INSUFFICIENT_BALANCE and INCOMPLETE_BANK_INFO), frozen',
+    eq([...V.RECRUITER_ERROR_CODES], ['UNAUTHORIZED', 'RECRUITER_DISABLED', 'FORBIDDEN', 'NOT_FOUND', 'INVALID_INPUT', 'USERNAME_TAKEN', 'PHONE_TAKEN', 'PARENT_NOT_IN_NETWORK', 'RATE_LIMITED', 'INVALID_CREDENTIALS', 'IDEMPOTENCY_CONFLICT',
+      'INSUFFICIENT_BALANCE', 'INCOMPLETE_BANK_INFO']) && Object.isFrozen(V.RECRUITER_ERROR_CODES));
   ok('no internal gate / unmet reason is a recruiter error code',
     ['REWARDS_DISABLED', 'NO_AMOUNT', 'NOT_LINKED', 'AFFILIATE_NOT_FOUND', 'NOT_ENOUGH_SALES', 'CIN_NOT_APPROVED', 'INVALID_COUNT', 'INVALID_AMOUNT'].every((c) => !V.RECRUITER_ERROR_CODES.includes(c) && eq(E({ code: c }), { code: 'SERVER_ERROR' })));
 }
@@ -248,8 +251,9 @@ console.log('\n7b. Phase 3 — allowlisted field errors and the network affiliat
 {
   const E = V.toRecruiterError;
   const F = V.RECRUITER_FIELD_ERROR_CODES;
-  ok('field-code allowlist: exactly 7 fields with their codes, deeply frozen',
-    eq(Object.keys(F).sort(), ['body', 'name', 'parentId', 'password', 'phone', 'requestId', 'username'])
+  ok('field-code allowlist: exactly 11 fields with their codes (Phase 5 adds amountMad, bankName, rib, accountName), deeply frozen',
+    eq(Object.keys(F).sort(), ['accountName', 'amountMad', 'bankName', 'body', 'name', 'parentId', 'password', 'phone', 'requestId', 'rib', 'username'])
+    && eq(F.amountMad, ['INVALID_AMOUNT']) && eq(F.bankName, ['INVALID_BANK_NAME']) && eq(F.rib, ['INVALID_RIB']) && eq(F.accountName, ['INVALID_ACCOUNT_NAME'])
     && eq(F.username, ['INVALID_USERNAME']) && eq(F.name, ['INVALID_NAME']) && eq(F.password, ['INVALID_PASSWORD']) && eq(F.phone, ['INVALID_PHONE'])
     && eq(F.parentId, ['INVALID_PARENT']) && eq(F.requestId, ['INVALID_REQUEST_ID']) && eq(F.body, ['UNKNOWN_FIELD'])
     && Object.isFrozen(F) && Object.values(F).every(Object.isFrozen));
@@ -309,6 +313,64 @@ console.log('\n7c. Phase 4 network projections');
   ok('path view: exactly id / username / name / level', eq(Object.keys(V.toRecruiterNetworkPathView({ id: 'a', username: 'u', name: 'n', level: 1, password: 'x' })).sort(), ['id', 'level', 'name', 'username']));
 }
 
+// ── 7d. Phase 5 wallet projections (the recruiter's own money, MAD cents) ─────────
+console.log('\n7d. Phase 5 wallet projections');
+{
+  const evil = JSON.parse('{"__proto__":{"polluted":"yes"},"id":7,"amountCents":"500","status":"paid","createdAt":"nope","affiliateId":"x","recruiterId":"r","amount":5,"constructor":{"prototype":{"x":"y"}}}');
+  const wv = V.toRecruiterWithdrawalView(evil);
+  ok('withdrawal view: exactly id / amountCents / currency / status / createdAt; hostile types → null / 0; no owner ids, no raw amount',
+    eq(keys(wv), ['amountCents', 'createdAt', 'currency', 'id', 'status']) && wv.id === null && wv.amountCents === 0 && wv.currency === 'MAD' && wv.status === 'PAID' && wv.createdAt === null && !('polluted' in {}));
+  ok('withdrawal status: paid → PAID; rejected / cancelled / canceled / refused → REJECTED; pending and ANY unknown status → PENDING (still reserved); already-projected PAID / REJECTED / PENDING are kept (idempotent)',
+    ['rejected', 'cancelled', 'canceled', 'refused', 'REJECTED'].every((s) => V.toRecruiterWithdrawalView({ status: s }).status === 'REJECTED')
+    && ['paid', 'PAID'].every((s) => V.toRecruiterWithdrawalView({ status: s }).status === 'PAID')
+    && ['pending', 'PENDING', 'processing', 'approved', 'Paid', 'paid ', 'Rejected', undefined, 42].every((s) => V.toRecruiterWithdrawalView({ status: s }).status === 'PENDING')
+    && eq(Object.values(V.RECRUITER_WITHDRAWAL_STATUS), ['PENDING', 'PAID', 'REJECTED']) && Object.isFrozen(V.RECRUITER_WITHDRAWAL_STATUS));
+  const rh = V.toRecruiterRewardHistoryView({ type: 'RECRUIT_REWARD', amountCents: 15000, affiliate: { id: 'a1', username: 'u', name: 'N', phone: '+2126', password: 'h', isActive: true }, requiredDeliveredOrders: 10, createdAt: '2026-11-06T10:00:00.000Z', reason: '<script>', recruiterId: 'r', settingsVersion: 3 });
+  ok('reward history view: exact keys; the affiliate is id / username / name only; reason is the fixed code; threshold kept',
+    eq(keys(rh), ['affiliate', 'amountCents', 'createdAt', 'currency', 'reason', 'requiredDeliveredOrders', 'type']) && eq(rh.affiliate, { id: 'a1', username: 'u', name: 'N' })
+    && rh.reason === 'REAL_DELIVERED_AND_CIN_APPROVED' && rh.requiredDeliveredOrders === 10 && !/phone|password|isActive|script|settingsVersion|recruiterId/.test(JSON.stringify(rh)));
+  ok('reward history view: unknown type → null and no reason / threshold; non-integer amount → 0; adjustment rows keep a signed amount',
+    eq(V.toRecruiterRewardHistoryView({ type: 'BONUS', amountCents: 5, requiredDeliveredOrders: 3 }), { type: null, amountCents: 5, currency: 'MAD', affiliate: null, reason: null, requiredDeliveredOrders: null, createdAt: null })
+    && V.toRecruiterRewardHistoryView({ type: 'RECRUIT_REWARD', amountCents: 1.5 }).amountCents === 0 && V.toRecruiterRewardHistoryView({ type: 'REVERSAL', amountCents: -500 }).amountCents === -500);
+  const bv = V.toRecruiterBankView({ bankName: 'CIH', rib: '0117', accountName: 'A', complete: 'yes', password: 'x' });
+  ok('bank view: exactly bankName / rib / accountName / complete (strict boolean)', eq(keys(bv), ['accountName', 'bankName', 'complete', 'rib']) && bv.complete === false && V.toRecruiterBankView({ complete: true }).complete === true);
+  const w = V.toRecruiterWalletView({
+    settings: { version: 2, enabled: true, rewardAmountCents: 15000, minDeliveredSales: 7 },
+    totals: { earnedCents: 30000, availableCents: -100, pendingCents: -5, paidCents: 1.5, reservedCents: 9, balance: 1 },
+    rewards: 'nope', withdrawals: [{ id: 'w', amountCents: 100, status: 'pending', recruiterId: 'r' }], bank: null, commission: 5,
+  });
+  ok('wallet view: exact keys; totals exactly earned / available / pending / paid / currency (negative available kept, invalid pending / paid → 0); settings via toRecruiterSettingsView',
+    eq(keys(w), ['bank', 'rewards', 'settings', 'totals', 'withdrawals']) && eq(w.totals, { earnedCents: 30000, availableCents: -100, pendingCents: 0, paidCents: 0, currency: 'MAD' })
+    && eq(w.settings, { rewardsEnabled: true, rewardAmountCents: 15000, currency: 'MAD', requiredDeliveredOrders: 7 }) && eq(w.rewards, []) && eq(keys(w.withdrawals[0]), ['amountCents', 'createdAt', 'currency', 'id', 'status'])
+    && eq(w.bank, { bankName: null, rib: null, accountName: null, complete: false }) && !/commission|balance|reservedCents|recruiterId/.test(JSON.stringify(w)));
+  ok('no global prototype pollution after the wallet projections', !('polluted' in {}) && !('x' in {}));
+}
+
+// ── 7e. Phase 5: the wallet projection is idempotent (a client may re-project a server view) ──
+console.log('\n7e. Wallet projection is idempotent');
+{
+  const raw = {
+    settings: { version: 2, enabled: true, rewardAmountCents: 20000, minDeliveredSales: 3 },
+    totals: { earnedCents: 35055, availableCents: 14055, pendingCents: 11000, paidCents: 10000 },
+    rewards: [{ type: 'RECRUIT_REWARD', amountCents: 15055, affiliate: { id: 'a1', username: 'u1', name: 'N1' }, requiredDeliveredOrders: 3, createdAt: new Date('2026-11-06T10:00:00Z') }],
+    withdrawals: [
+      { id: 'w1', amountCents: 10000, status: 'paid', createdAt: new Date('2026-11-06T11:00:00Z') },
+      { id: 'w2', amountCents: 10000, status: 'rejected', createdAt: new Date('2026-11-06T11:00:00Z') },
+      { id: 'w3', amountCents: 1000, status: 'pending', createdAt: new Date('2026-11-06T11:00:00Z') },
+    ],
+    bank: { bankName: 'CIH', rib: '1234567890', accountName: 'X', complete: true },
+  };
+  const once = V.toRecruiterWalletView(raw);
+  const twice = V.toRecruiterWalletView(JSON.parse(JSON.stringify(once)));
+  ok('re-projecting a projected wallet changes nothing (settings stay enabled 200 MAD / 3; PAID / REJECTED / PENDING kept)',
+    eq(twice, once) && once.settings.rewardsEnabled === true && once.settings.rewardAmountCents === 20000 && once.settings.requiredDeliveredOrders === 3
+    && eq(once.withdrawals.map((w) => w.status), ['PAID', 'REJECTED', 'PENDING']), JSON.stringify(twice));
+  const forged = V.toRecruiterWalletView({ settings: { rewardsEnabled: true, rewardAmountCents: -5, requiredDeliveredOrders: 0 } }).settings;
+  ok('an already-projected settings view with bad values is still sanitised (no negative amount, threshold back to the default)',
+    forged.rewardsEnabled === false && forged.rewardAmountCents === 0 && forged.requiredDeliveredOrders === 10, JSON.stringify(forged));
+  ok('an unknown withdrawal status (raw or projected) is still PENDING (reserved)', V.toRecruiterWithdrawalView({ status: 'processing' }).status === 'PENDING' && V.toRecruiterWithdrawalView({ status: 'PAID ' }).status === 'PENDING');
+}
+
 // ── 8. static checks ──────────────────────────────────────────────────────────
 console.log('\n8. Static checks of recruiterVisibility.js');
 {
@@ -340,25 +402,57 @@ console.log('\n9. CONTRACT: recruiter-facing files must use the projections only
       /recruiterSettingsVersion|recruiterRewardLedger|recruiterAuditLog|recruiter_settings_versions|recruiter_reward_ledger|recruiter_audit_log|\$queryRaw|\$executeRaw/, 'route'],
     ['reads UGC data (ugc / Ugc / UGC / ugcVideoSubmission / ugc_video)', /ugc/i, 'all'],
     ['touches CIN documents or file keys (cinFrontFile / cinBackFile / getCinFileForAdmin / identityStorage)', /cinFrontFile|cinBackFile|getCinFileForAdmin|identityStorage|cin_front|cin_back/i, 'all'],
-    ['reads an affiliate balance, earnings, commissions, points or payouts', /balance|earning|commission|rewardPoint|reward_point|payout|withdraw/i, 'all'],
+    ['reads an affiliate balance, earnings, commissions, points or payouts', /balance|earning|commission|rewardPoint|reward_point|payout|withdraw/i, 'nonMoney'],
+    // Phase 5 money files (docs/recruiter-system.md §6): the recruiter's OWN rewards / withdrawals may be named,
+    // but affiliate money sources stay forbidden.
+    ['money file reads an affiliate money source (commission / reward points / affiliate balance functions / balance providers / bonus)',
+      /commission|rewardPoint|reward_point|getAffiliateBalance|getWithdrawableBalance|getAffiliateBalanceBreakdown|computeRegisteredBalance|providerRegistry|registerBalanceProvider|bonusBalance|totalCommission/i, 'money'],
     ["changes an affiliate's verification (identity writes / admin identity functions / submitIdentity)",
       /identityVerification\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\b|adminApproveIdentity|adminRejectIdentity|adminResetIdentity|submitIdentity|identity_verifications/, 'all'],
     ["changes an existing affiliate's parent or activation (affiliate update / upsert, parent connect, raw UPDATE)",
       /\baffiliate\.(update|updateMany|upsert)\b|parent:\s*\{\s*(connect|disconnect|set)|UPDATE\s+"?affiliates"?/i, 'all'],
     ['sends an error .message', /\.message\b/, 'all'],
   ];
+  const MONEY_FILES = new Set(['src/lib/services/recruiterWalletService.js', 'src/lib/recruiterWalletRouteHandlers.js', 'src/lib/recruiterRewardAdminHandlers.js']);
+  const isMoney = (f) => MONEY_FILES.has(f) || /^src\/app\/api\/recruiter\/wallet\//.test(f) || /^src\/app\/recruiter\/wallet\//.test(f);
+  // Every affiliatePayout call in a money file names recruiterId inside the same call expression,
+  // and no payout call ever carries an affiliateId (recruiter rows are owned by the recruiter only).
+  const payoutCalls = (code) => {
+    const out = [];
+    for (const m of code.matchAll(/affiliatePayout\s*\.\s*(\w+)\s*\(/g)) {
+      let depth = 0, i = m.index + m[0].length - 1, end = -1;
+      for (; i < code.length; i++) { if (code[i] === '(') depth++; else if (code[i] === ')') { depth--; if (depth === 0) { end = i; break; } } }
+      out.push({ op: m[1], text: code.slice(m.index, end + 1) });
+    }
+    return out;
+  };
   const violations = [];
   for (const f of files) {
     const code = stripJs(read(f));
-    for (const [label, re, scope] of RULES) if ((scope === 'all' || isRouteFile(f)) && re.test(code)) violations.push(`${f}: ${label}`);
+    for (const [label, re, scope] of RULES) {
+      const applies = scope === 'all' || (scope === 'route' && isRouteFile(f)) || (scope === 'nonMoney' && !isMoney(f)) || (scope === 'money' && isMoney(f));
+      if (applies && re.test(code)) violations.push(`${f}: ${label}`);
+    }
+    for (const c of payoutCalls(code)) {
+      if (!isMoney(f)) violations.push(`${f}: affiliatePayout used outside the Phase 5 money files`);
+      else if (!/recruiterId/.test(c.text)) violations.push(`${f}: affiliatePayout.${c.op} not scoped by recruiterId`);
+      else if (/affiliateId/.test(c.text)) violations.push(`${f}: affiliatePayout.${c.op} mentions affiliateId`);
+    }
     const isRoute = isRouteFile(f) && /\/(route|page)\.(m?[jt]sx?)$/.test(f);
     if (isRoute && !/from\s+['"](@\/lib\/|(\.\.\/)+(lib\/)?)recruiterVisibility(\.js)?['"]/.test(code)) violations.push(`${f}: does not import recruiterVisibility`);
   }
   const roots = ['src/app/api/recruiter/**', 'src/app/recruiter/**', 'src/lib/**/*recruiter* (any case)'];
   console.log(`    contract scan: ${files.length} file(s) under ${roots.join(', ')} (excluding ${[...ALLOWED].join(', ')})${files.length ? '\n      ' + files.join('\n      ') : ''}`);
   ok(`contract scan ran: ${files.length} recruiter-facing file(s) found${files.length === 0 ? ' — vacuous until Phase 2 adds recruiter routes / pages / services' : ''}`, Array.isArray(files) && typeof files.length === 'number');
-  ok('contract: no raw recruiter rows in routes, no UGC read, no CIN file, no balance / earnings, no parent / verification change, no error message; every route / page imports recruiterVisibility',
+  ok('contract: no raw recruiter rows in routes, no UGC read, no CIN file, no balance / earnings outside the Phase 5 money files (and no affiliate money source in them), no parent / verification change, no error message; every route / page imports recruiterVisibility',
     violations.length === 0, violations.join(' | '));
+  const moneyScanned = files.filter(isMoney);
+  ok(`Phase 5 money files are scanned under the money rules (${moneyScanned.length}: ${moneyScanned.join(', ')}) and every affiliatePayout call in them is scoped by recruiterId`,
+    ['src/lib/services/recruiterWalletService.js', 'src/lib/recruiterWalletRouteHandlers.js', 'src/lib/recruiterRewardAdminHandlers.js'].every((f) => moneyScanned.includes(f))
+    && payoutCalls(stripJs(read('src/lib/services/recruiterWalletService.js'))).length >= 8);
+  ok('the money rule itself works: a sample with commission / getAffiliateBalance / an unscoped payout call is caught; the old rule still catches "withdraw" in a non-money file',
+    RULES.find((r) => r[2] === 'money')[1].test('x.commissionRate') && RULES.find((r) => r[2] === 'money')[1].test('getAffiliateBalance(id)')
+    && payoutCalls('db.affiliatePayout.findMany({ where: { status } })').every((c) => !/recruiterId/.test(c.text)) && RULES.find((r) => r[2] === 'nonMoney')[1].test('withdrawals'));
   const doc = read('docs/recruiter-system.md');
   ok('docs/recruiter-system.md states the mandatory-projection contract (all 6 functions in the table)',
     /Every recruiter-facing endpoint, page payload, statistic and error MUST be built only with\s+`src\/lib\/recruiterVisibility\.js`/.test(doc)

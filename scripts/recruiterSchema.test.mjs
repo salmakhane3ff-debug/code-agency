@@ -219,9 +219,22 @@ console.log('\n1e. Data sources: real delivered orders (isFake = false) and the 
     loginBody.length > 200 && !/identity|APPROVED/i.test(stripJs(loginBody)) && !/identity|APPROVED/i.test(stripJs(authRoute)) && /loginAffiliate\(/.test(authRoute));
   ok('the affiliate identity route only reads the status / submits (getIdentityStatus, submitIdentity — no admin function)',
     (() => { const r = stripJs(read('src/app/api/affiliate/identity/route.js')); return /submitIdentity/.test(r) && !/adminApproveIdentity|adminRejectIdentity|adminResetIdentity|status:\s*'APPROVED'/.test(r); })());
-  ok('identityService.js, the identity / login routes, affiliateSystemService.js, ugcService.js and ugcStatus.js are unchanged versus the base ef79c6b (git diff empty)',
-    git(['diff', 'ef79c6bb1e445c964f915effe558e817844db9f0', '--', 'src/lib/services/identityService.js', 'src/app/api/admin/identity/route.js', 'src/app/api/affiliate/identity/route.js',
+  ok('identityService.js, the affiliate identity / login routes, affiliateSystemService.js, ugcService.js and ugcStatus.js are unchanged versus the base ef79c6b (git diff empty)',
+    git(['diff', 'ef79c6bb1e445c964f915effe558e817844db9f0', '--', 'src/lib/services/identityService.js', 'src/app/api/affiliate/identity/route.js',
       'src/app/api/affiliate/auth/route.js', 'src/lib/services/affiliateSystemService.js', 'src/lib/services/ugcService.js', 'src/lib/ugcStatus.js']) === '');
+  // Phase 5 (documented allowance, docs/recruiter-system.md §6): the admin identity route only
+  // gained the post-commit recruiter reward hook around the UNCHANGED adminApproveIdentity call.
+  const idDiff = git(['diff', 'ef79c6bb1e445c964f915effe558e817844db9f0', '--', 'src/app/api/admin/identity/route.js'])
+    .split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l));
+  ok('the admin identity route differs from the base ONLY by the Phase 5 recruiter hook (import + approve branch: same adminApproveIdentity call, then the post-commit hook)',
+    JSON.stringify(idDiff) === JSON.stringify([
+      "+import { onRecruiterIdentityApprovedCommitted } from '@/lib/recruiterRewardHooks';",
+      '-      return Response.json(await adminApproveIdentity(id, adminId));',
+      '+      const approved = await adminApproveIdentity(id, adminId);',
+      "+      // Recruiter reward (post-commit, never throws): the affiliate's CIN is now APPROVED.",
+      '+      await onRecruiterIdentityApprovedCommitted(String(id));',
+      '+      return Response.json(approved);',
+    ]), JSON.stringify(idDiff));
   ok('recruiterSettings.js has no bank logic (no requireBankDetails / bankName / accountName / rib / bank)', !/requireBankDetails|bankName|accountName|\brib\b|bank/i.test(settingsSrc));
 }
 
@@ -321,7 +334,28 @@ console.log('\n3. Prisma schema (vs pre-recruiter base ef79c6b)');
   const removed = [...H.keys()].filter((k) => !N.has(k));
   ok('exactly the 5 recruiter models were added; no model / enum removed', eq(added.sort(), [...NEW_MODELS].sort()) && removed.length === 0, `added=${added} removed=${removed}`);
   const changed = [...H.keys()].filter((k) => N.has(k) && N.get(k) !== H.get(k));
-  ok('the only changed existing block is model Affiliate (AffiliateOrder, IdentityVerification, UgcVideoSubmission untouched)', eq(changed, ['model Affiliate']), changed.join(','));
+  ok('the only changed existing blocks are model Affiliate and (Phase 5, documented) model AffiliatePayout — AffiliateOrder, IdentityVerification, UgcVideoSubmission untouched',
+    eq(changed.sort(), ['model Affiliate', 'model AffiliatePayout']), changed.join(','));
+  {
+    // Phase 5 allowance (docs/recruiter-system.md §6, migration 20261106): recruiter withdrawals reuse
+    // affiliate_payouts — affiliateId optional, recruiterId + its relation + index, the existing
+    // affiliate FK kept explicit (onDelete: Restrict = the existing FK), 3 comment lines. Nothing else.
+    const norm = (b) => b.split('\n').map((l) => l.replace(/\s+/g, ' ').trim());
+    const nowLines = norm(N.get('model AffiliatePayout'));
+    const comments = nowLines.filter((l) => l.startsWith('//'));
+    const code = nowLines.filter((l) => !l.startsWith('//'));
+    ok('model AffiliatePayout changed EXACTLY as documented (affiliateId?, affiliate relation with onDelete: Restrict, recruiterId?, recruiter relation, @@index([recruiterId]), 3 comment lines)',
+      eq(code, [
+        'model AffiliatePayout {', 'id String @id @default(uuid())', 'affiliateId String?', 'amount Float', 'status String @default("pending")', 'createdAt DateTime @default(now())',
+        'affiliate Affiliate? @relation(fields: [affiliateId], references: [id], onDelete: Restrict) // = the existing FK (unchanged)',
+        'recruiterId String?', 'recruiter Recruiter? @relation(fields: [recruiterId], references: [id], onDelete: Restrict)', '',
+        '@@index([affiliateId])', '@@index([status])', '@@index([recruiterId])', '@@map("affiliate_payouts")', '}',
+      ]) && comments.length === 3 && comments[0].startsWith('// Owner: EXACTLY ONE of affiliateId / recruiterId'), JSON.stringify(code));
+    const base = norm(H.get('model AffiliatePayout'));
+    ok('…every base AffiliatePayout field keeps its type except affiliateId (now optional) and the affiliate relation (now optional, same FK)',
+      ['id String @id @default(uuid())', 'amount Float', 'status String @default("pending")', 'createdAt DateTime @default(now())', '@@index([affiliateId])', '@@index([status])', '@@map("affiliate_payouts")']
+        .every((l) => base.includes(l) && code.includes(l)) && base.includes('affiliateId String') && base.includes('affiliate Affiliate @relation(fields: [affiliateId], references: [id])'));
+  }
   const hl = H.get('model Affiliate').split('\n'), nl = N.get('model Affiliate').split('\n');
   const extra = nl.filter((l) => !hl.includes(l));
   const missing = hl.filter((l) => !nl.includes(l));
@@ -350,8 +384,17 @@ console.log('\n3. Prisma schema (vs pre-recruiter base ef79c6b)');
   ok('ledger amountCents Int; settings model fields exactly version, enabled, rewardAmountCents, minDeliveredSales, createdBy, createdAt',
     /amountCents\s+Int\b/.test(N.get('model RecruiterRewardLedger'))
     && eq([...N.get('model RecruiterSettingsVersion').matchAll(/^\s{2}(\w+)\s+\w/gm)].map((m) => m[1]), ['version', 'enabled', 'rewardAmountCents', 'minDeliveredSales', 'createdBy', 'createdAt']));
-  ok('the recruiter schema section has no requireBankDetails / requireAccountActive / requireIdentityApproved / bank / rib / bankName / accountName',
-    !/requireBankDetails|requireAccountActive|requireIdentityApproved|bankName|accountName|\brib\b|bank/i.test(section));
+  // Phase 5 allowance: the Recruiter model carries its OWN bank details for withdrawals (exactly
+  // these 4 lines). The reward rule, settings and ledger still never reference bank / active / identity requirements.
+  const BANK_LINES = ['// Bank details for withdrawals (Phase 5) — same fields and rules as the affiliate ones.', 'bankName String?', 'rib String?', 'accountName String?'];
+  const recLines = N.get('model Recruiter').split('\n').map((l) => l.replace(/\s+/g, ' ').trim());
+  ok('model Recruiter has exactly the 4 documented Phase 5 bank lines (all optional) and the payouts back-relation',
+    BANK_LINES.every((l) => recLines.filter((x) => x === l).length === 1) && recLines.filter((x) => /bank|\brib\b|accountName/i.test(x)).length === 4 && recLines.includes('payouts AffiliatePayout[]'));
+  const sectionNoBank = section.split('\n').filter((l) => !BANK_LINES.includes(l.replace(/\s+/g, ' ').trim())).join('\n');
+  ok('apart from those Recruiter bank lines, the recruiter schema section has no requireBankDetails / requireAccountActive / requireIdentityApproved / bank / rib / bankName / accountName',
+    !/requireBankDetails|requireAccountActive|requireIdentityApproved|bankName|accountName|\brib\b|bank/i.test(sectionNoBank));
+  ok('the reward models (ledger, settings versions) have no bank / active / identity requirement field',
+    ['model RecruiterRewardLedger', 'model RecruiterSettingsVersion'].every((m) => !/bank|\brib\b|accountName|isActive|requireIdentity|identity/i.test(N.get(m))));
   ok('"verified" (any case) still appears exactly once in schema.prisma (feedbackCarouselInteraction rule)', (now.match(/verified/gi) || []).length === 1);
 }
 

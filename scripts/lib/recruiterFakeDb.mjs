@@ -17,6 +17,14 @@
  *                       `/* recruiter-network-tree *\/` recursive query, emulated row for row
  *                       (roots, linked children only, depth < bound). `_queryCount()` = number of
  *                       database calls so far (every model call and every raw query).
+ *   Phase 5 ({ phase5: true }, implies phase 4): rewards and withdrawals —
+ *                       `recruiterSettingsVersion` (consecutive versions under a lock held until
+ *                       commit, like the trigger + advisory lock; the CHECKs), `recruiterRewardLedger`
+ *                       (append-only, CHECKs, unique idempotencyKey, ONE RECRUIT_REWARD per affiliate,
+ *                       link guard), `affiliatePayout` (exactly-one-owner CHECK, recruiter amount CHECK,
+ *                       FKs; every call recorded in `_payoutCalls`), `affiliateOrder.groupBy` with the
+ *                       delivered filter + `findUnique`, `identityVerification.findUnique`, the second
+ *                       recruiter row-lock statement (bank columns), `recruiter.findMany` where.
  *
  * Mirrors the migration's guarantees: unique username / phone (P2002 with meta.target),
  * the recruiters CHECKs (username format, name length, bcrypt-only passwordHash,
@@ -93,7 +101,8 @@ function matchScalar(v, cond) {
   for (const [op, arg] of Object.entries(cond)) {
     if (op === 'in') { if (!Array.isArray(arg) || !arg.includes(v)) return false; }
     else if (op === 'equals') { if (val(v) !== val(arg)) return false; }
-    else if (op === 'not') { if (val(v) === val(arg)) return false; }
+    else if (op === 'not') { if (val(v) === val(arg) || (arg === null && v == null)) return false; }
+    else if (op === 'notIn') { if (!Array.isArray(arg) || arg.includes(v)) return false; }
     else if (op === 'contains') {
       if (typeof v !== 'string') return false;
       const insensitive = cond.mode === 'insensitive';
@@ -104,9 +113,14 @@ function matchScalar(v, cond) {
   return true;
 }
 
-export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In = false, phase4 = false, failOnce = {}, hooks = {} } = {}) {
+export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In = false, phase4: phase4In = false, phase5 = false, failOnce = {}, hooks = {} } = {}) {
+  const phase4 = phase4In || phase5;
   const phase3 = phase3In || phase4;
-  const T = { recruiter: [], recruiterAuditLog: [], affiliate: [], recruiterAffiliateLink: [], affiliateOrder: [], identityVerification: [] };
+  const T = {
+    recruiter: [], recruiterAuditLog: [], affiliate: [], recruiterAffiliateLink: [], affiliateOrder: [], identityVerification: [],
+    recruiterSettingsVersion: [], recruiterRewardLedger: [], affiliatePayout: [],
+  };
+  const payoutCalls = [];
   let seq = 0;
   let txSeq = 0;
   const log = [];
@@ -178,9 +192,9 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
       const row = rows('recruiter').find((x) => x[keys[0]] === where[keys[0]]);
       return pick(row, select);
     },
-    async findMany({ orderBy, select } = {}) {
-      await before('recruiter', 'findMany', {});
-      return sortRows(rows('recruiter'), orderBy).map((r) => pick(r, select));
+    async findMany({ where, orderBy, select } = {}) {
+      await before('recruiter', 'findMany', { where });
+      return sortRows(rows('recruiter').filter((r) => Object.entries(where || {}).every(([k, v]) => matchScalar(r[k], v))), orderBy).map((r) => pick(r, select));
     },
     async update({ where, data }) {
       await before('recruiter', 'update', { where, data });
@@ -359,11 +373,14 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
       if (!Array.isArray(by) || !by.length || !by.every((k) => ORDER_BY.has(k))) throw new Error(`fake affiliateOrder.groupBy: by must be a subset of affiliateId/status/isFake (got ${JSON.stringify(by)})`);
       if (!_count || Object.keys(_count).join() !== '_all' || _count._all !== true) throw new Error('fake affiliateOrder.groupBy: only _count: { _all: true }');
       const wk = Object.keys(where || {});
-      if (wk.length !== 1 || wk[0] !== 'affiliateId' || !Array.isArray(where.affiliateId?.in)) throw new Error(`fake affiliateOrder.groupBy: unsupported where ${JSON.stringify(where)}`);
+      const extraOk = phase5 ? wk.filter((k) => k !== 'affiliateId').every((k) => ['status', 'isFake'].includes(k) && (typeof where[k] === 'string' || typeof where[k] === 'boolean')) : wk.length === 1;
+      if (!wk.includes('affiliateId') || !extraOk || !Array.isArray(where.affiliateId?.in)) throw new Error(`fake affiliateOrder.groupBy: unsupported where ${JSON.stringify(where)}`);
       const wanted = new Set(where.affiliateId.in);
       const groups = new Map();
       for (const o of rows('affiliateOrder')) {
         if (!wanted.has(o.affiliateId)) continue;
+        if ('status' in (where || {}) && o.status !== where.status) continue;
+        if ('isFake' in (where || {}) && o.isFake !== where.isFake) continue;
         const key = JSON.stringify(by.map((k) => o[k]));
         if (!groups.has(key)) groups.set(key, { ...Object.fromEntries(by.map((k) => [k, o[k]])), _count: { _all: 0 } });
         groups.get(key)._count._all += 1;
@@ -390,6 +407,227 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
   };
   for (const op of ['findFirst', 'findUnique', 'count', 'groupBy', 'aggregate', 'create', 'createMany', 'update', 'updateMany', 'upsert', 'delete', 'deleteMany']) {
     identityVerification[op] = async () => { throw new Error(`fake db: identityVerification.${op} is not allowed in recruiter code`); };
+  }
+
+  // ── Phase 5 models (rewards, settings versions, withdrawals) ──────────────────
+  const recruiterSettingsVersion = {};
+  const recruiterRewardLedger = {};
+  const affiliatePayout = {};
+  const genericMatch = (r, where) => Object.entries(where || {}).every(([k, v]) => {
+    if (k === 'OR') return Array.isArray(v) && v.some((w) => genericMatch(r, w));
+    if (k === 'AND') return (Array.isArray(v) ? v : [v]).every((w) => genericMatch(r, w));
+    return matchScalar(r[k], v);
+  });
+  const takeRows = (list, take) => (Number.isInteger(take) ? list.slice(0, take) : list);
+  function sumGroups(list, by, _sum, _count) {
+    const groups = new Map();
+    for (const r of list) {
+      const key = JSON.stringify((by || []).map((k) => r[k]));
+      if (!groups.has(key)) {
+        const g = Object.fromEntries((by || []).map((k) => [k, r[k]]));
+        if (_sum) g._sum = Object.fromEntries(Object.keys(_sum).map((k) => [k, null]));
+        if (_count) g._count = { _all: 0 };
+        groups.set(key, g);
+      }
+      const g = groups.get(key);
+      if (_sum) for (const k of Object.keys(_sum)) g._sum[k] = (g._sum[k] ?? 0) + Number(r[k] ?? 0);
+      if (_count) g._count._all += 1;
+    }
+    return [...groups.values()];
+  }
+  if (phase5) {
+    // recruiter_settings_versions: consecutive versions (trigger under an advisory lock held
+    // until commit — a concurrent insert waits, then fails the check), the CHECKs, append-only.
+    Object.assign(recruiterSettingsVersion, {
+      async findFirst({ where, orderBy, select } = {}) {
+        await before('recruiterSettingsVersion', 'findFirst', { where });
+        return pick(sortRows(rows('recruiterSettingsVersion').filter((r) => genericMatch(r, where)), orderBy)[0], select);
+      },
+      async findMany({ where, orderBy, take, select } = {}) {
+        await before('recruiterSettingsVersion', 'findMany', { where });
+        return takeRows(sortRows(rows('recruiterSettingsVersion').filter((r) => genericMatch(r, where)), orderBy), take).map((r) => pick(r, select));
+      },
+      async create({ data }) {
+        await before('recruiterSettingsVersion', 'create', { data });
+        await lockRecruiterRow('__recruiter_settings_versions__');
+        const r = { createdAt: new Date(), ...clone(data) };
+        const expected = rows('recruiterSettingsVersion').reduce((m, x) => Math.max(m, x.version), 0) + 1;
+        if (r.version !== expected) throw triggerErr(`recruiter settings version must be ${expected} (got ${r.version})`);
+        if (T.recruiterSettingsVersion.some((x) => x.version === r.version)) throw p2002('version');
+        if (!(r.version >= 1 && Number.isInteger(r.rewardAmountCents) && r.rewardAmountCents >= 0 && r.rewardAmountCents <= 100_000_000
+          && Number.isInteger(r.minDeliveredSales) && r.minDeliveredSales >= 1 && r.minDeliveredSales <= 100_000
+          && (!r.enabled || r.rewardAmountCents > 0) && typeof r.createdBy === 'string' && r.createdBy.length > 0 && typeof r.enabled === 'boolean')) {
+          throw checkErr('recruiter_settings_versions_check');
+        }
+        T.recruiterSettingsVersion.push(r);
+        markWritten(r);
+        undoPush(() => { T.recruiterSettingsVersion.splice(T.recruiterSettingsVersion.indexOf(r), 1); });
+        return clone(r);
+      },
+    });
+    for (const op of ['update', 'updateMany', 'upsert', 'delete', 'deleteMany']) {
+      recruiterSettingsVersion[op] = async () => { throw triggerErr('recruiter_settings_versions is append-only'); };
+    }
+
+    // recruiter_reward_ledger: append-only, CHECKs, idempotency key, one recruit reward per
+    // affiliate (partial unique index), link guard trigger, FKs.
+    Object.assign(recruiterRewardLedger, {
+      async create({ data }) {
+        await before('recruiterRewardLedger', 'create', { data });
+        const r = { id: randomUUID(), seq: BigInt(++seq), affiliateId: null, reason: null, actorId: null, settingsVersion: null, createdAt: new Date(), ...clone(data) };
+        if (!['RECRUIT_REWARD', 'REVERSAL', 'ADMIN_ADJUSTMENT'].includes(r.type)) throw checkErr('recruiter_reward_ledger_type_check');
+        if (!(['SYSTEM', 'ADMIN'].includes(r.actorType) && (r.actorType === 'SYSTEM' || r.actorId != null))) throw checkErr('recruiter_reward_ledger_actor_check');
+        const a = r.amountCents;
+        if (!(Number.isInteger(a) && a !== 0 && Math.abs(a) <= 100_000_000
+          && (r.type !== 'RECRUIT_REWARD' || (a > 0 && r.affiliateId != null && r.settingsVersion != null))
+          && (r.type !== 'REVERSAL' || (a < 0 && r.affiliateId != null))
+          && (r.type !== 'ADMIN_ADJUSTMENT' || (r.actorType === 'ADMIN' && String(r.reason ?? '').trim().length > 0)))) throw checkErr('recruiter_reward_ledger_amount_check');
+        // BEFORE INSERT triggers: link guard (and the reversal guard is not used by Phase 5 code).
+        if (r.affiliateId != null && !rows('recruiterAffiliateLink').some((l) => l.affiliateId === r.affiliateId && l.recruiterId === r.recruiterId)) {
+          throw triggerErr(`affiliate ${r.affiliateId} is not linked to recruiter ${r.recruiterId}`);
+        }
+        if (T.recruiterRewardLedger.some((x) => x.idempotencyKey === r.idempotencyKey)) throw p2002('idempotencyKey');
+        if (r.type === 'RECRUIT_REWARD' && T.recruiterRewardLedger.some((x) => x.type === 'RECRUIT_REWARD' && x.affiliateId === r.affiliateId)) throw p2002('affiliateId');
+        if (!T.recruiter.some((x) => x.id === r.recruiterId)) throw fkErr('recruiterId');
+        if (r.affiliateId != null && !T.affiliate.some((x) => x.id === r.affiliateId)) throw fkErr('affiliateId');
+        T.recruiterRewardLedger.push(r);
+        markWritten(r);
+        undoPush(() => { T.recruiterRewardLedger.splice(T.recruiterRewardLedger.indexOf(r), 1); });
+        return clone(r);
+      },
+      async findFirst({ where, orderBy, select } = {}) {
+        await before('recruiterRewardLedger', 'findFirst', { where });
+        return pick(sortRows(rows('recruiterRewardLedger').filter((r) => genericMatch(r, where)), orderBy || [{ seq: 'asc' }])[0], select);
+      },
+      async findMany({ where, orderBy, take, select } = {}) {
+        await before('recruiterRewardLedger', 'findMany', { where });
+        return takeRows(sortRows(rows('recruiterRewardLedger').filter((r) => genericMatch(r, where)), orderBy || [{ seq: 'asc' }]), take).map((r) => pick(r, select));
+      },
+      async aggregate({ where, _sum, ...rest } = {}) {
+        await before('recruiterRewardLedger', 'aggregate', { where });
+        if (Object.keys(rest).length || !_sum) throw new Error('fake recruiterRewardLedger.aggregate: only where + _sum');
+        const list = rows('recruiterRewardLedger').filter((r) => genericMatch(r, where));
+        const out = {};
+        for (const k of Object.keys(_sum)) out[k] = list.length ? list.reduce((t, r) => t + Number(r[k] ?? 0), 0) : null;
+        return { _sum: out };
+      },
+      async groupBy({ by, where, _sum, _count } = {}) {
+        await before('recruiterRewardLedger', 'groupBy', { where });
+        return sumGroups(rows('recruiterRewardLedger').filter((r) => genericMatch(r, where)), by, _sum, _count);
+      },
+    });
+    for (const op of ['update', 'updateMany', 'upsert', 'delete', 'deleteMany', 'createMany']) {
+      recruiterRewardLedger[op] = async () => { throw triggerErr('recruiter_reward_ledger is append-only'); };
+    }
+
+    // affiliate_payouts: exactly one owner, the recruiter amount CHECK, FKs. Every call is
+    // recorded (model op + where / data) so tests can prove recruiter code scopes by recruiterId.
+    const record = (op, args) => payoutCalls.push({ op, where: clone(args?.where ?? null), data: clone(args?.data ?? null) });
+    const projectPayout = (p, { select, include } = {}) => {
+      const out = pick(p, select);
+      if (include?.recruiter) {
+        const r = T.recruiter.find((x) => x.id === p.recruiterId);
+        out.recruiter = r ? pick(r, include.recruiter === true ? undefined : include.recruiter.select) : null;
+      }
+      if (include?.affiliate) {
+        const a = T.affiliate.find((x) => x.id === p.affiliateId);
+        out.affiliate = a ? pick(a, include.affiliate === true ? undefined : include.affiliate.select) : null;
+      }
+      return out;
+    };
+    const checkPayout = (p) => {
+      if ((p.affiliateId == null) === (p.recruiterId == null)) throw checkErr('affiliate_payouts_owner_check');
+      if (p.recruiterId != null) {
+        const amt = Number(p.amount);
+        if (!(amt >= 0.01 && amt <= 1_000_000 && Math.abs(amt * 100 - Math.round(amt * 100)) < 0.000001)) throw checkErr('affiliate_payouts_recruiter_amount_check');
+        if (!T.recruiter.some((x) => x.id === p.recruiterId)) throw fkErr('recruiterId');
+      }
+      if (p.affiliateId != null && !T.affiliate.some((x) => x.id === p.affiliateId)) throw fkErr('affiliateId');
+    };
+    Object.assign(affiliatePayout, {
+      async create(args = {}) {
+        record('create', args);
+        await before('affiliatePayout', 'create', { data: args.data });
+        const p = { id: randomUUID(), affiliateId: null, recruiterId: null, status: 'pending', createdAt: new Date(), ...clone(args.data) };
+        checkPayout(p);
+        T.affiliatePayout.push(p);
+        markWritten(p);
+        undoPush(() => { T.affiliatePayout.splice(T.affiliatePayout.indexOf(p), 1); });
+        return projectPayout(p, args);
+      },
+      async findMany(args = {}) {
+        record('findMany', args);
+        await before('affiliatePayout', 'findMany', { where: args.where });
+        return takeRows(sortRows(rows('affiliatePayout').filter((r) => genericMatch(r, args.where)), args.orderBy), args.take).map((r) => projectPayout(r, args));
+      },
+      async findFirst(args = {}) {
+        record('findFirst', args);
+        await before('affiliatePayout', 'findFirst', { where: args.where });
+        const r = sortRows(rows('affiliatePayout').filter((x) => genericMatch(x, args.where)), args.orderBy)[0];
+        return r ? projectPayout(r, args) : null;
+      },
+      async findUnique(args = {}) {
+        record('findUnique', args);
+        await before('affiliatePayout', 'findUnique', { where: args.where });
+        const k = Object.keys(args.where || {});
+        if (k.length !== 1 || k[0] !== 'id') throw new Error(`fake affiliatePayout.findUnique: unsupported where ${JSON.stringify(args.where)}`);
+        const r = rows('affiliatePayout').find((x) => x.id === args.where.id);
+        return r ? projectPayout(r, args) : null;
+      },
+      async updateMany(args = {}) {
+        record('updateMany', args);
+        await before('affiliatePayout', 'updateMany', { where: args.where });
+        const dk = Object.keys(args.data || {});
+        if (!dk.length || dk.some((k) => k !== 'status')) throw new Error('fake affiliatePayout.updateMany: only the status can change');
+        let count = 0;
+        for (const r of rows('affiliatePayout').filter((x) => genericMatch(x, args.where))) {
+          const prev = clone(r);
+          Object.assign(r, clone(args.data));
+          undoPush(() => { Object.assign(r, prev); });
+          count += 1;
+        }
+        return { count };
+      },
+      async update(args = {}) {
+        record('update', args);
+        await before('affiliatePayout', 'update', { where: args.where });
+        const r = rows('affiliatePayout').find((x) => x.id === args.where?.id);
+        if (!r) throw Object.assign(new Error('Record to update not found.'), { code: 'P2025' });
+        const prev = clone(r);
+        Object.assign(r, clone(args.data));
+        try { checkPayout(r); } catch (e) { Object.assign(r, prev); throw e; }
+        undoPush(() => { Object.assign(r, prev); });
+        return projectPayout(r, args);
+      },
+      async aggregate(args = {}) {
+        record('aggregate', args);
+        await before('affiliatePayout', 'aggregate', { where: args.where });
+        const list = rows('affiliatePayout').filter((r) => genericMatch(r, args.where));
+        const out = {};
+        for (const k of Object.keys(args._sum || {})) out[k] = list.length ? list.reduce((t, r) => t + Number(r[k] ?? 0), 0) : null;
+        return { _sum: out };
+      },
+    });
+    for (const op of ['delete', 'deleteMany', 'upsert', 'createMany']) {
+      affiliatePayout[op] = async () => { throw new Error(`fake db: affiliatePayout.${op} is not allowed`); };
+    }
+
+    // Reads used by the reward hooks / service (status only — never a document field).
+    affiliateOrder.findUnique = async ({ where, select } = {}) => {
+      await before('affiliateOrder', 'findUnique', { where });
+      const k = Object.keys(where || {});
+      if (k.length !== 1 || k[0] !== 'id') throw new Error(`fake affiliateOrder.findUnique: unsupported where ${JSON.stringify(where)}`);
+      if (!select || !Object.keys(select).every((x) => ['affiliateId', 'status', 'isFake', 'id'].includes(x))) throw new Error(`fake affiliateOrder.findUnique: select must be a subset of id/affiliateId/status/isFake (got ${JSON.stringify(select)})`);
+      return pick(rows('affiliateOrder').find((o) => o.id === where.id), select);
+    };
+    identityVerification.findUnique = async ({ where, select } = {}) => {
+      await before('identityVerification', 'findUnique', { where });
+      const k = Object.keys(where || {});
+      if (k.length !== 1 || !['id', 'affiliateId'].includes(k[0])) throw new Error(`fake identityVerification.findUnique: unsupported where ${JSON.stringify(where)}`);
+      if (!select || !Object.keys(select).every((x) => ['affiliateId', 'status'].includes(x))) throw new Error(`fake identityVerification.findUnique: select must be a subset of affiliateId/status (got ${JSON.stringify(select)}) — no document / file key`);
+      return pick(rows('identityVerification').find((r) => r[k[0]] === where[k[0]]), select);
+    };
+    // existence check of the affiliate (select id only) is already affiliate.findUnique.
   }
 
   // The recursive network query, emulated exactly like the SQL (a working table per iteration).
@@ -447,8 +685,29 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
       const r = rows('recruiter').find((x) => x.id === id); // re-read after the wait (latest committed row)
       return r ? [{ isActive: r.isActive, canCreateAffiliates: r.canCreateAffiliates }] : [];
     }
+    if (phase5 && /^SELECT "isActive", "bankName", "rib", "accountName" FROM "recruiters" WHERE "id" = \$\? FOR NO KEY UPDATE$/.test(norm)) {
+      const id = values[0];
+      if (!ctx()) throw new Error('fake $queryRaw: FOR NO KEY UPDATE outside a transaction (the lock would be released at once)');
+      await lockRecruiterRow(id);
+      const r = rows('recruiter').find((x) => x.id === id);
+      return r ? [{ isActive: r.isActive, bankName: r.bankName ?? null, rib: r.rib ?? null, accountName: r.accountName ?? null }] : [];
+    }
     if (phase4 && norm.startsWith('/* recruiter-network-tree */')) return networkTree(norm, values);
     throw new Error(`fake $queryRaw: unsupported statement ${norm}`);
+  }
+
+  // Phase 5: the settings advisory lock (the SAME key as the consecutive-version trigger),
+  // emulated with the same lock the fake trigger uses, held until the transaction ends.
+  async function $executeRaw(strings, ...values) {
+    const sql = Array.isArray(strings) ? strings.join('?') : String(strings);
+    const norm = sql.replace(/\s+/g, ' ').trim();
+    log.push({ model: '$executeRaw', op: 'execute', sql });
+    if (norm === "SELECT pg_advisory_xact_lock(hashtext('recruiter_settings_versions'))" && values.length === 0) {
+      if (!ctx()) throw new Error('fake $executeRaw: advisory xact lock outside a transaction');
+      await lockRecruiterRow('__recruiter_settings_versions__');
+      return 1;
+    }
+    throw new Error(`fake $executeRaw: unsupported statement ${norm}`);
   }
 
   async function $transaction(fn) {
@@ -483,6 +742,9 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
     link(data) { const l = { createdAt: new Date(), createdBy: data.recruiterId, ...clone(data) }; T.recruiterAffiliateLink.push(l); return clone(l); },
     order(data) { const o = { id: randomUUID(), status: 'pending', isFake: false, total: 0, clientName: null, clientPhone: null, createdAt: new Date(), ...clone(data) }; T.affiliateOrder.push(o); return clone(o); },
     identity(data) { const r = { id: randomUUID(), status: 'PENDING', cinFrontFile: 'secret/front.jpg', cinBackFile: 'secret/back.jpg', ...clone(data) }; T.identityVerification.push(r); return clone(r); },
+    settings(data) { const r = { createdBy: 'admin-seed', createdAt: new Date(), ...clone(data) }; T.recruiterSettingsVersion.push(r); return clone(r); },
+    payout(data) { const p = { id: randomUUID(), affiliateId: null, recruiterId: null, status: 'pending', createdAt: new Date(), ...clone(data) }; T.affiliatePayout.push(p); return clone(p); },
+    ledger(data) { const r = { id: randomUUID(), seq: BigInt(++seq), affiliateId: null, reason: null, actorId: null, settingsVersion: null, actorType: 'SYSTEM', createdAt: new Date(), ...clone(data) }; T.recruiterRewardLedger.push(r); return clone(r); },
     recruiter(data) {
       const now = new Date();
       const r = {
@@ -499,8 +761,9 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
     recruiter, recruiterAuditLog, $transaction,
     ...(phase3 ? { affiliate, recruiterAffiliateLink, $queryRaw } : {}),
     ...(phase4 ? { affiliateOrder, identityVerification } : {}),
+    ...(phase5 ? { recruiterSettingsVersion, recruiterRewardLedger, affiliatePayout, $executeRaw } : {}),
     _queryCount: () => log.filter((l) => l.model !== '$transaction').length,
-    _tables: T, _log: log, _state: state, _seed: seed, _openTx: openTx, _locks: locks,
+    _tables: T, _log: log, _state: state, _seed: seed, _openTx: openTx, _locks: locks, _payoutCalls: payoutCalls,
   };
 
   const db = new Proxy(base, {

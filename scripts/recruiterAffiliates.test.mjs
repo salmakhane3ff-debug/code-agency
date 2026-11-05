@@ -576,9 +576,28 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
   let diff = 'unavailable';
   try {
     diff = execFileSync('git', ['diff', '63abd2d42577570cad31082901f18b8544a0b38f', '--', 'src/lib/services/affiliateSystemService.js', 'src/app/api/admin/affiliates/route.js', 'src/app/api/affiliate',
-      'src/lib/middleware/withAffiliateAuth.js', 'src/lib/middleware/withAdminAuth.js', 'src/lib/services/identityService.js', 'src/lib/services/affiliateService.js', 'src/lib/controllers/affiliateController.js', 'src/app/api/affiliate/route.js', 'prisma'], { cwd: ROOT, encoding: 'utf8' }).trim();
+      'src/lib/middleware/withAffiliateAuth.js', 'src/lib/middleware/withAdminAuth.js', 'src/lib/services/identityService.js', 'src/lib/services/affiliateService.js', 'src/lib/controllers/affiliateController.js', 'src/app/api/affiliate/route.js'], { cwd: ROOT, encoding: 'utf8' }).trim();
   } catch (e) { diff = `git error ${e.status}`; }
-  ok('affiliateSystemService, the admin / affiliate routes, the auth middlewares, identity, the old affiliate controller and prisma/ are unchanged versus 63abd2d (git diff empty)', diff === '', diff.slice(0, 300));
+  ok('affiliateSystemService, the admin / affiliate routes, the auth middlewares, identity, the old affiliate controller are unchanged versus 63abd2d (git diff empty)', diff === '', diff.slice(0, 300));
+  // prisma/: the ONLY change since 63abd2d is the documented Phase 5 extension (docs/recruiter-system.md §6):
+  // schema.prisma (AffiliatePayout owner + Recruiter bank fields) and the new migration 20261106.
+  const gitOut = (args) => { try { return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim(); } catch (e) { return `git error ${e.status}`; } };
+  const prismaFiles = [...new Set([
+    ...gitOut(['diff', '--name-only', '63abd2d42577570cad31082901f18b8544a0b38f', '--', 'prisma']).split('\n'),
+    ...gitOut(['ls-files', '--others', '--exclude-standard', '--', 'prisma']).split('\n'),
+  ].filter(Boolean))].sort();
+  ok('prisma/ changed since 63abd2d ONLY by the Phase 5 files: schema.prisma + migrations/20261106_recruiter_rewards_withdrawals/migration.sql',
+    eq(prismaFiles, ['prisma/migrations/20261106_recruiter_rewards_withdrawals/migration.sql', 'prisma/schema.prisma']), prismaFiles.join(','));
+  const schemaDiff = gitOut(['diff', '63abd2d42577570cad31082901f18b8544a0b38f', '--', 'prisma/schema.prisma']).split('\n')
+    .filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l)).map((l) => l[0] + l.slice(1).replace(/\s+/g, ' ').trim());
+  const removedLines = schemaDiff.filter((l) => l.startsWith('-')).sort();
+  const addedCode = schemaDiff.filter((l) => l.startsWith('+') && !l.startsWith('+//')).sort();
+  ok('schema.prisma diff since 63abd2d = exactly the documented AffiliatePayout / Recruiter lines (re-aligned base lines, affiliateId?, the affiliate FK kept, recruiterId + relation + index, bank fields, payouts back-relation)',
+    eq(removedLines, ['-affiliate Affiliate @relation(fields: [affiliateId], references: [id])', '-affiliateId String', '-createdAt DateTime @default(now())', '-id String @id @default(uuid())', '-status String @default("pending")'].sort())
+    && eq(addedCode, ['+@@index([recruiterId])', '+accountName String?', '+affiliate Affiliate? @relation(fields: [affiliateId], references: [id], onDelete: Restrict) // = the existing FK (unchanged)',
+      '+affiliateId String?', '+bankName String?', '+createdAt DateTime @default(now())', '+id String @id @default(uuid())', '+payouts AffiliatePayout[]',
+      '+recruiter Recruiter? @relation(fields: [recruiterId], references: [id], onDelete: Restrict)', '+recruiterId String?', '+rib String?', '+status String @default("pending")'].sort())
+    && schemaDiff.filter((l) => l.startsWith('+//')).length === 4, JSON.stringify(schemaDiff));
   const asys = read('src/lib/services/affiliateSystemService.js');
   const adminCreate = asys.slice(asys.indexOf('export async function adminCreateAffiliate'), asys.indexOf('export async function adminUpdateAffiliate'));
   ok('adminCreateAffiliate keeps its original body (inactive, rate default, parent check, cache invalidation, no recruiter link)',

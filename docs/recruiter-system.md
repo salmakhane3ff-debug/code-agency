@@ -114,3 +114,70 @@ Service: `src/lib/services/recruiterNetworkService.js`. Nothing in Phase 4 write
   real / fake by bucket, and the same per level; per affiliate on the tree nodes. `rootId` scopes them to one
   sub-network (levels relative to it: 1 = its direct affiliates).
 - **Not in Phase 4:** rewards payout / withdrawal, reward rule changes, affiliate creation or re-parenting.
+
+## 6. Phase 5 — rewards and withdrawals
+
+### Rewards (`src/lib/services/recruiterRewardService.js`)
+
+- **Settings:** only `recruiter_settings_versions` (append-only, consecutive). The admin sets `enabled`,
+  `rewardAmountMad` (stored as cents) and `minDeliveredSales` (1–100000), validated server-side by
+  `validateRecruiterSettingsInput`. With no version: OFF, 0 MAD, 10 orders. `RECRUITER_SETTINGS_CHANGED` is audited.
+- **Rule:** exactly section 2: real delivered orders (`status === 'delivered'` AND `isFake === false`, actual
+  `affiliate_orders` rows) ≥ the threshold AND `IdentityVerification.status === 'APPROVED'`. `isActive` and UGC are
+  never read.
+- **Immediate award:** post-commit hooks (`src/lib/recruiterRewardHooks.js`, never throw) after an admin sets an
+  order to `delivered` (`PUT /api/admin/affiliate-orders`) or approves an identity (`PUT /api/admin/identity`).
+  Reconcile passes (batched) run on the recruiter wallet read, after every settings change, and from the admin
+  "recheck" action, so a missed event is caught.
+- **Ledger:** one `RECRUIT_REWARD` per affiliate (`recruit:<affiliateId>` + partial unique index): concurrent
+  events cannot duplicate it. Amount, version and reason are recorded on the row; later settings never change an
+  earned reward. Nothing revokes a reward automatically (a reversal needs an explicit admin action, out of scope).
+  `RECRUIT_REWARD_EARNED` is audited with the real delivered count and the threshold.
+
+### Withdrawals — the existing workflow, extended (`src/lib/services/recruiterWalletService.js`)
+
+Decision (approved): ONE payout system. Recruiter withdrawals are rows of the existing `affiliate_payouts` table.
+
+- **Migration `20261106_recruiter_rewards_withdrawals`** (additive):
+  - `affiliate_payouts.affiliateId` becomes nullable;
+  - new `recruiterId` (FK `recruiters`);
+  - CHECK exactly one owner;
+  - CHECK a recruiter row is a positive whole-cent amount ≤ 1,000,000 MAD;
+  - `recruiters.bankName / rib / accountName`.
+- **Affiliate rows and affiliate code are unchanged.** Every affiliate balance query filters `affiliateId`, so
+  recruiter rows (affiliateId NULL) never enter an affiliate balance.
+- **Same rules:** `validateBankInfo` (bank name, holder, RIB 10–34) before any request, and the same reservation
+  rule `PAYOUT_RELEASING_STATUSES` (rejected / cancelled release; pending, paid and any other status reserve).
+- **Recruiter accounting (MAD cents), never affiliate money:**
+  - `earned = Σ recruiter_reward_ledger`;
+  - `reserved = Σ their non-released withdrawals`;
+  - `available = earned − reserved`;
+  - `pending = reserved − paid`.
+- **A request** (`POST /api/recruiter/wallet/withdrawals { amountMad, requestId }`) runs in one transaction that
+  first locks the recruiter row (`FOR NO KEY UPDATE`), re-checks the account, replays the same `requestId`,
+  re-checks bank details and available funds, then inserts a `pending` row. Concurrent requests are serialised, so
+  the same funds are never reserved twice.
+- **Admin:**
+  - the SAME page and API (`/admin/affiliate-payouts`, `GET/PUT /api/admin/affiliate-payouts`) list recruiter rows
+    (`ownerType: 'recruiter'`, name and bank) and process them with the same "approve & mark paid" action, plus
+    "reject" for recruiter rows only;
+  - both change a `pending` row only (conditional write) and are audited (`RECRUITER_WITHDRAWAL_PAID / _REJECTED`);
+  - affiliate rows keep the exact previous PUT path; `action: 'reject'` on an affiliate row is refused (400) instead
+    of being silently treated as an approval;
+  - settings, ledger and balances live in `/admin/recruiter-rewards` (`/api/admin/recruiter-rewards[/settings]`).
+
+### Contract update for money files
+
+Phases 1–4 forbade any money word in recruiter files. Phase 5 money files are an explicit allowlist:
+
+- `recruiterWalletService.js`, `recruiterWalletRouteHandlers.js`, `recruiterRewardAdminHandlers.js`,
+  `src/app/api/recruiter/wallet/**`, `src/app/recruiter/wallet/**`.
+
+In them, "withdraw / payout / balance / earning" may appear, but:
+
+- affiliate money sources stay forbidden everywhere: commissions, reward points, affiliate balance functions,
+  balance providers;
+- every `affiliatePayout` query is scoped by `recruiterId`;
+- `affiliateId` is never written to a payout row.
+
+Every other recruiter file keeps the Phase 1 rule unchanged.

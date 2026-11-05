@@ -13,6 +13,7 @@ import {
   adminRejectIdentity,
   adminResetIdentity,
 } from '@/lib/services/identityService';
+import { onRecruiterIdentityApprovedCommitted } from '@/lib/recruiterRewardHooks';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,7 +35,10 @@ export const PUT = withAdminAuth(async (req, _ctx, user) => {
 
     if (action === 'approve') {
       const adminId = user?.id || user?.email || user?.userId || null;
-      return Response.json(await adminApproveIdentity(id, adminId));
+      const approved = await adminApproveIdentity(id, adminId);
+      // Recruiter reward (post-commit, never throws): the affiliate's CIN is now APPROVED.
+      await onRecruiterIdentityApprovedCommitted(String(id));
+      return Response.json(approved);
     }
     if (action === 'reject') {
       return Response.json(await adminRejectIdentity(id, reason));

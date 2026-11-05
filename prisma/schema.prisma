@@ -464,15 +464,21 @@ model AffiliateOrder {
 }
 
 model AffiliatePayout {
-  id          String    @id @default(uuid())
-  affiliateId String
+  id          String     @id @default(uuid())
+  // Owner: EXACTLY ONE of affiliateId / recruiterId (DB CHECK affiliate_payouts_owner_check).
+  // Affiliate rows are unchanged; recruiter rows (Affiliate Recruiter System, Phase 5) reuse
+  // the same withdrawal workflow but are accounted ONLY against recruiter_reward_ledger.
+  affiliateId String?
   amount      Float
-  status      String    @default("pending")
-  createdAt   DateTime  @default(now())
-  affiliate   Affiliate @relation(fields: [affiliateId], references: [id])
+  status      String     @default("pending")
+  createdAt   DateTime   @default(now())
+  affiliate   Affiliate? @relation(fields: [affiliateId], references: [id], onDelete: Restrict) // = the existing FK (unchanged)
+  recruiterId String?
+  recruiter   Recruiter? @relation(fields: [recruiterId], references: [id], onDelete: Restrict)
 
   @@index([affiliateId])
   @@index([status])
+  @@index([recruiterId])
   @@map("affiliate_payouts")
 }
 
@@ -1916,9 +1922,14 @@ model Recruiter {
   createdBy           String
   createdAt           DateTime                   @default(now())
   updatedAt           DateTime                   @updatedAt
+  // Bank details for withdrawals (Phase 5) — same fields and rules as the affiliate ones.
+  bankName            String?
+  rib                 String?
+  accountName         String?
   affiliateLinks      RecruiterAffiliateLink[]
   rewards             RecruiterRewardLedger[]
   auditLogs           RecruiterAuditLog[]
+  payouts             AffiliatePayout[]
 
   @@index([isActive])
   @@map("recruiters")

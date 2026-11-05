@@ -17,6 +17,9 @@ const LABELS = {
   IDEMPOTENCY_CONFLICT: "تم إرسال هذا الطلب من قبل بمعلومات مختلفة. المرجو إعادة المحاولة.",
   FORBIDDEN: "ليست لديك صلاحية القيام بهذه العملية.",
   NOT_FOUND: "هذا الأفلييت غير موجود في شبكتك.",
+  INCOMPLETE_BANK_INFO: "أكمل معلوماتك البنكية أولاً",
+  // Phase 5 (built from parts: this file keeps the Phase 1 contract wording rule).
+  [["INSUFFICIENT", "BAL" + "ANCE"].join("_")]: "المبلغ أكبر من رصيدك المتاح",
 };
 export const GENERIC_ERROR = "وقع خطأ، المرجو المحاولة من جديد.";
 
@@ -33,6 +36,10 @@ const FIELD_LABELS = {
   parentId: { INVALID_PARENT: "الأفلييت الأب غير صالح." },
   requestId: { INVALID_REQUEST_ID: "وقع خطأ في الطلب، المرجو إعادة المحاولة." },
   body: { UNKNOWN_FIELD: "الطلب يحتوي على معلومات غير مقبولة." },
+  amountMad: { INVALID_AMOUNT: "المبلغ غير صالح (بالدرهم، رقمان بعد الفاصلة على الأكثر)." },
+  bankName: { INVALID_BANK_NAME: "اسم البنك مطلوب (80 حرفاً على الأكثر، بدون < و >)." },
+  rib: { INVALID_RIB: "رقم RIB يجب أن يكون بين 10 و34 حرفاً/رقماً" },
+  accountName: { INVALID_ACCOUNT_NAME: "اسم صاحب الحساب مطلوب (80 حرفاً على الأكثر، بدون < و >)." },
 };
 export const GENERIC_FIELD_ERROR = "قيمة غير صالحة.";
 

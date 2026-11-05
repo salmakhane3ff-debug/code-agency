@@ -39,11 +39,15 @@ const RECRUITER_STATUS = {
   INVALID_INPUT: 400, PARENT_NOT_IN_NETWORK: 400, USERNAME_TAKEN: 409, PHONE_TAKEN: 409, IDEMPOTENCY_CONFLICT: 409,
   RATE_LIMITED: 429,
 };
-/** Recruiter-facing error: { code, fields? } only (allowlisted by toRecruiterError). */
-export function recruiterErrorResponse(e, toRecruiterError = defaultToRecruiterError) {
+/**
+ * Recruiter-facing error: { code, fields? } only (allowlisted by toRecruiterError).
+ * `extraStatus` lets a later phase map its own allowlisted codes (e.g. the wallet's 400s).
+ */
+export function recruiterErrorResponse(e, toRecruiterError = defaultToRecruiterError, extraStatus = null) {
   const body = toRecruiterError(e);
   if (body.code === 'SERVER_ERROR') console.error('[recruiter]', e?.code ?? e);
-  return json(body, RECRUITER_STATUS[body.code] ?? 500);
+  const extra = extraStatus && Object.prototype.hasOwnProperty.call(extraStatus, body.code) ? extraStatus[body.code] : undefined;
+  return json(body, RECRUITER_STATUS[body.code] ?? extra ?? 500);
 }
 
 const ADMIN_ERRORS = {

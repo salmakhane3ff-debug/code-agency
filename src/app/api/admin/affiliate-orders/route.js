@@ -9,6 +9,7 @@ import {
   adminUpdateAffiliateOrderStatus,
 } from '@/lib/services/affiliateSystemService';
 import { withAdminAuth } from '@/lib/middleware/withAdminAuth';
+import { onRecruiterOrderStatusCommitted } from '@/lib/recruiterRewardHooks';
 
 async function getHandler(req) {
   try {
@@ -37,6 +38,8 @@ async function putHandler(req) {
     }
 
     const order = await adminUpdateAffiliateOrderStatus(orderId, status);
+    // Recruiter reward (post-commit, never throws): a REAL order just became 'delivered'.
+    if (status === 'delivered') await onRecruiterOrderStatusCommitted(String(orderId));
     return Response.json(order);
   } catch (err) {
     console.error('Admin affiliate-orders PUT error:', err);

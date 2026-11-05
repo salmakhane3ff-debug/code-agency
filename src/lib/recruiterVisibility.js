@@ -82,6 +82,7 @@ export function toRecruiterAuditView(entry, recruiterId) {
 export const RECRUITER_ERROR_CODES = Object.freeze([
   'UNAUTHORIZED', 'RECRUITER_DISABLED', 'FORBIDDEN', 'NOT_FOUND', 'INVALID_INPUT', 'USERNAME_TAKEN',
   'PHONE_TAKEN', 'PARENT_NOT_IN_NETWORK', 'RATE_LIMITED', 'INVALID_CREDENTIALS', 'IDEMPOTENCY_CONFLICT',
+  'INSUFFICIENT_BALANCE', 'INCOMPLETE_BANK_INFO',
 ]);
 
 /** Per-field validation codes of the affiliate-creation form (Phase 3): field → allowed codes. */
@@ -93,6 +94,11 @@ export const RECRUITER_FIELD_ERROR_CODES = Object.freeze({
   parentId: Object.freeze(['INVALID_PARENT']),
   requestId: Object.freeze(['INVALID_REQUEST_ID']),
   body: Object.freeze(['UNKNOWN_FIELD']),
+  // Phase 5: withdrawal request and bank details
+  amountMad: Object.freeze(['INVALID_AMOUNT']),
+  bankName: Object.freeze(['INVALID_BANK_NAME']),
+  rib: Object.freeze(['INVALID_RIB']),
+  accountName: Object.freeze(['INVALID_ACCOUNT_NAME']),
 });
 
 /**
@@ -189,5 +195,74 @@ export function toRecruiterNetworkStatsView(stats) {
       level: level(l?.level), affiliates: count(l?.affiliates), active: count(l?.active), inactive: count(l?.inactive),
       identity: identityCountView(l?.identity), orders: realFakeView(l?.orders),
     })),
+  };
+}
+
+// ── Phase 5: the recruiter's own rewards and withdrawals (MAD cents) ──────────
+const cents = (v) => (Number.isInteger(v) ? v : 0);
+const iso = (v) => {
+  const t = v ? new Date(v) : null;
+  return t && Number.isFinite(t.getTime()) ? t.toISOString() : null;
+};
+/** Withdrawal status as the recruiter sees it (the reserving rule: unknown = still reserved). */
+export const RECRUITER_WITHDRAWAL_STATUS = Object.freeze({ PENDING: 'PENDING', PAID: 'PAID', REJECTED: 'REJECTED' });
+function withdrawalStatus(s) {
+  // Idempotent: an already-projected status (PAID / REJECTED / PENDING) keeps its value.
+  if (s === 'paid' || s === RECRUITER_WITHDRAWAL_STATUS.PAID) return RECRUITER_WITHDRAWAL_STATUS.PAID;
+  if (s === 'rejected' || s === 'cancelled' || s === 'canceled' || s === 'refused' || s === RECRUITER_WITHDRAWAL_STATUS.REJECTED) return RECRUITER_WITHDRAWAL_STATUS.REJECTED;
+  return RECRUITER_WITHDRAWAL_STATUS.PENDING;
+}
+
+/** Settings for the wallet: from the stored settings, or from an already-projected view (idempotent). */
+function walletSettingsView(x) {
+  if (typeof x?.rewardsEnabled !== 'boolean') return toRecruiterSettingsView(x);
+  const on = x.rewardsEnabled === true && Number.isInteger(x.rewardAmountCents) && x.rewardAmountCents > 0;
+  const n = x.requiredDeliveredOrders;
+  return {
+    rewardsEnabled: on, rewardAmountCents: on ? x.rewardAmountCents : 0, currency: 'MAD',
+    requiredDeliveredOrders: Number.isInteger(n) && n >= 1 && n <= 100000 ? n : toRecruiterSettingsView(null).requiredDeliveredOrders,
+  };
+}
+
+/** One withdrawal of the recruiter (their own rows only — filtering is the caller's job). */
+export function toRecruiterWithdrawalView(row) {
+  return { id: str(row?.id), amountCents: count(row?.amountCents), currency: 'MAD', status: withdrawalStatus(row?.status), createdAt: iso(row?.createdAt) };
+}
+
+/**
+ * One reward of the recruiter's history: which affiliate earned it and why (the two
+ * conditions, with the delivered-order threshold of the settings version used).
+ */
+export function toRecruiterRewardHistoryView(row) {
+  const type = Object.values(REWARD_TYPES).includes(row?.type) ? row.type : null;
+  const a = row?.affiliate;
+  return {
+    type,
+    amountCents: cents(row?.amountCents),
+    currency: 'MAD',
+    affiliate: a && typeof a === 'object' ? { id: str(a.id), username: str(a.username), name: str(a.name) } : null,
+    reason: type === REWARD_TYPES.RECRUIT_REWARD ? 'REAL_DELIVERED_AND_CIN_APPROVED' : null,
+    requiredDeliveredOrders: type === REWARD_TYPES.RECRUIT_REWARD && Number.isInteger(row?.requiredDeliveredOrders) && row.requiredDeliveredOrders >= 1 ? row.requiredDeliveredOrders : null,
+    createdAt: iso(row?.createdAt),
+  };
+}
+
+/** The recruiter's own bank details (shown back to them only). */
+export function toRecruiterBankView(bank) {
+  return { bankName: str(bank?.bankName), rib: str(bank?.rib), accountName: str(bank?.accountName), complete: bank?.complete === true };
+}
+
+/** The recruiter's wallet: settings, totals (cents), reward history, withdrawals, bank. */
+export function toRecruiterWalletView(w) {
+  const t = w?.totals;
+  return {
+    settings: walletSettingsView(w?.settings),
+    totals: {
+      earnedCents: cents(t?.earnedCents), availableCents: cents(t?.availableCents), pendingCents: count(t?.pendingCents),
+      paidCents: count(t?.paidCents), currency: 'MAD',
+    },
+    rewards: (Array.isArray(w?.rewards) ? w.rewards : []).map(toRecruiterRewardHistoryView),
+    withdrawals: (Array.isArray(w?.withdrawals) ? w.withdrawals : []).map(toRecruiterWithdrawalView),
+    bank: toRecruiterBankView(w?.bank),
   };
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { CreditCard, CheckCircle, Loader2, Search, Filter } from "lucide-react";
+import { CreditCard, CheckCircle, Loader2, Search, Filter, XCircle } from "lucide-react";
 
 function fmtMoney(n) { return n != null ? `${Number(n).toFixed(2)} MAD` : "—"; }
 function fmtDate(iso) {
@@ -10,6 +10,14 @@ function fmtDate(iso) {
 }
 
 function PayoutBadge({ status }) {
+  // Recruiter withdrawals (Phase 5) can also be rejected; affiliate rows are pending / paid as before.
+  if (status === "rejected") {
+    return (
+      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">
+        Rejeté
+      </span>
+    );
+  }
   return (
     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold
       ${status === "paid" ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}>
@@ -18,6 +26,18 @@ function PayoutBadge({ status }) {
   );
 }
 
+function TypeBadge({ ownerType }) {
+  const recruiter = ownerType === "recruiter";
+  return (
+    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap
+      ${recruiter ? "bg-indigo-100 text-indigo-700" : "bg-gray-100 text-gray-600"}`}>
+      {recruiter ? "Recruteur" : "Affilié"}
+    </span>
+  );
+}
+
+const isRecruiterRow = (p) => p?.ownerType === "recruiter";
+
 export default function AdminAffiliatePayoutsPage() {
   const [payouts,     setPayouts]     = useState([]);
   const [loading,     setLoading]     = useState(true);
@@ -25,6 +45,14 @@ export default function AdminAffiliatePayoutsPage() {
   const [filter,      setFilter]      = useState("all");
   const [approvingId, setApprovingId] = useState(null);
   const [error,       setError]       = useState(null);
+  // Phase 5: recruiter withdrawals share this list (type filter + reject for recruiter rows).
+  const [typeFilter,  setTypeFilter]  = useState("all");
+  const [rejectingId, setRejectingId] = useState(null);
+
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get("type");
+    if (t === "recruiter" || t === "affiliate") setTypeFilter(t);
+  }, []);
 
   useEffect(() => {
     fetch("/api/admin/affiliate-payouts")
@@ -37,14 +65,18 @@ export default function AdminAffiliatePayoutsPage() {
   const displayed = useMemo(() => {
     let list = payouts;
     if (filter !== "all") list = list.filter((p) => p.status === filter);
+    if (typeFilter === "recruiter") list = list.filter(isRecruiterRow);
+    else if (typeFilter === "affiliate") list = list.filter((p) => !isRecruiterRow(p));
     const q = search.trim().toLowerCase();
     if (q) list = list.filter((p) =>
       p.affiliateUsername?.toLowerCase().includes(q) ||
       p.affiliateName?.toLowerCase().includes(q) ||
+      p.recruiterUsername?.toLowerCase().includes(q) ||
+      p.recruiterName?.toLowerCase().includes(q) ||
       p.rib?.includes(q)
     );
     return list;
-  }, [payouts, filter, search]);
+  }, [payouts, filter, typeFilter, search]);
 
   const handleApprove = async (id) => {
     if (!confirm("Approuver ce retrait et marquer comme payé ?")) return;
@@ -58,6 +90,10 @@ export default function AdminAffiliatePayoutsPage() {
       });
       if (r.ok) {
         setPayouts((prev) => prev.map((p) => p.id === id ? { ...p, status: "paid" } : p));
+      } else if (isRecruiterRow(payouts.find((p) => p.id === id))) {
+        // Recruiter rows: the server's French text (e.g. « Ce retrait a déjà été traité. »).
+        const b = await r.json().catch(() => null);
+        setError(typeof b?.error === "string" ? b.error : "Erreur lors de l'approbation");
       } else {
         setError("Erreur lors de l'approbation");
       }
@@ -65,6 +101,31 @@ export default function AdminAffiliatePayoutsPage() {
       setError("Erreur réseau");
     } finally {
       setApprovingId(null);
+    }
+  };
+
+  // Recruiter rows only: reject a pending withdrawal (releases the reserved rewards).
+  const handleReject = async (id) => {
+    const reason = prompt("Rejeter ce retrait recruteur ? Motif (optionnel) :", "");
+    if (reason === null) return;
+    setRejectingId(id);
+    setError(null);
+    try {
+      const r = await fetch("/api/admin/affiliate-payouts", {
+        method:  "PUT",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ id, action: "reject", reason: reason.trim() }),
+      });
+      if (r.ok) {
+        setPayouts((prev) => prev.map((p) => p.id === id ? { ...p, status: "rejected" } : p));
+      } else {
+        const b = await r.json().catch(() => null);
+        setError(typeof b?.error === "string" ? b.error : "Erreur lors du rejet");
+      }
+    } catch {
+      setError("Erreur réseau");
+    } finally {
+      setRejectingId(null);
     }
   };
 
@@ -112,6 +173,19 @@ export default function AdminAffiliatePayoutsPage() {
             className="w-full pr-9 pl-3 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:border-gray-400 bg-gray-50"
           />
         </div>
+        <div className="flex gap-1.5 flex-wrap">
+          {[["all", "Tous"], ["affiliate", "Affiliés"], ["recruiter", "Recruteurs"]].map(([t, label]) => (
+            <button
+              key={t}
+              onClick={() => setTypeFilter(t)}
+              data-type-filter={t}
+              className={`px-3 py-2 text-xs font-semibold rounded-xl transition-colors
+                ${typeFilter === t ? "bg-indigo-600 text-white" : "bg-indigo-50 text-indigo-700 hover:bg-indigo-100"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <div className="flex gap-1.5">
           {["all","pending","paid"].map((s) => (
             <button
@@ -138,18 +212,28 @@ export default function AdminAffiliatePayoutsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  {["Affilié","Montant","Banque","RIB","Titulaire","Statut","Date","Action"].map((h) => (
+                  {["Affilié / Recruteur","Type","Montant","Banque","RIB","Titulaire","Statut","Date","Action"].map((h) => (
                     <th key={h} className="text-right text-xs font-semibold text-gray-500 px-4 py-3 whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {displayed.map((p) => (
-                  <tr key={p.id} className="hover:bg-gray-50 transition-colors">
+                  <tr key={p.id} className="hover:bg-gray-50 transition-colors" data-payout-row={p.id} data-owner-type={isRecruiterRow(p) ? "recruiter" : "affiliate"}>
                     <td className="px-4 py-3">
-                      <p className="font-medium text-gray-800">{p.affiliateName || "—"}</p>
-                      <p className="text-xs text-gray-400 font-mono">@{p.affiliateUsername}</p>
+                      {isRecruiterRow(p) ? (
+                        <>
+                          <p className="font-medium text-gray-800">{p.recruiterName || "—"}</p>
+                          <p className="text-xs text-gray-400 font-mono">@{p.recruiterUsername}</p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="font-medium text-gray-800">{p.affiliateName || "—"}</p>
+                          <p className="text-xs text-gray-400 font-mono">@{p.affiliateUsername}</p>
+                        </>
+                      )}
                     </td>
+                    <td className="px-4 py-3"><TypeBadge ownerType={p.ownerType} /></td>
                     <td className="px-4 py-3 font-bold text-gray-900 whitespace-nowrap">{fmtMoney(p.amount)}</td>
                     <td className="px-4 py-3 text-gray-600">{p.bankName || "—"}</td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-600 max-w-[140px] truncate">{p.rib || "—"}</td>
@@ -167,6 +251,19 @@ export default function AdminAffiliatePayoutsPage() {
                             ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                             : <CheckCircle className="w-3.5 h-3.5" />}
                           Approuver
+                        </button>
+                      )}
+                      {p.status === "pending" && isRecruiterRow(p) && (
+                        <button
+                          onClick={() => handleReject(p.id)}
+                          disabled={rejectingId === p.id}
+                          data-reject={p.id}
+                          className="mt-1.5 flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-red-50 text-red-700 hover:bg-red-100 rounded-xl transition-colors disabled:opacity-50"
+                        >
+                          {rejectingId === p.id
+                            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            : <XCircle className="w-3.5 h-3.5" />}
+                          Rejeter
                         </button>
                       )}
                     </td>
