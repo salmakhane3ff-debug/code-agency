@@ -349,8 +349,12 @@ console.log('\n8. Sensitive data, no migration');
   ok('no password, hash or token in any captured log line', logged.every((l) => ![...SECRETS].some((s) => l.includes(s)) && !l.includes(WRONG)));
   const migrations = readdirSync(join(ROOT, 'prisma/migrations')).filter((d) => /^\d/.test(d)).sort();
   const prismaText = read('prisma/schema.prisma') + migrations.map((d) => { try { return read(`prisma/migrations/${d}/migration.sql`); } catch { return ''; } }).join('\n');
-  ok('no database migration for D5: the latest migration is still 20261109_account_token_version, and nothing in prisma/ stores login attempts',
-    migrations[migrations.length - 1] === '20261109_account_token_version' && !/loginThrottle|login_failures|loginFailure|LoginAttempt|login_attempts|lockedUntil/i.test(prismaText));
+  // The only migration after 20261109 is the Phase 6 part 3a reward-cycles migration (recruiter_reward_ledger only).
+  const after = migrations.slice(migrations.indexOf('20261109_account_token_version') + 1);
+  ok('no database migration for D5: 20261109_account_token_version is followed only by 20261110_recruiter_reward_cycles (Phase 6 part 3a, ledger only), and nothing in prisma/ stores login attempts',
+    migrations.includes('20261109_account_token_version') && JSON.stringify(after) === JSON.stringify(['20261110_recruiter_reward_cycles'])
+    && !/login|throttle|attempt/i.test(read('prisma/migrations/20261110_recruiter_reward_cycles/migration.sql'))
+    && !/loginThrottle|login_failures|loginFailure|LoginAttempt|login_attempts|lockedUntil/i.test(prismaText), JSON.stringify(after));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

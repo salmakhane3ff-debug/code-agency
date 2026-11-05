@@ -328,11 +328,19 @@ console.log('\n7d. Phase 5 wallet projections');
     && eq(Object.values(V.RECRUITER_WITHDRAWAL_STATUS), ['PENDING', 'PAID', 'REJECTED']) && Object.isFrozen(V.RECRUITER_WITHDRAWAL_STATUS));
   const rh = V.toRecruiterRewardHistoryView({ type: 'RECRUIT_REWARD', amountCents: 15000, affiliate: { id: 'a1', username: 'u', name: 'N', phone: '+2126', password: 'h', isActive: true }, requiredDeliveredOrders: 10, createdAt: '2026-11-06T10:00:00.000Z', reason: '<script>', recruiterId: 'r', settingsVersion: 3 });
   ok('reward history view: exact keys; the affiliate is id / username / name only; reason is the fixed code; threshold kept',
-    eq(keys(rh), ['affiliate', 'amountCents', 'createdAt', 'currency', 'reason', 'requiredDeliveredOrders', 'type']) && eq(rh.affiliate, { id: 'a1', username: 'u', name: 'N' })
+    eq(keys(rh), ['affiliate', 'amountCents', 'createdAt', 'currency', 'cycle', 'reason', 'requiredDeliveredOrders', 'type']) && eq(rh.affiliate, { id: 'a1', username: 'u', name: 'N' })
     && rh.reason === 'REAL_DELIVERED_AND_CIN_APPROVED' && rh.requiredDeliveredOrders === 10 && !/phone|password|isActive|script|settingsVersion|recruiterId/.test(JSON.stringify(rh)));
   ok('reward history view: unknown type → null and no reason / threshold; non-integer amount → 0; adjustment rows keep a signed amount',
-    eq(V.toRecruiterRewardHistoryView({ type: 'BONUS', amountCents: 5, requiredDeliveredOrders: 3 }), { type: null, amountCents: 5, currency: 'MAD', affiliate: null, reason: null, requiredDeliveredOrders: null, createdAt: null })
+    eq(V.toRecruiterRewardHistoryView({ type: 'BONUS', amountCents: 5, requiredDeliveredOrders: 3, cycle: 2 }), { type: null, amountCents: 5, currency: 'MAD', affiliate: null, reason: null, requiredDeliveredOrders: null, cycle: null, createdAt: null })
     && V.toRecruiterRewardHistoryView({ type: 'RECRUIT_REWARD', amountCents: 1.5 }).amountCents === 0 && V.toRecruiterRewardHistoryView({ type: 'REVERSAL', amountCents: -500 }).amountCents === -500);
+  // Phase 6 part 3a: a REVERSAL is a negative entry with its fixed reason, the threshold of the reversed
+  // reward's version and the cycle; cycle is an integer ≥ 1 for reward / reversal rows only.
+  const rv = V.toRecruiterRewardHistoryView({ type: 'REVERSAL', amountCents: -15000, affiliate: { id: 'a1', username: 'u', name: 'N' }, requiredDeliveredOrders: 10, cycle: 2, reason: '<b>', createdAt: '2026-11-06T10:00:00.000Z' });
+  ok('reward history view (Phase 6 part 3a): a REVERSAL → negative amount, reason REAL_DELIVERED_BELOW_THRESHOLD (fixed code), threshold and cycle kept; a bad cycle → null; an adjustment has no cycle / reason',
+    eq(rv, { type: 'REVERSAL', amountCents: -15000, currency: 'MAD', affiliate: { id: 'a1', username: 'u', name: 'N' }, reason: 'REAL_DELIVERED_BELOW_THRESHOLD', requiredDeliveredOrders: 10, cycle: 2, createdAt: '2026-11-06T10:00:00.000Z' })
+    && [0, -1, 1.5, '2', null, undefined].every((c) => V.toRecruiterRewardHistoryView({ type: 'REVERSAL', amountCents: -1, cycle: c }).cycle === null)
+    && V.toRecruiterRewardHistoryView({ type: 'RECRUIT_REWARD', amountCents: 1, cycle: 1 }).cycle === 1
+    && eq([V.toRecruiterRewardHistoryView({ type: 'ADMIN_ADJUSTMENT', amountCents: -3, cycle: 4, requiredDeliveredOrders: 2 })].map((x) => [x.cycle, x.reason, x.requiredDeliveredOrders, x.amountCents])[0], [null, null, null, -3]), JSON.stringify(rv));
   const bv = V.toRecruiterBankView({ bankName: 'CIH', rib: '0117', accountName: 'A', complete: 'yes', password: 'x' });
   ok('bank view: exactly bankName / rib / accountName / complete (strict boolean)', eq(keys(bv), ['accountName', 'bankName', 'complete', 'rib']) && bv.complete === false && V.toRecruiterBankView({ complete: true }).complete === true);
   const w = V.toRecruiterWalletView({

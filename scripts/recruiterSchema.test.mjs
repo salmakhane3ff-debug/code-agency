@@ -48,7 +48,10 @@ console.log('\n1a. Exports, MAD only, parseMadToCents');
   ok('exports are exactly the documented settings API (no UGC / release / unit / bank export left)',
     eq(Object.keys(R).sort(), ['AUDIT_ACTOR_TYPES', 'CURRENCY', 'DEFAULT_MIN_DELIVERED_SALES', 'DEFAULT_RECRUITER_SETTINGS', 'DELIVERED_ORDER_STATUS',
       'IDENTITY_APPROVED_STATUS', 'MAX_REWARD_CENTS', 'MIN_SALES_RANGE', 'REWARD_TYPES', 'evaluateRecruitQualification', 'normalizeRecruiterSettings',
-      'parseMadToCents', 'recruitRewardKey', 'reversalKey', 'validateRecruiterSettingsInput']), Object.keys(R).sort().join(','));
+      'parseMadToCents', 'recruitRewardCycleKey', 'recruitRewardKey', 'reversalCycleKey', 'reversalKey', 'validateRecruiterSettingsInput']), Object.keys(R).sort().join(','));
+  // Phase 6 part 3a: the two cycle keys (recruit:<id>:v<n> / reverse:<id>:v<n>); the legacy keys are kept for cycle-1 rows.
+  ok('Phase 6 part 3a cycle keys: recruit:<id>:v<n> / reverse:<id>:v<n>; legacy recruit:<id> / reverse:<id> unchanged',
+    R.recruitRewardCycleKey('a1', 1) === 'recruit:a1:v1' && R.reversalCycleKey('a1', 3) === 'reverse:a1:v3' && R.recruitRewardKey('a1') === 'recruit:a1' && R.reversalKey('a1') === 'reverse:a1');
   ok('CURRENCY is MAD; MAX_REWARD_CENTS 100,000,000; MIN_SALES_RANGE {1, 100000} frozen; DEFAULT_MIN_DELIVERED_SALES 10',
     R.CURRENCY === 'MAD' && R.MAX_REWARD_CENTS === 100_000_000 && eq(R.MIN_SALES_RANGE, { min: 1, max: 100_000 }) && Object.isFrozen(R.MIN_SALES_RANGE)
     && R.DEFAULT_MIN_DELIVERED_SALES === 10);
@@ -447,8 +450,11 @@ console.log('\nisActive is not a recruiter-reward condition');
   const doc = read('docs/recruiter-system.md');
   ok('docs state: only two conditions, isActive is not a condition and a later deactivation does not cancel an earned reward',
     /ONLY two conditions/.test(doc) && /`affiliates\.isActive`[^.]*\*\*not\*\* a condition/.test(doc) && /earned reward is \*\*not\*\* cancelled because of `isActive`/.test(doc));
-  ok('docs state: fake orders never count; returns / later CIN changes are a manual admin step in a later phase',
-    /Fake orders never count/.test(doc) && /handled manually by an admin in a later phase/.test(doc));
+  // Phase 6 part 3a: returns / cancellations now reverse automatically (section 9); a CIN change still does not.
+  ok('docs state: fake orders never count; cancelled / returned / refused orders reverse the reward automatically below ITS threshold (section 9); a later CIN change reverses nothing',
+    /Fake orders never count/.test(doc) && !/handled manually by an admin in a later phase/.test(doc)
+    && /reversed automatically, once per cycle \(section 9\)/.test(doc) && /A CIN status change after\s+the reward was earned does not reverse anything/.test(doc)
+    && /## 9\. Phase 6 part 3a — reward reversal engine \(versioned cycles\)/.test(doc));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

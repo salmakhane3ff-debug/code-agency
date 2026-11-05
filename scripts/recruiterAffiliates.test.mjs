@@ -609,9 +609,10 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
     ...gitOut(['diff', '--name-only', '63abd2d42577570cad31082901f18b8544a0b38f', '--', 'prisma']).split('\n'),
     ...gitOut(['ls-files', '--others', '--exclude-standard', '--', 'prisma']).split('\n'),
   ].filter(Boolean))].sort();
-  ok('prisma/ changed since 63abd2d ONLY by the Phase 5 files (schema.prisma + migration 20261106), the Phase 6 part 1 migrations 20261107 (activation codes) + 20261108 (admin activation recovery) and the Phase 6 part 2 migration 20261109 (session version)',
+  ok('prisma/ changed since 63abd2d ONLY by the Phase 5 files (schema.prisma + migration 20261106), the Phase 6 part 1 migrations 20261107 (activation codes) + 20261108 (admin activation recovery), the Phase 6 part 2 migration 20261109 (session version) and the Phase 6 part 3a migration 20261110 (reward cycles)',
     eq(prismaFiles, ['prisma/migrations/20261106_recruiter_rewards_withdrawals/migration.sql', 'prisma/migrations/20261107_affiliate_activation_codes/migration.sql',
-      'prisma/migrations/20261108_affiliate_activation_recovery/migration.sql', 'prisma/migrations/20261109_account_token_version/migration.sql', 'prisma/schema.prisma']), prismaFiles.join(','));
+      'prisma/migrations/20261108_affiliate_activation_recovery/migration.sql', 'prisma/migrations/20261109_account_token_version/migration.sql',
+      'prisma/migrations/20261110_recruiter_reward_cycles/migration.sql', 'prisma/schema.prisma']), prismaFiles.join(','));
   const schemaDiff = gitOut(['diff', '63abd2d42577570cad31082901f18b8544a0b38f', '--', 'prisma/schema.prisma']).split('\n')
     .filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l)).map((l) => l[0] + l.slice(1).replace(/\s+/g, ' ').trim());
   const removedLines = schemaDiff.filter((l) => l.startsWith('-')).sort();
@@ -633,7 +634,9 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
     '+activationRecoveries AffiliateActivationRecovery[]'];
   // Phase 6 part 2 — session version (documented, §8): Affiliate.tokenVersion and Recruiter.tokenVersion.
   const P62_FIELDS = ['+tokenVersion Int @default(0)', '+tokenVersion Int @default(0)'];
-  const p6 = [...P6_MODEL, ...P6R_MODEL, ...P62_FIELDS];
+  // Phase 6 part 3a — reward cycles (documented, §9): RecruiterRewardLedger.cycle (no default; migration 20261110).
+  const P63A_FIELDS = ['+cycle Int'];
+  const p6 = [...P6_MODEL, ...P6R_MODEL, ...P62_FIELDS, ...P63A_FIELDS];
   const addedAll = schemaDiff.filter((l) => l.startsWith('+') && !l.startsWith('+//'));
   const addedCode = [];
   for (const l of addedAll) { const i = p6.indexOf(l); if (i >= 0) p6.splice(i, 1); else addedCode.push(l); }
@@ -645,7 +648,9 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
       '+affiliateId String?', '+bankName String?', '+createdAt DateTime @default(now())', '+id String @id @default(uuid())', '+payouts AffiliatePayout[]',
       '+recruiter Recruiter? @relation(fields: [recruiterId], references: [id], onDelete: Restrict)', '+recruiterId String?', '+rib String?', '+status String @default("pending")'].sort())
     // comment lines: Phase 5 (4) + Phase 6 part 1 (6 + 6) + Phase 6 part 2 (2 on Affiliate.tokenVersion, 1 on Recruiter.tokenVersion)
-    && schemaDiff.filter((l) => l.startsWith('+//')).length === 4 + 6 + 6 + 3
+    // + Phase 6 part 3a (3 on RecruiterRewardLedger.cycle)
+    && schemaDiff.filter((l) => l.startsWith('+//')).length === 4 + 6 + 6 + 3 + 3
+    && schemaDiff.includes('+// Reward / reversal cycle of the affiliate (Phase 6 part 3a): cycle n = one RECRUIT_REWARD and')
     && schemaDiff.includes('+// Session version (Phase 6 part 2): every token carries it; bumped on disable / enable /')
     && schemaDiff.includes('+// password change / admin reset, so older tokens are rejected (a token without it = 0).')
     && schemaDiff.includes('+// Session version (Phase 6 part 2): bumped on disable / enable / password change / reset.'), JSON.stringify(schemaDiff));

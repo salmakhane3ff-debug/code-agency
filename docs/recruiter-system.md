@@ -26,8 +26,10 @@ affiliate created by the recruiter has **both**:
 - These are the ONLY two conditions. `affiliates.isActive` (account activation / login flag) is
   **not** a condition: it is never read for the recruiter reward, and if an admin later disables
   the affiliate, an earned reward is **not** cancelled because of `isActive`.
-- Fake orders never count. Returns, or a CIN status change after the reward was earned, do not
-  reverse anything automatically: they are handled manually by an admin in a later phase.
+- Fake orders never count. Cancelled, returned, refused (or any non-`delivered`) orders never count:
+  since Phase 6 part 3a, a reward whose real delivered count later falls below the threshold of ITS
+  settings version is reversed automatically, once per cycle (section 9). A CIN status change after
+  the reward was earned does not reverse anything.
 - The reward amount (MAD) and the order threshold (1–100000, default 10) are set by the admin
   (`recruiter_settings_versions`, append-only versions; with no version: rewards OFF, 10 orders).
 - No delay, no jitter, no hidden reward: once recorded, the reward appears in the recruiter's
@@ -129,9 +131,11 @@ Service: `src/lib/services/recruiterNetworkService.js`. Nothing in Phase 4 write
   order to `delivered` (`PUT /api/admin/affiliate-orders`) or approves an identity (`PUT /api/admin/identity`).
   Reconcile passes (batched) run on the recruiter wallet read, after every settings change, and from the admin
   "recheck" action, so a missed event is caught.
-- **Ledger:** one `RECRUIT_REWARD` per affiliate (`recruit:<affiliateId>` + partial unique index): concurrent
-  events cannot duplicate it. Amount, version and reason are recorded on the row; later settings never change an
-  earned reward. Nothing revokes a reward automatically (a reversal needs an explicit admin action, out of scope).
+- **Ledger:** rewards are recorded in versioned cycles: at most one `RECRUIT_REWARD` per affiliate and cycle
+  (`recruit:<affiliateId>:v<n>`; rows written before the cycles keep `recruit:<affiliateId>` as cycle 1), enforced
+  by a partial unique index per (affiliate, cycle), so concurrent events cannot duplicate it. Amount, version and reason are recorded on the row; later settings never change an
+  earned reward. Since Phase 6 part 3a a reward is reversed automatically when the real delivered count falls
+  below its threshold (section 9); a CIN change never reverses it.
   `RECRUIT_REWARD_EARNED` is audited with the real delivered count and the threshold.
 
 ### Withdrawals — the existing workflow, extended (`src/lib/services/recruiterWalletService.js`)
@@ -393,3 +397,80 @@ same module as the admin login).
 ### Open items
 
 - **D3:** admin sessions (`users`) are not versioned. The Edge middleware cannot read the database.
+
+## 9. Phase 6 part 3a — reward reversal engine (versioned cycles)
+
+The decisions approved after the Part 3 audit: D1 (versioned cycles) and D2 (reverse below the threshold of the
+reward's own settings version). D3–D5 (withdrawals and recruiter KYC) belong to Parts 3b and 3c and are not
+implemented here.
+
+- **Rule:** an **open** reward (a cycle without a reversal) whose affiliate's **current** real delivered count
+  (`status === 'delivered'` AND `isFake === false`) is **below the threshold of that reward's settings version**
+  gets ONE compensating `REVERSAL` row.
+  - Its amount is the negative of the reward. Reason: `REAL_DELIVERED_BELOW_THRESHOLD`.
+  - Any non-`delivered` status no longer counts: cancelled, canceled, returned, refused, pending, shipped,
+    `Delivered`, and so on.
+  - A threshold raised later never reverses a reward retroactively.
+  - A threshold **lowered** later does not protect an open reward either: it is still judged by its own
+    version's threshold. If the count falls below that, it is reversed, and a later sync may award a new cycle
+    under the current (lower) threshold and amount. One sync only reverses, so the re-award comes from the next
+    sync or reconcile run.
+  - After a reversal, the affiliate may qualify again (current settings), which opens a **new cycle**.
+- **Cycles (migration `20261110_recruiter_reward_cycles`):** `recruiter_reward_ledger.cycle`.
+  - Cycle *n* = `RECRUIT_REWARD` (key `recruit:<affiliateId>:v<n>`) and at most one `REVERSAL`
+    (key `reverse:<affiliateId>:v<n>`).
+  - Every row written before the migration is cycle 1 and keeps its legacy key (`recruit:<id>` / `reverse:<id>`).
+  - **Database invariants:**
+    - one reward and one reversal per (affiliate, cycle) (partial unique indexes);
+    - key format per cycle (CHECK);
+    - the trigger `recruiter_reward_cycle_guard`: a reward must be cycle `max+1` with the previous cycle closed;
+      a reversal must target the latest open cycle of the same recruiter and cannot exceed it.
+  - The ledger stays **append-only**, so an affiliate's net is always 0 or its open reward.
+- **One state-based operation:** `syncRecruiterReward(affiliateId)` awards a new cycle, reverses the open one, or
+  does nothing.
+  - It runs in its own transaction under a **per-affiliate advisory lock** (`recruit:<affiliateId>`, also taken
+    by the trigger).
+  - It recomputes the real delivered count **inside the lock**, so an award racing a cancellation ends
+    consistent, and duplicate or concurrent events never write twice.
+- **Triggers:**
+  - after **every** admin affiliate-order status change (`PUT /api/admin/affiliate-orders`);
+  - after the fake-order status sync (`orderService.updateOrder` → `onRecruiterLinkedOrderSynced`, for real rows
+    linked to that order id);
+  - after an identity approval;
+  - and the reconcile passes. The **reversal pass always runs**, even with new rewards switched off; the award
+    pass runs only when rewards are on.
+  - A real store order cancelled or returned on the Orders page does NOT change its affiliate order; the admin
+    must update the affiliate order.
+- **Audit:** `RECRUIT_REWARD_REVERSED` (SYSTEM), with the cycle, the amount, the settings version, the real
+  delivered count, the required count and the reason. `RECRUIT_REWARD_EARNED` now also records the cycle.
+- **Display:** a reversal is a negative entry with its reason in the recruiter's reward history ("سحب المكافأة…")
+  and in the admin ledger ("Annulation automatique…"), with its cycle.
+- **Unchanged:** affiliate commissions, points, balances and payouts (`affiliateSystemService.js` is untouched).
+  A reversal lowers the recruiter's available amount at once, which may become negative; withdrawals are
+  protected against it by Part 3b (section 10).
+
+## 10. Phase 6 part 3b — negative balance & withdrawal protection
+
+- **Authoritative balance:** `earned` is the sum of the recruiter's `recruiter_reward_ledger` rows, reversals
+  included; `available = earned − reserved` (every non-released withdrawal). A reversal lowers it at once, so
+  `available` can become **negative** (a reward reversed after it was reserved or paid).
+- **Request** (`requestRecruiterWithdrawal`): inside one transaction that first locks the recruiter row
+  (`FOR NO KEY UPDATE`), the ledger and the withdrawals are re-read and the request is refused with
+  `INSUFFICIENT_BALANCE` when `available ≤ 0` or the amount exceeds it. Concurrent requests are serialised by the
+  lock: the same funds can never be reserved twice.
+- **Payment** (`adminProcessRecruiterPayout`, action `pay`): takes the same lock, re-reads the ledger and refuses
+  with `INSUFFICIENT_BALANCE` (409, French text) when `paid + this withdrawal > earned`. A pending withdrawal
+  whose reward was reversed in the meantime can therefore never be paid; the admin rejects it, which releases it.
+  `reject` is always possible.
+- **Reversal versus payment:** both take the per-recruiter advisory lock `recruiter-money:<recruiterId>`
+  (`lockRecruiterMoney`) — the reversal just before it writes, the payment before its balance re-check — so a
+  payment decision and a reversal are strictly serialised. Lock order (deadlock-free): reversal = affiliate lock →
+  money lock; payment = recruiter row (`FOR NO KEY UPDATE`) → money lock.
+- **Reversal versus request:** a request does not take the money lock; any interleaving is equivalent to "request
+  first, then reversal", which the payment re-check covers. A reversal after a withdrawal was already **paid**
+  leaves a negative balance that later rewards offset (no clawback).
+- **Messages:** the recruiter sees Arabic texts (amount above the available balance; a negative balance banner
+  explaining that rewards were reversed after cancellations / returns); the admin sees the French refusal text
+  and a "solde négatif" marker in the balances table.
+- **Unchanged:** the withdrawal history (no row rewritten), the append-only ledger, affiliate payouts and
+  `affiliateSystemService.js`. No migration.

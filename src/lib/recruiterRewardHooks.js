@@ -22,13 +22,17 @@ const inTransaction = (db) => {
 };
 const ID_RE = /^[A-Za-z0-9_-]{1,100}$/;
 
-/** After an admin changed an affiliate order's status: a REAL order that is now 'delivered'. */
+/**
+ * After an admin changed an affiliate order's status — ANY status (Phase 6 part 3a): the reward of
+ * that order's affiliate is re-synchronised state-based (a new cycle may be awarded, or the open
+ * reward reversed when the real delivered count fell below its threshold). Fake orders never count.
+ */
 export async function onRecruiterOrderStatusCommitted(affiliateOrderId, { db = prisma, award = awardRecruiterRewardIfQualified } = {}) {
   if (inTransaction(db)) return { action: 'DEFERRED' };
   try {
     if (typeof affiliateOrderId !== 'string' || !ID_RE.test(affiliateOrderId)) return { action: 'IGNORED' };
     const o = await db.affiliateOrder.findUnique({ where: { id: affiliateOrderId }, select: { affiliateId: true, status: true, isFake: true } });
-    if (!o || o.status !== 'delivered' || o.isFake !== false) return { action: 'IGNORED' };
+    if (!o || o.isFake !== false) return { action: 'IGNORED' };
     return await award(o.affiliateId, { db });
   } catch (e) {
     console.error('[recruiter-rewards] order hook failed (reconcile will retry):', affiliateOrderId, e?.code ?? 'ERROR');
@@ -46,6 +50,25 @@ export async function onRecruiterIdentityApprovedCommitted(identityVerificationI
     return await award(v.affiliateId, { db });
   } catch (e) {
     console.error('[recruiter-rewards] identity hook failed (reconcile will retry):', identityVerificationId, e?.code ?? 'ERROR');
+    return { action: 'ERROR' };
+  }
+}
+
+/**
+ * After the fake-order sync propagated a store order's status (src/lib/services/orderService.js):
+ * re-synchronise the reward of every REAL affiliate order linked to that store order id (fake
+ * rows never count; this covers a non-fake row sharing the id). Never throws.
+ */
+export async function onRecruiterLinkedOrderSynced(orderId, { db = prisma, award = awardRecruiterRewardIfQualified } = {}) {
+  if (inTransaction(db)) return { action: 'DEFERRED' };
+  try {
+    if (typeof orderId !== 'string' || !ID_RE.test(orderId)) return { action: 'IGNORED' };
+    const rows = await db.affiliateOrder.findMany({ where: { orderId, isFake: false }, select: { affiliateId: true } });
+    const ids = [...new Set(rows.map((r) => r.affiliateId))];
+    for (const id of ids) await award(id, { db });
+    return { action: ids.length ? 'SYNCED' : 'IGNORED', affiliates: ids.length };
+  } catch (e) {
+    console.error('[recruiter-rewards] linked-order hook failed (reconcile will retry):', orderId, e?.code ?? 'ERROR');
     return { action: 'ERROR' };
   }
 }

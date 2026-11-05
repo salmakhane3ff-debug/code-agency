@@ -21,7 +21,10 @@ const fmtDate = (iso) => (iso ? DATE_FMT.format(new Date(iso)) : "—");
 const fmtMad = (cents) => `${(Number(cents || 0) / 100).toFixed(2)} MAD`;
 const centsToInput = (cents) => (Number(cents || 0) / 100).toFixed(2);
 const TYPE_LABEL = { RECRUIT_REWARD: "Récompense", REVERSAL: "Annulation", ADMIN_ADJUSTMENT: "Ajustement" };
-const REASON_LABEL = { REAL_DELIVERED_AND_CIN_APPROVED: "Commandes réelles livrées + CIN approuvée" };
+const REASON_LABEL = {
+  REAL_DELIVERED_AND_CIN_APPROVED: "Commandes réelles livrées + CIN approuvée",
+  REAL_DELIVERED_BELOW_THRESHOLD: "Annulation automatique : commandes réelles livrées sous le seuil (annulation / retour)",
+};
 
 function errorText(res, body) {
   if (res.status === 401 || res.status === 403) return "Session expirée ou accès refusé. Reconnectez-vous.";
@@ -88,7 +91,8 @@ export default function AdminRecruiterRewardsPage() {
         return;
       }
       const awarded = body?.reconcile?.awarded ?? 0;
-      setSaveMsg({ type: "success", text: `Version ${body?.settings?.version ?? "?"} enregistrée.${awarded ? ` ${awarded} récompense(s) attribuée(s).` : ""}` });
+      const reversed = body?.reconcile?.reversed ?? 0;
+      setSaveMsg({ type: "success", text: `Version ${body?.settings?.version ?? "?"} enregistrée.${awarded ? ` ${awarded} récompense(s) attribuée(s).` : ""}${reversed ? ` ${reversed} récompense(s) annulée(s).` : ""}` });
       await load();
     } catch {
       setSaveMsg({ type: "error", text: "Erreur réseau." });
@@ -105,7 +109,7 @@ export default function AdminRecruiterRewardsPage() {
       const body = await res.json().catch(() => null);
       if (!res.ok) { setReconcileMsg({ type: "error", text: errorText(res, body) }); return; }
       const r = body?.reconcile || {};
-      setReconcileMsg({ type: "success", text: `${r.checked ?? 0} affilié(s) vérifié(s), ${r.awarded ?? 0} récompense(s) attribuée(s).` });
+      setReconcileMsg({ type: "success", text: `${r.checked ?? 0} affilié(s) vérifié(s), ${r.awarded ?? 0} récompense(s) attribuée(s), ${r.reversed ?? 0} annulée(s).` });
       await load();
     } catch {
       setReconcileMsg({ type: "error", text: "Erreur réseau." });
@@ -242,7 +246,9 @@ export default function AdminRecruiterRewardsPage() {
                     <td className="px-3 py-2 whitespace-nowrap font-semibold">{fmtMad(b.earnedCents)}</td>
                     <td className="px-3 py-2 whitespace-nowrap text-yellow-700">{fmtMad(b.pendingCents)}</td>
                     <td className="px-3 py-2 whitespace-nowrap text-green-700">{fmtMad(b.paidCents)}</td>
-                    <td className="px-3 py-2 whitespace-nowrap font-bold">{fmtMad(b.availableCents)}</td>
+                    <td className={`px-3 py-2 whitespace-nowrap font-bold ${b.availableCents < 0 ? "text-red-700" : ""}`} data-balance-available={b.availableCents < 0 ? "negative" : "ok"}>
+                      {fmtMad(b.availableCents)}{b.availableCents < 0 ? " · solde négatif (annulations)" : ""}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -268,7 +274,7 @@ export default function AdminRecruiterRewardsPage() {
                     <td className="px-3 py-2 font-mono text-xs">{l.affiliateUsername ? `@${l.affiliateUsername}` : "—"}</td>
                     <td className="px-3 py-2 whitespace-nowrap">{TYPE_LABEL[l.type] ?? l.type}</td>
                     <td className="px-3 py-2 whitespace-nowrap font-semibold">{fmtMad(l.amountCents)}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{l.settingsVersion ? `v${l.settingsVersion}` : "—"}</td>
+                    <td className="px-3 py-2 whitespace-nowrap font-mono text-xs">{l.settingsVersion ? `v${l.settingsVersion}` : "—"}{l.cycle ? ` · cycle ${l.cycle}` : ""}</td>
                     <td className="px-3 py-2 text-xs text-gray-600">{REASON_LABEL[l.reason] ?? (l.reason || "—")}</td>
                   </tr>
                 ))}

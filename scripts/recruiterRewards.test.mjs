@@ -12,9 +12,10 @@
  *     isActive and UGC never matter; disabled / zero-amount settings award nothing
  *   • settings: defaults, validation, consecutive audited versions, future-only effect,
  *     a lowered threshold awards the newly qualifying affiliates on save
- *   • idempotency and concurrency: one RECRUIT_REWARD per affiliate whatever the events
- *   • hooks: only real 'delivered' orders / APPROVED identities, deferred in a tx, never throw;
- *     the admin routes only gained the hook lines (+ the payouts dispatch)
+ *   • idempotency and concurrency: one RECRUIT_REWARD per affiliate (and cycle) whatever the events
+ *   • hooks: REAL orders (any status since Phase 6 part 3a) / APPROVED identities, deferred in a tx,
+ *     never throw; the admin routes only gained the hook lines (+ the payouts dispatch)
+ *   (Phase 6 part 3a — reversals and cycles — is covered by scripts/recruiterRewardReversal.test.mjs.)
  *   • wallet math in exact MAD cents; withdrawals never exceed available (also concurrently),
  *     bank gate, idempotent replay, disabled recruiter refused
  *   • admin processing: pay / reject pending only, audited, releases funds on reject
@@ -111,15 +112,15 @@ console.log('\n1. Qualification: real delivered orders ≥ threshold AND identit
   const rows = ledger(E.db, { affiliateId: a.id });
   ok('10 real delivered + APPROVED → AWARDED', r.action === 'AWARDED', JSON.stringify(r));
   const L = rows[0];
-  ok('exactly 1 ledger row: recruiter A, RECRUIT_REWARD, 15000 cents, settings v1, reason, SYSTEM actor (no actorId), key recruit:<id>, T0',
+  ok('exactly 1 ledger row: recruiter A, RECRUIT_REWARD, 15000 cents, settings v1, reason, SYSTEM actor (no actorId), cycle 1, key recruit:<id>:v1 (Phase 6 part 3a), T0',
     rows.length === 1 && L.recruiterId === E.A.id && L.type === 'RECRUIT_REWARD' && L.amountCents === 15000 && Number.isInteger(L.amountCents)
     && L.settingsVersion === 1 && L.reason === 'REAL_DELIVERED_AND_CIN_APPROVED' && L.actorType === 'SYSTEM' && L.actorId === null
-    && L.idempotencyKey === `recruit:${a.id}` && new Date(L.createdAt).getTime() === T0.getTime(), JSON.stringify(L, (k, v) => (typeof v === 'bigint' ? String(v) : v)));
+    && L.idempotencyKey === `recruit:${a.id}:v1` && L.cycle === 1 && new Date(L.createdAt).getTime() === T0.getTime(), JSON.stringify(L, (k, v) => (typeof v === 'bigint' ? String(v) : v)));
   const au = audits(E.db, 'RECRUIT_REWARD_EARNED');
-  ok('exactly 1 RECRUIT_REWARD_EARNED audit (SYSTEM, entity = the affiliate, real delivered 10 / required 10 / APPROVED / v1 / cents)',
+  ok('exactly 1 RECRUIT_REWARD_EARNED audit (SYSTEM, entity = the affiliate, cycle 1, real delivered 10 / required 10 / APPROVED / v1 / cents)',
     au.length === 1 && au[0].actorType === 'SYSTEM' && au[0].actorId === 'SYSTEM' && au[0].recruiterId === E.A.id && au[0].entityType === 'affiliate' && au[0].entityId === a.id
-    && eq(au[0].details, { amountCents: 15000, settingsVersion: 1, realDeliveredOrders: 10, requiredDeliveredOrders: 10, identityStatus: 'APPROVED' }), JSON.stringify(au[0]?.details));
-  ok('the same affiliate again → ALREADY_AWARDED, still 1 row', (await award(E, a)).action === 'ALREADY_AWARDED' && ledger(E.db, { affiliateId: a.id }).length === 1);
+    && eq(au[0].details, { cycle: 1, amountCents: 15000, settingsVersion: 1, realDeliveredOrders: 10, requiredDeliveredOrders: 10, identityStatus: 'APPROVED' }), JSON.stringify(au[0]?.details));
+  ok('the same affiliate again → NO_CHANGE (cycle 1 still open and still met — Phase 6 part 3a state-based sync), still 1 row', eq(await award(E, a), { action: 'NO_CHANGE', cycle: 1 }) && ledger(E.db, { affiliateId: a.id }).length === 1);
 
   const fake = aff(E.db, E.A); orders(E.db, fake, 9); orders(E.db, fake, 25, { isFake: true }); identity(E.db, fake);
   const rf = await award(E, fake);
@@ -170,8 +171,13 @@ console.log('\n1. Qualification: real delivered orders ≥ threshold AND identit
   const None = setup({ settings: null });
   const n1 = qualified(None.db, None.A);
   ok('no settings version → defaults (OFF) → nothing', eq((await award(None, n1)).unmet, ['REWARDS_DISABLED']) && None.db._tables.recruiterRewardLedger.length === 0);
-  ok('nothing in this file ever writes a REVERSAL or updates / deletes a ledger row (no automatic revocation)',
-    !/REVERSAL|reversalKey|recruiterRewardLedger\.(update|delete|upsert)/.test(svcSrc + stripJs(read('src/lib/recruiterRewardHooks.js')) + stripJs(read('src/lib/services/recruiterWalletService.js'))));
+  // Phase 6 part 3a: the automatic reversal lives ONLY in the reward service (syncRecruiterReward, cycle
+  // keys); the hooks and the wallet service never write one; nothing ever updates / deletes a ledger row.
+  ok('a REVERSAL is written only by the reward service (with the cycle key, never the legacy reversalKey); hooks / wallet never write one; no ledger update / delete anywhere',
+    /type: REWARD_TYPES\.REVERSAL, amountCents: -open\.amountCents, cycle: open\.cycle,/.test(svcSrc) && /idempotencyKey: reversalCycleKey\(affiliateId, open\.cycle\)/.test(svcSrc) && !/\breversalKey\b/.test(svcSrc)
+    && !/REVERSAL|reversalKey|reversalCycleKey/.test(stripJs(read('src/lib/recruiterRewardHooks.js')))
+    && !/reversalKey|reversalCycleKey|recruiterRewardLedger\.create/.test(stripJs(read('src/lib/services/recruiterWalletService.js')))
+    && !/recruiterRewardLedger\.(update|updateMany|delete|deleteMany|upsert)/.test(svcSrc + stripJs(read('src/lib/recruiterRewardHooks.js')) + stripJs(read('src/lib/services/recruiterWalletService.js'))));
 }
 
 // ── 2. settings ───────────────────────────────────────────────────────────────
@@ -263,19 +269,24 @@ console.log('\n3. Idempotency and concurrency: one reward per affiliate whatever
   const awardedCount = actions.filter((x) => x === 'AWARDED').length + res.filter((r) => r.awarded).reduce((t, r) => t + r.awarded, 0);
   ok('16 concurrent events (10 awards, 4 hooks, 2 reconciles) → exactly 1 row, 1 audit, exactly 1 event reports the award',
     ledger(C.db, { affiliateId: b.id }).length === 1 && audits(C.db, 'RECRUIT_REWARD_EARNED').length === 1 && awardedCount === 1, actions.join(','));
-  ok('…every other event reports ALREADY_AWARDED (or a reconcile with 0 awarded)', actions.filter((x) => x !== 'AWARDED').every((x) => x === 'ALREADY_AWARDED' || /^reconcile:0$/.test(x)), actions.join(','));
+  ok('…every other event reports NO_CHANGE (or a reconcile with 0 awarded)', actions.filter((x) => x !== 'AWARDED').every((x) => x === 'NO_CHANGE' || /^reconcile:0$/.test(x)), actions.join(','));
 
-  // the DB unique index is the last guard: a forced duplicate insert is refused even with another key
-  let dup = null;
-  try {
-    await C.db.$transaction(async (tx) => tx.recruiterRewardLedger.create({ data: { recruiterId: C.A.id, affiliateId: b.id, type: 'RECRUIT_REWARD', amountCents: 1, idempotencyKey: 'another-key', actorType: 'SYSTEM', settingsVersion: 1 } }));
-  } catch (e) { dup = e.code; }
-  ok('one RECRUIT_REWARD per affiliate is also enforced below the service (another key → P2002)', dup === 'P2002');
+  // below the service (Phase 6 part 3a): a forced second cycle-1 reward is refused — the BEFORE INSERT cycle
+  // guard fires first (cycle must be 2, and cycle 1 is not reversed) for the same key and for the legacy key
+  // the cycle CHECK accepts for cycle 1; a free-form key → the cycle-key CHECK. (The per-cycle unique
+  // indexes stay as the last line behind the guard.)
+  const force = (data) => C.db.$transaction(async (tx) => tx.recruiterRewardLedger.create({ data: { recruiterId: C.A.id, affiliateId: b.id, type: 'RECRUIT_REWARD', amountCents: 1, actorType: 'SYSTEM', settingsVersion: 1, cycle: 1, ...data } })).then(() => 'written', (e) => e.meta?.constraint ?? e.code);
+  const dupSame = await force({ idempotencyKey: `recruit:${b.id}:v1` });
+  const dupLegacy = await force({ idempotencyKey: `recruit:${b.id}` });
+  const dupFree = await force({ idempotencyKey: 'another-key' });
+  ok('one RECRUIT_REWARD per affiliate and cycle is also enforced below the service (same key / legacy key → cycle guard P2010; another key → cycle-key CHECK)',
+    dupSame === 'P2010' && dupLegacy === 'P2010' && dupFree === 'recruiter_reward_ledger_cycle_check' && ledger(C.db, { affiliateId: b.id }).length === 1, JSON.stringify([dupSame, dupLegacy, dupFree]));
   let guard = null;
+  const other = qualified(C.db, C.A);
   try {
-    await C.db.$transaction(async (tx) => tx.recruiterRewardLedger.create({ data: { recruiterId: C.B.id, affiliateId: qualified(C.db, C.A).id, type: 'RECRUIT_REWARD', amountCents: 1, idempotencyKey: 'k2', actorType: 'SYSTEM', settingsVersion: 1 } }));
-  } catch (e) { guard = e.code; }
-  ok('a reward credited to a recruiter who is not the affiliate\'s → refused by the link guard', guard === 'P2010');
+    await C.db.$transaction(async (tx) => tx.recruiterRewardLedger.create({ data: { recruiterId: C.B.id, affiliateId: other.id, type: 'RECRUIT_REWARD', amountCents: 1, idempotencyKey: `recruit:${other.id}:v1`, cycle: 1, actorType: 'SYSTEM', settingsVersion: 1 } }));
+  } catch (e) { guard = e; }
+  ok('a reward credited to a recruiter who is not the affiliate\'s → refused by the link guard', guard?.code === 'P2010' && /not linked/.test(guard?.message));
 
   // an injected failure in the audit insert rolls the reward back; the next event awards it
   const F = setup({ failOnce: { 'recruiterAuditLog.create': true } });
@@ -298,7 +309,10 @@ console.log('\n3. Idempotency and concurrency: one reward per affiliate whatever
   qualified(off.db, off.A);
   const before = off.db._queryCount();
   const ro = await RS.reconcileRecruiterRewards({ db: off.db });
-  ok('rewards OFF → reconcile reads only the settings and awards nothing', eq(ro, { checked: 0, awarded: 0, alreadyAwarded: 0 }) && off.db._queryCount() - before === 1);
+  // Phase 6 part 3a: the REVERSAL pass runs even with rewards OFF, so the batched reads still happen
+  // (settings, links, ledger, real delivered counts — no identity read, no write).
+  ok('rewards OFF → reconcile awards nothing (4 batched reads for the reversal pass, no identity read, no write)',
+    eq(ro, { checked: 1, awarded: 0, reversed: 0, unchanged: 0 }) && off.db._queryCount() - before === 4 && off.db._tables.recruiterRewardLedger.length === 0, `${JSON.stringify(ro)} q=${off.db._queryCount() - before}`);
 
   const queries = async (n, qualify) => {
     const S = setup();
@@ -308,11 +322,14 @@ console.log('\n3. Idempotency and concurrency: one reward per affiliate whatever
     return { q: S.db._queryCount() - b0, r };
   };
   const q10 = await queries(10, false), q300 = await queries(300, false);
-  ok('no N+1: reconcile over 10 and 300 non-qualifying affiliates issues the same number of queries', q10.q === q300.q && q10.q === 5, `10→${q10.q} 300→${q300.q}`);
+  // Phase 6 part 3a: settings, links, ledger, order counts (identity is read only for award candidates).
+  ok('no N+1: reconcile over 10 and 300 non-qualifying affiliates issues the same number of queries (4)', q10.q === q300.q && q10.q === 4, `10→${q10.q} 300→${q300.q}`);
   const w20 = await queries(20, true);
-  ok('with awards: exactly base + 2 writes per awarded affiliate (ledger + audit, one small transaction each)', w20.r.awarded === 20 && w20.q === 5 + 2 * 20, `q=${w20.q} awarded=${w20.r.awarded}`);
+  // Phase 6 part 3a: each award is one syncRecruiterReward transaction that re-reads every fact under the
+  // per-affiliate lock: link, lock, ledger, count, settings, affiliate, identity + 2 writes (ledger + audit) = 9.
+  ok('with awards: exactly base (5, incl. the batched identity read) + 9 statements per awarded affiliate (re-check under the lock + ledger + audit)', w20.r.awarded === 20 && w20.q === 5 + 9 * 20, `q=${w20.q} awarded=${w20.r.awarded}`);
   const q6k = await queries(6000, false);
-  ok('6000 affiliates: chunked by 5000 ids (settings, links, 2 ledger chunks, 2 order chunks, 2 identity chunks)', q6k.q === 8 && q6k.r.checked === 6000, `q=${q6k.q}`);
+  ok('6000 affiliates: chunked by 5000 ids (settings, links, 2 ledger chunks, 2 order chunks; no candidate → no identity read)', q6k.q === 6 && q6k.r.checked === 6000, `q=${q6k.q}`);
 }
 
 // ── 4. hooks ──────────────────────────────────────────────────────────────────
@@ -323,7 +340,8 @@ console.log('\n4. Hooks: only a REAL delivered order / an APPROVED identity, def
   const fakeO = E.db._seed.order({ affiliateId: a.id, status: 'delivered', isFake: true });
   const pend = E.db._seed.order({ affiliateId: a.id, status: 'shipped', isFake: false });
   ok('a FAKE delivered order → IGNORED (never counted, no award)', (await HK.onRecruiterOrderStatusCommitted(fakeO.id, { db: E.db })).action === 'IGNORED' && ledger(E.db).length === 0);
-  ok('a non-delivered real order → IGNORED', (await HK.onRecruiterOrderStatusCommitted(pend.id, { db: E.db })).action === 'IGNORED');
+  // Phase 6 part 3a: ANY status change of a REAL order re-synchronises (a non-delivered one may reverse).
+  ok('a non-delivered real order → re-synchronised: NOT_QUALIFIED (9 real delivered), no row', eq(await HK.onRecruiterOrderStatusCommitted(pend.id, { db: E.db }), { action: 'NOT_QUALIFIED', unmet: ['NOT_ENOUGH_SALES'] }) && ledger(E.db).length === 0);
   ok('an unknown or malformed order id → IGNORED', (await HK.onRecruiterOrderStatusCommitted(randomUUID(), { db: E.db })).action === 'IGNORED' && (await HK.onRecruiterOrderStatusCommitted({ id: 1 }, { db: E.db })).action === 'IGNORED');
   const tenth = E.db._seed.order({ affiliateId: a.id, status: 'delivered', isFake: false });
   ok('the 10th REAL delivered order (admin set it delivered) → the order hook AWARDS immediately', (await HK.onRecruiterOrderStatusCommitted(tenth.id, { db: E.db })).action === 'AWARDED' && ledger(E.db, { affiliateId: a.id }).length === 1);
@@ -351,11 +369,13 @@ console.log('\n4. Hooks: only a REAL delivered order / an APPROVED identity, def
 
   // the admin routes: ONLY the hook lines were added, after the committed write
   const routeDiff = (file) => git(['diff', PHASE4_HEAD, '--', file]).split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l));
-  ok('admin affiliate-orders route: only the hook import, its comment and the post-write call were added (nothing removed)',
+  // Phase 6 part 3a: the post-write call is unconditional (every status change re-synchronises).
+  ok('admin affiliate-orders route: only the hook import, its comment and the UNCONDITIONAL post-write call were added (nothing removed)',
     eq(routeDiff('src/app/api/admin/affiliate-orders/route.js'), [
       "+import { onRecruiterOrderStatusCommitted } from '@/lib/recruiterRewardHooks';",
-      "+    // Recruiter reward (post-commit, never throws): a REAL order just became 'delivered'.",
-      "+    if (status === 'delivered') await onRecruiterOrderStatusCommitted(String(orderId));",
+      "+    // Recruiter reward (post-commit, never throws): re-synchronised after EVERY status change —",
+      "+    // a delivery may award a cycle, a cancellation / return may reverse it (Phase 6 part 3a).",
+      "+    await onRecruiterOrderStatusCommitted(String(orderId));",
     ]), JSON.stringify(routeDiff('src/app/api/admin/affiliate-orders/route.js')));
   const ord = read('src/app/api/admin/affiliate-orders/route.js');
   ok('…the hook runs AFTER adminUpdateAffiliateOrderStatus resolved (post-commit)', ord.indexOf('await adminUpdateAffiliateOrderStatus(orderId, status)') < ord.indexOf('await onRecruiterOrderStatusCommitted('));
@@ -410,12 +430,12 @@ console.log('\n5. Wallet math in exact MAD cents');
   ok('wallet view: exact keys (settings, totals, rewards, withdrawals, bank), totals in cents + MAD, statuses PENDING / PAID / REJECTED only',
     eq(keys(v), ['bank', 'rewards', 'settings', 'totals', 'withdrawals']) && eq(keys(v.totals), ['availableCents', 'currency', 'earnedCents', 'paidCents', 'pendingCents'])
     && v.withdrawals.every((x) => ['PENDING', 'PAID', 'REJECTED'].includes(x.status)) && v.withdrawals.filter((x) => x.status === 'REJECTED').length === 3);
-  ok('reward history shows which affiliate (id / username / name) and why (reason + threshold of the version used)', (() => {
+  ok('reward history shows which affiliate (id / username / name) and why (reason + threshold of the version used) and the cycle', await (() => {
     const s = setup({ settings: { version: 1, enabled: true, rewardAmountCents: 15000, minDeliveredSales: 7 } });
     const q = aff(s.db, s.A); orders(s.db, q, 7); identity(s.db, q);
     return award(s, q).then(() => WS.getRecruiterWallet(s.A.id, { db: s.db })).then((ww) => {
       const h = V.toRecruiterWalletView(ww).rewards[0];
-      return eq(h, { type: 'RECRUIT_REWARD', amountCents: 15000, currency: 'MAD', affiliate: { id: q.id, username: q.username, name: q.name }, reason: 'REAL_DELIVERED_AND_CIN_APPROVED', requiredDeliveredOrders: 7, createdAt: T0.toISOString() });
+      return eq(h, { type: 'RECRUIT_REWARD', amountCents: 15000, currency: 'MAD', affiliate: { id: q.id, username: q.username, name: q.name }, reason: 'REAL_DELIVERED_AND_CIN_APPROVED', requiredDeliveredOrders: 7, cycle: 1, createdAt: T0.toISOString() });
     });
   })());
 }
@@ -614,7 +634,7 @@ console.log('\n8. Admin: pay / reject a recruiter withdrawal (pending only, audi
     || (ov.status === 200 && E.db._tables.affiliatePayout.find((p) => p.id === w3.withdrawal.id).status === 'rejected' && ov.body.balances.find((b) => b.recruiterId === E.A.id).availableCents === 20000), ov.text.slice(0, 300));
   const rc = await call(withAdminAuth(admin.reconcile), req('/api/admin/recruiter-rewards', { method: 'POST', body: { action: 'reconcile' }, cookie: adminCookie() }));
   const rcBad = await call(withAdminAuth(admin.reconcile), req('/api/admin/recruiter-rewards', { method: 'POST', body: { action: 'other' }, cookie: adminCookie() }));
-  ok('admin recheck: { action: "reconcile" } → 200 with the counts; anything else → 400', rc.status === 200 && eq(keys(rc.body.reconcile), ['alreadyAwarded', 'awarded', 'checked']) && rcBad.status === 400);
+  ok('admin recheck: { action: "reconcile" } → 200 with the counts; anything else → 400', rc.status === 200 && eq(keys(rc.body.reconcile), ['awarded', 'checked', 'reversed', 'unchanged']) && rcBad.status === 400);
   ok('admin endpoints refuse a recruiter token (403) and no token (401)',
     (await call(withAdminAuth(admin.overview), req('/x', { cookie: `auth_token=${signToken({ recruiterId: E.A.id, username: 'rec.a', type: 'recruiter' })}` }))).status === 403
     && (await call(withAdminAuth(admin.overview), req('/x'))).status === 401);
@@ -714,8 +734,10 @@ console.log('\n11. Static checks');
   const models = new Set([...rs.matchAll(/\b(?:db|tx)\.(\$?\w+)/g)].map((m) => m[1]));
   ok('the reward service touches only settings / ledger / audit / links / orders (counts) / identity (status) / affiliate (existence) / $transaction',
     [...models].every((m) => ['recruiterSettingsVersion', 'recruiterRewardLedger', 'recruiterAuditLog', 'recruiterAffiliateLink', 'affiliateOrder', 'identityVerification', 'affiliate', '$transaction', '$executeRaw'].includes(m)), [...models].join(','));
-  ok('the ONLY raw SQL of the reward service is the settings advisory lock (same key as the version trigger)',
-    [...rs.matchAll(/\$(?:executeRaw|queryRaw)(?:Unsafe)?`([^`]*)`/g)].map((m) => m[1]).join('|') === "SELECT pg_advisory_xact_lock(hashtext('recruiter_settings_versions'))"
+  // Phase 6 part 3a adds exactly one: the per-affiliate reward lock (the SAME key as the cycle-guard trigger);
+  // the part 3b race fix adds exactly one more: the per-recruiter money lock (shared with the withdrawal payment).
+  ok('the ONLY raw SQL of the reward service: the settings advisory lock (same key as the version trigger), the per-affiliate reward lock (same key as the cycle guard) and the per-recruiter money lock, all tagged / bound',
+    [...rs.matchAll(/\$(?:executeRaw|queryRaw)(?:Unsafe)?`([^`]*)`/g)].map((m) => m[1]).join('|') === "SELECT pg_advisory_xact_lock(hashtext('recruiter_settings_versions'))|SELECT pg_advisory_xact_lock(hashtext(${'recruit:' + affiliateId}))|SELECT pg_advisory_xact_lock(hashtext(${'recruiter-money:' + recruiterId}))"
     && !/\$(?:executeRaw|queryRaw)Unsafe/.test(rs));
   ok('identity is read with select affiliateId / status only (never a document field)', /identityVerification\.findMany\(\{ where: \{ affiliateId: \{ in: part \} \}, select: \{ affiliateId: true, status: true \} \}\)/.test(rs) && !/cinFront|cinBack/.test(rs));
   const ws = stripJs(read('src/lib/services/recruiterWalletService.js'));

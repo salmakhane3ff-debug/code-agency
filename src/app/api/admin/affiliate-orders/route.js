@@ -38,8 +38,9 @@ async function putHandler(req) {
     }
 
     const order = await adminUpdateAffiliateOrderStatus(orderId, status);
-    // Recruiter reward (post-commit, never throws): a REAL order just became 'delivered'.
-    if (status === 'delivered') await onRecruiterOrderStatusCommitted(String(orderId));
+    // Recruiter reward (post-commit, never throws): re-synchronised after EVERY status change —
+    // a delivery may award a cycle, a cancellation / return may reverse it (Phase 6 part 3a).
+    await onRecruiterOrderStatusCommitted(String(orderId));
     return Response.json(order);
   } catch (err) {
     console.error('Admin affiliate-orders PUT error:', err);

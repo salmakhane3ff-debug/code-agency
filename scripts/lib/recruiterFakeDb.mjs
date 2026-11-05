@@ -25,6 +25,14 @@
  *                       FKs; every call recorded in `_payoutCalls`), `affiliateOrder.groupBy` with the
  *                       delivered filter + `findUnique`, `identityVerification.findUnique`, the second
  *                       recruiter row-lock statement (bank columns), `recruiter.findMany` where.
+ *                       Phase 6 part 3a (migration 20261110): ledger `cycle` (NOT NULL, no default;
+ *                       seeds default to 1 like the legacy rows), the cycle-key CHECK (legacy keys for
+ *                       cycle 1 only), ONE RECRUIT_REWARD and ONE REVERSAL per (affiliate, cycle)
+ *                       → P2002, the cycle guard (reward = next cycle after a closed one; reversal =
+ *                       the open cycle, same recruiter, ≤ the reward) under the per-affiliate advisory
+ *                       lock 'recruit:<id>' held until the transaction ends, `affiliateOrder.count`
+ *                       (affiliateId + status + isFake only), `affiliateOrder.findMany` (where { orderId,
+ *                       isFake: false }, select { affiliateId } only) and `recruiterSettingsVersion.findUnique`.
  *
  *   Phase 6 part 1 (with phase 3+): `affiliateActivationCode` (CHECKs of the migration, unique
  *                       selector, ONE active code per affiliate → P2002, the life-cycle guard:
@@ -701,6 +709,13 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
         return clone(r);
       },
     });
+    // Phase 6 part 3a: the threshold of the settings version a reward was earned with.
+    recruiterSettingsVersion.findUnique = async ({ where, select } = {}) => {
+      await before('recruiterSettingsVersion', 'findUnique', { where });
+      const k = Object.keys(where || {});
+      if (k.length !== 1 || k[0] !== 'version') throw new Error(`fake recruiterSettingsVersion.findUnique: unsupported where ${JSON.stringify(where)}`);
+      return pick(rows('recruiterSettingsVersion').find((r) => r.version === where.version), select);
+    };
     for (const op of ['update', 'updateMany', 'upsert', 'delete', 'deleteMany']) {
       recruiterSettingsVersion[op] = async () => { throw triggerErr('recruiter_settings_versions is append-only'); };
     }
@@ -718,12 +733,36 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
           && (r.type !== 'RECRUIT_REWARD' || (a > 0 && r.affiliateId != null && r.settingsVersion != null))
           && (r.type !== 'REVERSAL' || (a < 0 && r.affiliateId != null))
           && (r.type !== 'ADMIN_ADJUSTMENT' || (r.actorType === 'ADMIN' && String(r.reason ?? '').trim().length > 0)))) throw checkErr('recruiter_reward_ledger_amount_check');
-        // BEFORE INSERT triggers: link guard (and the reversal guard is not used by Phase 5 code).
+        // 20261110: "cycle" INTEGER NOT NULL (no default) + recruiter_reward_ledger_cycle_check.
+        if (r.cycle === undefined || r.cycle === null) throw Object.assign(new Error('cycle NOT NULL'), { code: 'P2011', meta: { constraint: 'cycle' } });
+        if (!(Number.isInteger(r.cycle) && r.cycle >= 1
+          && (!['RECRUIT_REWARD', 'REVERSAL'].includes(r.type) || r.affiliateId != null)
+          && (r.type !== 'RECRUIT_REWARD' || r.idempotencyKey === `recruit:${r.affiliateId}:v${r.cycle}` || (r.cycle === 1 && r.idempotencyKey === `recruit:${r.affiliateId}`))
+          && (r.type !== 'REVERSAL' || r.idempotencyKey === `reverse:${r.affiliateId}:v${r.cycle}` || (r.cycle === 1 && r.idempotencyKey === `reverse:${r.affiliateId}`)))) {
+          throw checkErr('recruiter_reward_ledger_cycle_check');
+        }
+        // BEFORE INSERT triggers: the cycle guard (20261110 — under the per-affiliate advisory lock,
+        // the SAME key as the application lock, held until the transaction ends) and the link guard.
+        if (['RECRUIT_REWARD', 'REVERSAL'].includes(r.type)) {
+          await lockRecruiterRow(`__advisory__:recruit:${r.affiliateId}`);
+          const mine = rows('recruiterRewardLedger').filter((x) => x.affiliateId === r.affiliateId);
+          const maxReward = mine.filter((x) => x.type === 'RECRUIT_REWARD').reduce((m, x) => Math.max(m, x.cycle), 0);
+          if (r.type === 'RECRUIT_REWARD') {
+            if (r.cycle !== maxReward + 1) throw triggerErr(`recruit reward of affiliate ${r.affiliateId} must be cycle ${maxReward + 1} (got ${r.cycle})`);
+            if (maxReward > 0 && !mine.some((x) => x.type === 'REVERSAL' && x.cycle === maxReward)) throw triggerErr(`cycle ${maxReward} of affiliate ${r.affiliateId} is still open (not reversed)`);
+          } else {
+            const reward = mine.find((x) => x.type === 'RECRUIT_REWARD' && x.cycle === r.cycle);
+            if (!reward || r.cycle !== maxReward || reward.recruiterId !== r.recruiterId || -r.amountCents > reward.amountCents) {
+              throw triggerErr('a reversal needs the open reward of the same cycle and recruiter and cannot exceed it');
+            }
+          }
+        }
         if (r.affiliateId != null && !rows('recruiterAffiliateLink').some((l) => l.affiliateId === r.affiliateId && l.recruiterId === r.recruiterId)) {
           throw triggerErr(`affiliate ${r.affiliateId} is not linked to recruiter ${r.recruiterId}`);
         }
         if (T.recruiterRewardLedger.some((x) => x.idempotencyKey === r.idempotencyKey)) throw p2002('idempotencyKey');
-        if (r.type === 'RECRUIT_REWARD' && T.recruiterRewardLedger.some((x) => x.type === 'RECRUIT_REWARD' && x.affiliateId === r.affiliateId)) throw p2002('affiliateId');
+        // one RECRUIT_REWARD / one REVERSAL per (affiliate, cycle) — partial unique indexes (20261110)
+        if (['RECRUIT_REWARD', 'REVERSAL'].includes(r.type) && T.recruiterRewardLedger.some((x) => x.type === r.type && x.affiliateId === r.affiliateId && x.cycle === r.cycle)) throw p2002('affiliateId,cycle');
         if (!T.recruiter.some((x) => x.id === r.recruiterId)) throw fkErr('recruiterId');
         if (r.affiliateId != null && !T.affiliate.some((x) => x.id === r.affiliateId)) throw fkErr('affiliateId');
         T.recruiterRewardLedger.push(r);
@@ -862,6 +901,28 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
       if (k.length !== 1 || !['id', 'affiliateId'].includes(k[0])) throw new Error(`fake identityVerification.findUnique: unsupported where ${JSON.stringify(where)}`);
       if (!select || !Object.keys(select).every((x) => ['affiliateId', 'status'].includes(x))) throw new Error(`fake identityVerification.findUnique: select must be a subset of affiliateId/status (got ${JSON.stringify(select)}) — no document / file key`);
       return pick(rows('identityVerification').find((r) => r[k[0]] === where[k[0]]), select);
+    };
+    // Phase 6 part 3a: the real delivered count of ONE affiliate, read inside the reward lock —
+    // exactly { affiliateId, status, isFake } (scalars); every other affiliateOrder op still throws.
+    affiliateOrder.count = async (args = {}) => {
+      await before('affiliateOrder', 'count', { where: args.where });
+      const { where, ...rest } = args;
+      if (Object.keys(rest).length) throw new Error(`fake affiliateOrder.count: only where is allowed (got ${Object.keys(rest).join(',')})`);
+      const wk = Object.keys(where || {}).sort().join();
+      if (wk !== 'affiliateId,isFake,status' || typeof where.affiliateId !== 'string' || typeof where.status !== 'string' || typeof where.isFake !== 'boolean') {
+        throw new Error(`fake affiliateOrder.count: unsupported where ${JSON.stringify(where)}`);
+      }
+      return rows('affiliateOrder').filter((o) => o.affiliateId === where.affiliateId && o.status === where.status && o.isFake === where.isFake).length;
+    };
+    // Phase 6 part 3a: the fake-order sync hook lists the REAL rows linked to a store order —
+    // exactly where { orderId, isFake: false } and select { affiliateId } (no other field / filter).
+    affiliateOrder.findMany = async (args = {}) => {
+      await before('affiliateOrder', 'findMany', { where: args.where });
+      const { where, select, ...rest } = args;
+      if (Object.keys(rest).length) throw new Error(`fake affiliateOrder.findMany: only where / select are allowed (got ${Object.keys(rest).join(',')})`);
+      if (Object.keys(where || {}).sort().join() !== 'isFake,orderId' || typeof where.orderId !== 'string' || where.isFake !== false) throw new Error(`fake affiliateOrder.findMany: unsupported where ${JSON.stringify(where)}`);
+      if (!select || Object.keys(select).join() !== 'affiliateId' || select.affiliateId !== true) throw new Error(`fake affiliateOrder.findMany: select must be exactly { affiliateId: true } (got ${JSON.stringify(select)})`);
+      return rows('affiliateOrder').filter((o) => o.orderId === where.orderId && o.isFake === false).map((o) => pick(o, select));
     };
     // existence check of the affiliate (select id only) is already affiliate.findUnique.
   }
@@ -1003,7 +1064,8 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
       T.affiliateActivationRecovery.push(r);
       return clone(r);
     },
-    ledger(data) { const r = { id: randomUUID(), seq: BigInt(++seq), affiliateId: null, reason: null, actorId: null, settingsVersion: null, actorType: 'SYSTEM', createdAt: new Date(), ...clone(data) }; T.recruiterRewardLedger.push(r); return clone(r); },
+    // Seeded rows default to cycle 1 (what every pre-20261110 row reads through the column default).
+    ledger(data) { const r = { id: randomUUID(), seq: BigInt(++seq), affiliateId: null, reason: null, actorId: null, settingsVersion: null, actorType: 'SYSTEM', cycle: 1, createdAt: new Date(), ...clone(data) }; T.recruiterRewardLedger.push(r); return clone(r); },
     recruiter(data) {
       const now = new Date();
       const r = {

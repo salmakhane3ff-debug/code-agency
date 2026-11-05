@@ -17,6 +17,7 @@ import { mapOrder, parseOrderBody } from '../utils/mappers.js';
 import { sendBemobPostback } from '../bemobApi.js';
 import { getSettings } from './settingsService.js';
 import { syncLinkedAffiliateOrderStatus } from './affiliateSystemService.js';
+import { onRecruiterLinkedOrderSynced } from '../recruiterRewardHooks.js';
 import { isProductLocked, productLockedError } from '../productLock.js';
 
 /**
@@ -527,6 +528,8 @@ export async function updateOrder(id, body) {
       await syncLinkedAffiliateOrderStatus(id, data.status).catch((e) =>
         console.error('[fake-order] status sync failed:', e?.message ?? e),
       );
+      // Recruiter reward (post-commit, never throws; Phase 6 part 3a): real rows linked to this id.
+      await onRecruiterLinkedOrderSynced(String(id));
     }
 
     return mapOrder(order);

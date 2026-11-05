@@ -20,7 +20,7 @@ const LABELS = {
   ACTIVATION_NOT_AVAILABLE: "هذا الحساب لديه كلمة سر بالفعل، لا يمكن إنشاء رمز جديد.",
   INCOMPLETE_BANK_INFO: "أكمل معلوماتك البنكية أولاً",
   // Phase 5 (built from parts: this file keeps the Phase 1 contract wording rule).
-  [["INSUFFICIENT", "BAL" + "ANCE"].join("_")]: "المبلغ أكبر من رصيدك المتاح",
+  [["INSUFFICIENT", "BAL" + "ANCE"].join("_")]: "رصيدك المتاح غير كافٍ لهذا المبلغ (المكافآت المسحوبة بعد إلغاء أو إرجاع طلبيات لا تُحتسب)",
 };
 export const GENERIC_ERROR = "وقع خطأ، المرجو المحاولة من جديد.";
 

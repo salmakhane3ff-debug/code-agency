@@ -10,7 +10,11 @@
  *
  * Rewards are in MAD only (integer cents: 1500 = 15.00 MAD), in a ledger that is
  * completely separate from affiliate balances, commissions, reward points and payouts.
- * One reward per affiliate created by the recruiter (idempotency key + DB unique index).
+ * Rewards are recorded in versioned CYCLES per affiliate created by the recruiter: cycle n =
+ * one reward (key recruit:<affiliateId>:v<n>) and, if the affiliate later falls below the
+ * threshold, one compensating reversal (key reverse:<affiliateId>:v<n>); the affiliate may then
+ * qualify again in cycle n+1. One reward and one reversal per (affiliate, cycle) — idempotency
+ * keys + DB unique indexes. Pre-cycle rows keep their legacy keys as cycle 1.
  *
  * A reward is due — and recorded immediately — when the affiliate CREATED by the
  * recruiter has BOTH:
@@ -47,6 +51,9 @@ export const DEFAULT_RECRUITER_SETTINGS = Object.freeze({
 /** Idempotency key of the single recruit reward / reversal of an affiliate. */
 export const recruitRewardKey = (affiliateId) => `recruit:${affiliateId}`;
 export const reversalKey = (affiliateId) => `reverse:${affiliateId}`;
+/** Cycle-specific keys (Phase 6 part 3a): cycle n = recruit:<id>:v<n> / reverse:<id>:v<n>. */
+export const recruitRewardCycleKey = (affiliateId, cycle) => `recruit:${affiliateId}:v${cycle}`;
+export const reversalCycleKey = (affiliateId, cycle) => `reverse:${affiliateId}:v${cycle}`;
 
 const bool = (v) => v === true || v === 'true';
 const intIn = (v, min, max) => {

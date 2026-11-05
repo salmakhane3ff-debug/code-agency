@@ -331,9 +331,15 @@ export default function RecruiterWalletPage() {
                   أضف معلوماتك البنكية قبل طلب السحب.
                 </p>
               )}
-              {bankComplete && available <= 0 && (
+              {bankComplete && available === 0 && (
                 <p className="text-sm rounded-xl border border-slate-200 bg-slate-50 text-slate-700 px-3 py-2" data-nothing-available>
                   لا يوجد رصيد متاح للسحب حالياً.
+                </p>
+              )}
+              {available < 0 && (
+                <p className="text-sm rounded-xl border border-red-200 bg-red-50 text-red-800 px-3 py-2" data-negative-balance>
+                  رصيدك المتاح سالب لأن مكافآت سُحبت بعد إلغاء أو إرجاع طلبيات. لا يمكن طلب سحب حتى يصبح رصيدك موجباً من جديد.
+                  <span className="block mt-1 font-bold">الرصيد الحالي: <bdi dir="ltr">{fmtMad(available)}</bdi></span>
                 </p>
               )}
               <form onSubmit={requestWithdrawal} noValidate className="space-y-3" data-withdraw-form>
@@ -408,7 +414,10 @@ export default function RecruiterWalletPage() {
                         <p className="text-xs text-slate-600 mt-0.5" data-reward-reason>
                           {r.reason === "REAL_DELIVERED_AND_CIN_APPROVED"
                             ? `${r.requiredDeliveredOrders ?? "—"} طلبية حقيقية مسلّمة + بطاقة وطنية مقبولة`
-                            : r.type === "REVERSAL" ? "إلغاء مكافأة من طرف الإدارة" : r.type === "ADMIN_ADJUSTMENT" ? "تعديل من طرف الإدارة" : "—"}
+                            : r.reason === "REAL_DELIVERED_BELOW_THRESHOLD"
+                              ? `سحب المكافأة: الطلبيات الحقيقية المسلّمة أصبحت أقل من ${r.requiredDeliveredOrders ?? "—"} (إلغاء أو إرجاع)`
+                              : r.type === "ADMIN_ADJUSTMENT" ? "تعديل من طرف الإدارة" : "—"}
+                          {Number.isInteger(r.cycle) && r.cycle > 1 ? ` · الدورة ${r.cycle}` : ""}
                         </p>
                         <p className="text-xs text-slate-400 mt-0.5">{fmtDate(r.createdAt)}</p>
                       </div>

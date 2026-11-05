@@ -244,8 +244,11 @@ export function toRecruiterRewardHistoryView(row) {
     amountCents: cents(row?.amountCents),
     currency: 'MAD',
     affiliate: a && typeof a === 'object' ? { id: str(a.id), username: str(a.username), name: str(a.name) } : null,
-    reason: type === REWARD_TYPES.RECRUIT_REWARD ? 'REAL_DELIVERED_AND_CIN_APPROVED' : null,
-    requiredDeliveredOrders: type === REWARD_TYPES.RECRUIT_REWARD && Number.isInteger(row?.requiredDeliveredOrders) && row.requiredDeliveredOrders >= 1 ? row.requiredDeliveredOrders : null,
+    // Phase 6 part 3a: a REVERSAL is a negative entry with its own reason — the real delivered
+    // count fell below the threshold (of the reversed reward's settings version).
+    reason: type === REWARD_TYPES.RECRUIT_REWARD ? 'REAL_DELIVERED_AND_CIN_APPROVED' : type === REWARD_TYPES.REVERSAL ? 'REAL_DELIVERED_BELOW_THRESHOLD' : null,
+    requiredDeliveredOrders: (type === REWARD_TYPES.RECRUIT_REWARD || type === REWARD_TYPES.REVERSAL) && Number.isInteger(row?.requiredDeliveredOrders) && row.requiredDeliveredOrders >= 1 ? row.requiredDeliveredOrders : null,
+    cycle: (type === REWARD_TYPES.RECRUIT_REWARD || type === REWARD_TYPES.REVERSAL) && Number.isInteger(row?.cycle) && row.cycle >= 1 ? row.cycle : null,
     createdAt: iso(row?.createdAt),
   };
 }

@@ -26,6 +26,8 @@ const ADMIN_ERRORS = {
   UNAUTHORIZED: [401, 'Non autorisé.'],
   NOT_FOUND: [404, 'Retrait introuvable.'],
   INVALID_STATE: [409, 'Ce retrait a déjà été traité.'],
+  // Phase 6 part 3b: paying would exceed the recruiter's net earned (a reward was reversed).
+  INSUFFICIENT_BALANCE: [409, 'Paiement refusé : le solde net du recruteur (récompenses moins annulations) ne couvre pas ce retrait. Rejetez la demande pour la libérer.'],
 };
 function adminError(e) {
   const known = ADMIN_ERRORS[e?.code];

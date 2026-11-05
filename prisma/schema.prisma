@@ -1972,6 +1972,10 @@ model RecruiterRewardLedger {
   actorType       String // SYSTEM | ADMIN
   actorId         String?
   settingsVersion Int?
+  // Reward / reversal cycle of the affiliate (Phase 6 part 3a): cycle n = one RECRUIT_REWARD and
+  // at most one REVERSAL (keys recruit:<id>:v<n> / reverse:<id>:v<n>; rows before the cycles
+  // read 1 with their legacy keys). Unique per (affiliate, cycle, type) and alternating — DB.
+  cycle           Int
   createdAt       DateTime   @default(now())
   recruiter       Recruiter  @relation(fields: [recruiterId], references: [id], onDelete: Restrict)
   affiliate       Affiliate? @relation(fields: [affiliateId], references: [id], onDelete: Restrict)

@@ -22,11 +22,28 @@
  * A request is checked against `available` inside a transaction that first locks the
  * recruiter row (FOR NO KEY UPDATE): two concurrent requests are serialised, the second
  * sees the first one reserved — the same funds can never be reserved twice.
+ *
+ * Phase 6 part 3b — negative balance & withdrawal protection:
+ *   • `earned` is the authoritative ledger sum, so a REVERSAL (Phase 6 part 3a) lowers it at
+ *     once; `available` may become NEGATIVE (a reward reversed after it was reserved / paid).
+ *   • a request is refused (INSUFFICIENT_BALANCE) when `available` ≤ 0 or below the amount;
+ *   • paying a pending withdrawal re-checks the ledger under the SAME recruiter lock: the
+ *     total paid may never exceed the net earned (paid + this row ≤ earned). A withdrawal
+ *     whose reward was reversed in the meantime is refused (INSUFFICIENT_BALANCE) — the admin
+ *     rejects it, which releases it. Reversed rewards therefore can never be paid out.
+ *   • a payment and a reward reversal share the per-recruiter money lock
+ *     (lockRecruiterMoney): the payment's balance re-check and decision are strictly
+ *     serialised against reversals — a reversal committed first makes the payment see it; a
+ *     payment holding the lock makes the reversal wait until it has committed.
+ *   • a REQUEST does not take that lock: it reserves nothing a reversal reads, and any
+ *     request/reversal interleaving equals "request first, then reversal" — covered by the
+ *     payment re-check.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
 import prisma from '../prisma.js';
 import { parseMadToCents, normalizeRecruiterSettings } from '../recruiterSettings.js';
+import { lockRecruiterMoney } from './recruiterRewardService.js';
 import { PAYOUT_RELEASING_STATUSES, validateBankInfo } from './affiliateSystemService.js';
 
 const ID_RE = /^[A-Za-z0-9_-]{1,100}$/;
@@ -73,7 +90,7 @@ export async function getRecruiterWallet(recruiterId, { db = prisma } = {}) {
     walletTotals(db, recruiterId),
     db.recruiterRewardLedger.findMany({
       where: { recruiterId }, orderBy: [{ createdAt: 'desc' }, { seq: 'desc' }], take: RECRUITER_WITHDRAWAL_LIMITS.HISTORY,
-      select: { type: true, amountCents: true, affiliateId: true, settingsVersion: true, createdAt: true },
+      select: { type: true, amountCents: true, affiliateId: true, settingsVersion: true, cycle: true, createdAt: true },
     }),
     db.affiliatePayout.findMany({
       where: { recruiterId }, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], take: RECRUITER_WITHDRAWAL_LIMITS.HISTORY,
@@ -93,7 +110,7 @@ export async function getRecruiterWallet(recruiterId, { db = prisma } = {}) {
     settings: normalizeRecruiterSettings(settingsRow),
     totals,
     rewards: ledger.map((l) => ({
-      type: l.type, amountCents: l.amountCents, createdAt: l.createdAt,
+      type: l.type, amountCents: l.amountCents, createdAt: l.createdAt, cycle: l.cycle ?? null,
       affiliate: l.affiliateId ? affById.get(l.affiliateId) ?? { id: l.affiliateId, username: null, name: null } : null,
       requiredDeliveredOrders: Number.isInteger(l.settingsVersion) ? thresholdByVersion.get(l.settingsVersion) ?? null : null,
     })),
@@ -162,7 +179,7 @@ export async function requestRecruiterWithdrawal(recruiterId, input, { db = pris
     // 3. Same gates as the affiliate workflow: bank details, then available funds.
     if (validateBankInfo(me).length > 0) throw fail('INCOMPLETE_BANK_INFO');
     const totals = await walletTotals(tx, recruiterId);
-    if (cents > totals.availableCents) throw fail('INSUFFICIENT_BALANCE');
+    if (totals.availableCents <= 0 || cents > totals.availableCents) throw fail('INSUFFICIENT_BALANCE');
     const row = await tx.affiliatePayout.create({
       data: { recruiterId, amount: cents / 100, status: 'pending', createdAt: now },
       select: { id: true, amount: true, status: true, createdAt: true },
@@ -204,6 +221,9 @@ export async function adminListRecruiterPayouts({ db = prisma } = {}) {
  * Admin: process a RECRUITER withdrawal — 'pay' (approve & mark paid, the existing action)
  * or 'reject' (releases the reserved funds). Only a pending row changes (conditional write:
  * a double click or a concurrent admin cannot pay twice or pay a rejected row). Audited.
+ * 'pay' (Phase 6 part 3b) locks the recruiter row (the same lock as a request) and re-reads
+ * the ledger: refused with INSUFFICIENT_BALANCE when paid + this row would exceed the net
+ * earned (a reward reversed after the request). 'reject' is always possible.
  */
 export async function adminProcessRecruiterPayout(id, action, { db = prisma, actorId, reason = null, now = new Date() } = {}) {
   if (typeof actorId !== 'string' || !actorId) throw fail('UNAUTHORIZED');
@@ -214,6 +234,15 @@ export async function adminProcessRecruiterPayout(id, action, { db = prisma, act
     const row = await tx.affiliatePayout.findFirst({ where: { id, recruiterId: { not: null } }, select: { id: true, recruiterId: true, amount: true, status: true } });
     if (!row) throw fail('NOT_FOUND');
     const status = action === 'pay' ? 'paid' : 'rejected';
+    if (action === 'pay') {
+      // Serialise with this recruiter's requests / other payments, then re-check the ledger.
+      await tx.$queryRaw`SELECT "isActive" FROM "recruiters" WHERE "id" = ${row.recruiterId} FOR NO KEY UPDATE`;
+      await lockRecruiterMoney(tx, row.recruiterId); // serialised with reward reversals
+      const current = await tx.affiliatePayout.findFirst({ where: { id, recruiterId: row.recruiterId }, select: { status: true } });
+      if (current?.status !== 'pending') throw fail('INVALID_STATE');
+      const totals = await walletTotals(tx, row.recruiterId);
+      if (totals.paidCents + toCents(row.amount) > totals.earnedCents) throw fail('INSUFFICIENT_BALANCE');
+    }
     const res = await tx.affiliatePayout.updateMany({ where: { id, recruiterId: row.recruiterId, status: 'pending' }, data: { status } });
     if (res.count !== 1) throw fail('INVALID_STATE');
     await tx.recruiterAuditLog.create({
@@ -253,7 +282,7 @@ export async function adminRecruiterBalances({ db = prisma } = {}) {
 export async function adminListRecruiterLedger({ db = prisma, take = 500 } = {}) {
   const rows = await db.recruiterRewardLedger.findMany({
     orderBy: [{ createdAt: 'desc' }, { seq: 'desc' }], take,
-    select: { id: true, recruiterId: true, affiliateId: true, type: true, amountCents: true, settingsVersion: true, reason: true, actorType: true, actorId: true, createdAt: true },
+    select: { id: true, recruiterId: true, affiliateId: true, type: true, amountCents: true, settingsVersion: true, cycle: true, reason: true, actorType: true, actorId: true, createdAt: true },
   });
   const rIds = [...new Set(rows.map((r) => r.recruiterId))];
   const aIds = [...new Set(rows.map((r) => r.affiliateId).filter(Boolean))];
@@ -264,7 +293,7 @@ export async function adminListRecruiterLedger({ db = prisma, take = 500 } = {})
   const rU = new Map(recs.map((r) => [r.id, r.username]));
   const aU = new Map(affs.map((a) => [a.id, a.username]));
   return rows.map((r) => ({
-    id: r.id, type: r.type, amountCents: r.amountCents, settingsVersion: r.settingsVersion ?? null, reason: r.reason ?? null,
+    id: r.id, type: r.type, amountCents: r.amountCents, settingsVersion: r.settingsVersion ?? null, cycle: r.cycle ?? null, reason: r.reason ?? null,
     actorType: r.actorType, createdAt: r.createdAt,
     recruiterId: r.recruiterId, recruiterUsername: rU.get(r.recruiterId) ?? null,
     affiliateId: r.affiliateId ?? null, affiliateUsername: r.affiliateId ? aU.get(r.affiliateId) ?? null : null,
