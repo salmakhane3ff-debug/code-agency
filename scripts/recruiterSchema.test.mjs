@@ -342,8 +342,12 @@ console.log('\n3. Prisma schema (vs pre-recruiter base ef79c6b)');
   const removed = [...H.keys()].filter((k) => !N.has(k));
   // Phase 6 part 1 (documented in docs/recruiter-system.md): + model AffiliateActivationCode (migration 20261107)
   // and + model AffiliateActivationRecovery (admin activation recovery, migration 20261108).
-  const P6_MODELS = ['model AffiliateActivationCode', 'model AffiliateActivationRecovery'];
-  ok('exactly the 5 recruiter models (+ the Phase 6 AffiliateActivationCode and AffiliateActivationRecovery) were added; no model / enum removed', eq(added.sort(), [...NEW_MODELS, ...P6_MODELS].sort()) && removed.length === 0, `added=${added} removed=${removed}`);
+  // Phase 6 part 3c (documented, §11): + model RecruiterIdentityVerification (recruiter KYC, migration 20261111).
+  const P6_MODELS = ['model AffiliateActivationCode', 'model AffiliateActivationRecovery', 'model RecruiterIdentityVerification'];
+  ok('exactly the 5 recruiter models (+ the Phase 6 AffiliateActivationCode, AffiliateActivationRecovery and RecruiterIdentityVerification) were added; no model / enum removed', eq(added.sort(), [...NEW_MODELS, ...P6_MODELS].sort()) && removed.length === 0, `added=${added} removed=${removed}`);
+  ok('Phase 6 part 3c: RecruiterIdentityVerification — recruiterId @unique, FK RESTRICT to Recruiter, mapped to recruiter_identity_verifications, separate from the affiliate IdentityVerification (whose block is unchanged)',
+    /recruiterId\s+String\s+@unique/.test(N.get('model RecruiterIdentityVerification')) && (N.get('model RecruiterIdentityVerification').match(/onDelete: Restrict/g) || []).length === 1
+    && /@@map\("recruiter_identity_verifications"\)/.test(N.get('model RecruiterIdentityVerification')) && N.get('model IdentityVerification') === H.get('model IdentityVerification'));
   ok('Phase 6 recovery: AffiliateActivationRecovery stores no code (only the FK activationCodeId), FKs RESTRICT, mapped to affiliate_activation_recoveries; the code model only gains its back-relation + the ADMIN_RECOVERY comment',
     /activationCodeId\s+String\?/.test(N.get('model AffiliateActivationRecovery')) && !/\b(code|plain|secret|password|selector|verifierHash)\s+String/i.test(N.get('model AffiliateActivationRecovery'))
     && (N.get('model AffiliateActivationRecovery').match(/onDelete: Restrict/g) || []).length === 2 && /@@map\("affiliate_activation_recoveries"\)/.test(N.get('model AffiliateActivationRecovery'))

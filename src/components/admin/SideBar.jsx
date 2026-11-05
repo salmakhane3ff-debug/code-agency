@@ -92,6 +92,7 @@ const SideBar = ({ onItemClick }) => {
     { href: "/admin/rewards", icon: <Gift size={16} />, label: "🎁 Récompenses affiliés" },
     { href: "/admin/recruiters", icon: <UserCog size={16} />, label: "🧑‍💼 Recruteurs" },
     { href: "/admin/recruiter-rewards", icon: <Trophy size={16} />, label: "🏆 Récompenses recruteurs" },
+    { href: "/admin/recruiter-identity", icon: <ShieldCheck size={16} />, label: "🪪 Identité recruteurs" },
     { href: "/admin/activation-recovery", icon: <KeyRound size={16} />, label: "🔑 Récupération activation" },
     { href: "/admin/brand", icon: <Store size={16} />, label: "🏪 Create Your Own Brand" },
     { href: "/admin/payment-proofs", icon: <Receipt size={16} />, label: "🧾 Preuves de paiement" },

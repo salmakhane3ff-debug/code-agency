@@ -47,9 +47,9 @@ const view = (reward, s = ON, reversal = null) => V.toRecruiterQualificationView
 // ── 0. the removal is real ────────────────────────────────────────────────────
 console.log('\n0. Removed features are gone (exports and code)');
 {
-  ok('exports are exactly the 21 projections / allowlists (Phase 3 adds RECRUITER_FIELD_ERROR_CODES and toRecruiterNetworkAffiliateView; Phase 4 adds toRecruiterNetworkNodeView, toRecruiterNetworkPathView and toRecruiterNetworkStatsView; Phase 5 adds RECRUITER_WITHDRAWAL_STATUS, toRecruiterWithdrawalView, toRecruiterRewardHistoryView, toRecruiterBankView and toRecruiterWalletView; Phase 6 part 1 adds toRecruiterActivationCodeView and toRecruiterPendingActivationView; the recruiter profile view lives in recruiterProfileView.js; no rewardReleaseDay, isRewardReleased, RELEASE_BASE_DAYS, RELEASE_JITTER_DAYS)',
-    eq(Object.keys(V).sort(), ['RECRUITER_ERROR_CODES', 'RECRUITER_FIELD_ERROR_CODES', 'RECRUITER_REWARD_STATUS', 'RECRUITER_VISIBLE_AUDIT_ACTIONS', 'RECRUITER_WITHDRAWAL_STATUS', 'toRecruiterActivationCodeView', 'toRecruiterAuditView',
-      'toRecruiterBankView', 'toRecruiterError',
+  ok('exports are exactly the 23 projections / allowlists (Phase 3 adds RECRUITER_FIELD_ERROR_CODES and toRecruiterNetworkAffiliateView; Phase 4 adds toRecruiterNetworkNodeView, toRecruiterNetworkPathView and toRecruiterNetworkStatsView; Phase 5 adds RECRUITER_WITHDRAWAL_STATUS, toRecruiterWithdrawalView, toRecruiterRewardHistoryView, toRecruiterBankView and toRecruiterWalletView; Phase 6 part 1 adds toRecruiterActivationCodeView and toRecruiterPendingActivationView; Phase 6 part 3c adds RECRUITER_IDENTITY_VIEW_STATUS and toRecruiterIdentityView; the recruiter profile view lives in recruiterProfileView.js; no rewardReleaseDay, isRewardReleased, RELEASE_BASE_DAYS, RELEASE_JITTER_DAYS)',
+    eq(Object.keys(V).sort(), ['RECRUITER_ERROR_CODES', 'RECRUITER_FIELD_ERROR_CODES', 'RECRUITER_IDENTITY_VIEW_STATUS', 'RECRUITER_REWARD_STATUS', 'RECRUITER_VISIBLE_AUDIT_ACTIONS', 'RECRUITER_WITHDRAWAL_STATUS', 'toRecruiterActivationCodeView', 'toRecruiterAuditView',
+      'toRecruiterBankView', 'toRecruiterError', 'toRecruiterIdentityView',
       'toRecruiterNetworkAffiliateView', 'toRecruiterNetworkNodeView', 'toRecruiterNetworkPathView', 'toRecruiterNetworkStatsView',
       'toRecruiterPendingActivationView', 'toRecruiterQualificationView', 'toRecruiterRewardHistoryView', 'toRecruiterRewardTotals', 'toRecruiterRewardView', 'toRecruiterSettingsView',
       'toRecruiterWalletView', 'toRecruiterWithdrawalView']), Object.keys(V).sort().join(','));
@@ -215,9 +215,9 @@ console.log('\n6. Errors — code only, never the message');
   ok('unknown / internal codes → { code: "SERVER_ERROR" }', eq(outs[0], { code: 'SERVER_ERROR' }) && eq(outs[1], { code: 'SERVER_ERROR' }));
   ok('allowlisted codes pass but NEVER the message, details, stack or extra keys', eq(outs[2], { code: 'INVALID_INPUT' }) && eq(outs[3], { code: 'FORBIDDEN' }) && eq(outs[4], { code: 'RATE_LIMITED' }));
   ok('every error output is exactly { code } (incl. plain Error, null, undefined, string, number)', outs.every((o) => eq(keys(o), ['code'])) && eq(outs[5], { code: 'SERVER_ERROR' }) && eq(outs[8], { code: 'SERVER_ERROR' }));
-  ok('error allowlist is exactly these 14 codes (Phase 2 adds INVALID_CREDENTIALS for the login, Phase 3 IDEMPOTENCY_CONFLICT, Phase 5 INSUFFICIENT_BALANCE and INCOMPLETE_BANK_INFO, Phase 6 ACTIVATION_NOT_AVAILABLE), frozen',
+  ok('error allowlist is exactly these 16 codes (Phase 2 adds INVALID_CREDENTIALS for the login, Phase 3 IDEMPOTENCY_CONFLICT, Phase 5 INSUFFICIENT_BALANCE and INCOMPLETE_BANK_INFO, Phase 6 ACTIVATION_NOT_AVAILABLE, Phase 6 part 3c RECRUITER_IDENTITY_NOT_APPROVED and IDENTITY_SUBMISSION_NOT_ALLOWED), frozen',
     eq([...V.RECRUITER_ERROR_CODES], ['UNAUTHORIZED', 'RECRUITER_DISABLED', 'FORBIDDEN', 'NOT_FOUND', 'INVALID_INPUT', 'USERNAME_TAKEN', 'PHONE_TAKEN', 'PARENT_NOT_IN_NETWORK', 'RATE_LIMITED', 'INVALID_CREDENTIALS', 'IDEMPOTENCY_CONFLICT',
-      'INSUFFICIENT_BALANCE', 'INCOMPLETE_BANK_INFO', 'ACTIVATION_NOT_AVAILABLE']) && Object.isFrozen(V.RECRUITER_ERROR_CODES));
+      'INSUFFICIENT_BALANCE', 'INCOMPLETE_BANK_INFO', 'ACTIVATION_NOT_AVAILABLE', 'RECRUITER_IDENTITY_NOT_APPROVED', 'IDENTITY_SUBMISSION_NOT_ALLOWED']) && Object.isFrozen(V.RECRUITER_ERROR_CODES));
   ok('no internal gate / unmet reason is a recruiter error code',
     ['REWARDS_DISABLED', 'NO_AMOUNT', 'NOT_LINKED', 'AFFILIATE_NOT_FOUND', 'NOT_ENOUGH_SALES', 'CIN_NOT_APPROVED', 'INVALID_COUNT', 'INVALID_AMOUNT'].every((c) => !V.RECRUITER_ERROR_CODES.includes(c) && eq(E({ code: c }), { code: 'SERVER_ERROR' })));
 }
@@ -251,12 +251,13 @@ console.log('\n7b. Phase 3 — allowlisted field errors and the network affiliat
 {
   const E = V.toRecruiterError;
   const F = V.RECRUITER_FIELD_ERROR_CODES;
-  ok('field-code allowlist: exactly 13 fields with their codes (Phase 5 adds amountMad, bankName, rib, accountName; Phase 6 part 2 adds newPassword, newPasswordConfirm), deeply frozen',
-    eq(Object.keys(F).sort(), ['accountName', 'amountMad', 'bankName', 'body', 'name', 'newPassword', 'newPasswordConfirm', 'parentId', 'password', 'phone', 'requestId', 'rib', 'username'])
+  ok('field-code allowlist: exactly 15 fields with their codes (Phase 5 adds amountMad, bankName, rib, accountName; Phase 6 part 2 adds newPassword, newPasswordConfirm; Phase 6 part 3c adds front, back and body TOO_LARGE), deeply frozen',
+    eq(Object.keys(F).sort(), ['accountName', 'amountMad', 'back', 'bankName', 'body', 'front', 'name', 'newPassword', 'newPasswordConfirm', 'parentId', 'password', 'phone', 'requestId', 'rib', 'username'])
+    && eq(F.front, ['FILE_REQUIRED', 'FILE_TOO_LARGE', 'INVALID_FILE']) && eq(F.back, ['FILE_REQUIRED', 'FILE_TOO_LARGE', 'INVALID_FILE'])
     && eq(F.newPassword, ['INVALID_PASSWORD']) && eq(F.newPasswordConfirm, ['PASSWORD_MISMATCH'])
     && eq(F.amountMad, ['INVALID_AMOUNT']) && eq(F.bankName, ['INVALID_BANK_NAME']) && eq(F.rib, ['INVALID_RIB']) && eq(F.accountName, ['INVALID_ACCOUNT_NAME'])
     && eq(F.username, ['INVALID_USERNAME']) && eq(F.name, ['INVALID_NAME']) && eq(F.password, ['INVALID_PASSWORD']) && eq(F.phone, ['INVALID_PHONE'])
-    && eq(F.parentId, ['INVALID_PARENT']) && eq(F.requestId, ['INVALID_REQUEST_ID']) && eq(F.body, ['UNKNOWN_FIELD'])
+    && eq(F.parentId, ['INVALID_PARENT']) && eq(F.requestId, ['INVALID_REQUEST_ID']) && eq(F.body, ['UNKNOWN_FIELD', 'TOO_LARGE'])
     && Object.isFrozen(F) && Object.values(F).every(Object.isFrozen));
   const inv = (fields) => Object.assign(new Error('x'), { code: 'INVALID_INPUT', fields });
   ok('INVALID_INPUT with allowlisted fields → { code, fields } with exactly those fields',
@@ -421,6 +422,13 @@ console.log('\n8. Static checks of recruiterVisibility.js');
 console.log('\n9. CONTRACT: recruiter-facing files must use the projections only');
 {
   const ALLOWED = new Set(['src/lib/recruiterSettings.js', 'src/lib/recruiterVisibility.js']);
+  // Phase 6 part 3c (documented, narrow exception — docs/recruiter-system.md §11): the recruiter KYC service
+  // is the ONE recruiter file that may touch CIN storage and file keys (it stores / reads / deletes the
+  // recruiter's own CIN through the owner-agnostic identityStorage.js). It is exempt from that ONE rule
+  // only and stays under every other rule; its outputs to recruiters are checked separately below and in
+  // scripts/recruiterIdentity.test.mjs (no key ever reaches a recruiter).
+  const CIN_RULE_EXEMPT = new Set(['src/lib/services/recruiterIdentityService.js']);
+  const CIN_RULE_LABEL = 'touches CIN documents or file keys (cinFrontFile / cinBackFile / getCinFileForAdmin / identityStorage)';
   const walk = (dir) => (existsSync(join(ROOT, dir)) ? readdirSync(join(ROOT, dir), { recursive: true }).map((f) => join(dir, String(f))).filter((f) => statSync(join(ROOT, f)).isFile()) : []);
   const norm = (f) => f.split(sep).join('/');
   const CODE_EXT = /\.(m?[jt]sx?|cjs)$/;
@@ -464,6 +472,7 @@ console.log('\n9. CONTRACT: recruiter-facing files must use the projections only
     const code = stripJs(read(f));
     for (const [label, re, scope] of RULES) {
       const applies = scope === 'all' || (scope === 'route' && isRouteFile(f)) || (scope === 'nonMoney' && !isMoney(f)) || (scope === 'money' && isMoney(f));
+      if (applies && label === CIN_RULE_LABEL && CIN_RULE_EXEMPT.has(f)) continue; // the narrow Part 3c exception above
       if (applies && re.test(code)) violations.push(`${f}: ${label}`);
     }
     for (const c of payoutCalls(code)) {
@@ -479,6 +488,15 @@ console.log('\n9. CONTRACT: recruiter-facing files must use the projections only
   ok(`contract scan ran: ${files.length} recruiter-facing file(s) found${files.length === 0 ? ' — vacuous until Phase 2 adds recruiter routes / pages / services' : ''}`, Array.isArray(files) && typeof files.length === 'number');
   ok('contract: no raw recruiter rows in routes, no UGC read, no CIN file, no balance / earnings outside the Phase 5 money files (and no affiliate money source in them), no parent / verification change, no error message; every route / page imports recruiterVisibility',
     violations.length === 0, violations.join(' | '));
+  // The exception is exactly one existing file, still scanned, and it is the only recruiter file that trips the CIN rule.
+  const cinTrips = files.filter((f) => RULES.find((r) => r[0] === CIN_RULE_LABEL)[1].test(stripJs(read(f))));
+  ok('Phase 6 part 3c exception: exactly recruiterIdentityService.js is exempt from the CIN rule (only that rule), it is scanned, and it is the ONLY recruiter file touching CIN storage / file keys',
+    CIN_RULE_EXEMPT.size === 1 && files.includes('src/lib/services/recruiterIdentityService.js') && eq(cinTrips, ['src/lib/services/recruiterIdentityService.js'])
+    && RULES.some((r) => r[0] === CIN_RULE_LABEL), JSON.stringify(cinTrips));
+  const kycSvc = stripJs(read('src/lib/services/recruiterIdentityService.js'));
+  ok('the exempt KYC service imports from identityStorage only the owner-agnostic storage functions (no affiliate identityService, no affiliate table write)',
+    /import \{ CIN_MAX_BYTES, deleteCinByKey, isAcceptedCinType, processAndStoreCin, readCinByKey \} from '\.\.\/identityStorage\.js'/.test(kycSvc)
+    && !/identityService|adminApproveIdentity|submitIdentity|identity_verifications|identityVerification\./.test(kycSvc));
   const moneyScanned = files.filter(isMoney);
   ok(`Phase 5 money files are scanned under the money rules (${moneyScanned.length}: ${moneyScanned.join(', ')}) and every affiliatePayout call in them is scoped by recruiterId`,
     ['src/lib/services/recruiterWalletService.js', 'src/lib/recruiterWalletRouteHandlers.js', 'src/lib/recruiterRewardAdminHandlers.js'].every((f) => moneyScanned.includes(f))

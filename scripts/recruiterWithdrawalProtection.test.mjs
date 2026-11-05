@@ -68,6 +68,9 @@ function setup({ settings = V1, bank = true } = {}) {
   const B = db._seed.recruiter({ username: 'rec.b', name: 'Recruteur B' });
   if (settings) db._seed.settings(settings);
   if (bank) Object.assign(db._tables.recruiter.find((r) => r.id === A.id), { bankName: 'CIH Bank', accountName: 'Recruteur A', rib: '011780000012345678901234' });
+  // Phase 6 part 3c: a withdrawal needs the recruiter's KYC APPROVED — both recruiters are verified
+  // here (the KYC gate itself is covered by scripts/recruiterIdentity.test.mjs).
+  for (const r of [A, B]) db._seed.recruiterIdentity({ recruiterId: r.id, status: 'APPROVED' });
   return { db, A, B, hookBox };
 }
 /** A qualified affiliate of `rec` (10 real delivered orders + approved identity). */
@@ -592,7 +595,9 @@ console.log('\n8. Static: UI texts, service shape, scope');
   const page = read('src/app/recruiter/wallet/page.jsx');
   ok('recruiter wallet page: a data-negative-balance banner (available < 0) in Arabic; data-nothing-available only when available === 0',
     /\{available < 0 && \(/.test(page) && page.includes('data-negative-balance') && page.includes('رصيدك المتاح سالب')
-    && /\{bankComplete && available === 0 && \(\s*<p[^>]*data-nothing-available/.test(page) && /const canRequest = bankComplete && available > 0;/.test(page));
+    && /\{bankComplete && available === 0 && \(\s*<p[^>]*data-nothing-available/.test(page)
+    // Phase 6 part 3c (documented extension): the form also needs the recruiter KYC APPROVED.
+    && /const canRequest = identityApproved && bankComplete && available > 0;/.test(page));
   const labels = read('src/app/recruiter/errorLabels.js');
   ok('errorLabels: the Arabic INSUFFICIENT_BALANCE text explains that reversed rewards do not count (code still built from parts)',
     labels.includes('رصيدك المتاح غير كافٍ لهذا المبلغ (المكافآت المسحوبة بعد إلغاء أو إرجاع طلبيات لا تُحتسب)') && !labels.includes(INSUFFICIENT));
@@ -600,9 +605,16 @@ console.log('\n8. Static: UI texts, service shape, scope');
   ok('admin recruiter-rewards page: negative available marked (data-balance-available, "solde négatif")', adminPage.includes('data-balance-available') && adminPage.includes('solde négatif (annulations)'));
   const handlers = read('src/lib/recruiterRewardAdminHandlers.js');
   ok('admin handlers: INSUFFICIENT_BALANCE → 409 with the French refusal text', handlers.includes(`INSUFFICIENT_BALANCE: [409, '${FR_REFUSED}']`));
-  for (const f of ['src/lib/services/affiliateSystemService.js', 'src/app/api/affiliate/payout/route.js', 'src/app/api/admin/affiliate-payouts/route.js', 'src/lib/recruiterWalletRouteHandlers.js']) {
+  for (const f of ['src/lib/services/affiliateSystemService.js', 'src/app/api/affiliate/payout/route.js', 'src/app/api/admin/affiliate-payouts/route.js']) {
     ok(`${f} is byte-identical to the part 3 base commit`, git(['show', `${PART3_BASE}:${f}`]) === read(f));
   }
+  // Phase 6 part 3c (documented, narrow exception): the wallet handlers differ ONLY by the HTTP
+  // status of the new KYC code (403) in RECRUITER_WALLET_STATUS — one line replaced, nothing else.
+  const whDiff = git(['diff', PART3_BASE, '--', 'src/lib/recruiterWalletRouteHandlers.js']).split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l));
+  ok('src/lib/recruiterWalletRouteHandlers.js differs from the part 3 base commit ONLY by RECRUITER_IDENTITY_NOT_APPROVED: 403 in RECRUITER_WALLET_STATUS', eq(whDiff, [
+    '-export const RECRUITER_WALLET_STATUS = Object.freeze({ INSUFFICIENT_BALANCE: 400, INCOMPLETE_BANK_INFO: 400 });',
+    '+export const RECRUITER_WALLET_STATUS = Object.freeze({ INSUFFICIENT_BALANCE: 400, INCOMPLETE_BANK_INFO: 400, RECRUITER_IDENTITY_NOT_APPROVED: 403 });',
+  ]), big(whDiff));
   // Since the base commit: an existing migration edited / removed (status ≠ A) vs a new one — new = added in a later
   // commit (status A) or still untracked; the same exact expectation holds before and after the commit.
   const migStatus = git(['diff', '--name-status', PART3_BASE, '--', 'prisma/migrations']).split('\n').filter(Boolean).map((l) => l.split('\t'));
@@ -612,10 +624,44 @@ console.log('\n8. Static: UI texts, service shape, scope');
     ...git(['ls-files', '--others', '--exclude-standard', '--', 'prisma/migrations']).split('\n').filter(Boolean),
   ])].sort();
   const migDirs = readdirSync(join(ROOT, 'prisma/migrations')).filter((d) => /^\d/.test(d)).sort();
-  ok('no new migration besides 20261110_recruiter_reward_cycles (Part 3a); no existing migration edited',
-    migChanged.length === 0 && eq(migNew, ['prisma/migrations/20261110_recruiter_reward_cycles/migration.sql']) && migDirs.at(-1) === '20261110_recruiter_reward_cycles', big({ migChanged, migNew, last: migDirs.at(-1) }));
+  ok('no new migration besides 20261110_recruiter_reward_cycles (Part 3a) and 20261111_recruiter_identity_verifications (Part 3c); no existing migration edited',
+    migChanged.length === 0 && eq(migNew, ['prisma/migrations/20261110_recruiter_reward_cycles/migration.sql', 'prisma/migrations/20261111_recruiter_identity_verifications/migration.sql'])
+    && migDirs.at(-1) === '20261111_recruiter_identity_verifications', big({ migChanged, migNew, last: migDirs.at(-1) }));
   const schemaDiff = git(['diff', PART3_BASE, '--', 'prisma/schema.prisma']).split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l));
-  ok('prisma/schema.prisma differs from the part 3 base commit only by the Part 3a `cycle Int` column (+ its 3 comment lines)', schemaDiff.length === 4 && schemaDiff.every((l) => l.startsWith('+')) && schemaDiff.at(-1).trim() === '+  cycle           Int'.trim(), big(schemaDiff));
+  // Part 3a: the ledger `cycle Int` column (+ 3 comment lines). Part 3c: the Recruiter back-relation
+  // (+ its comment) and the RecruiterIdentityVerification model — exactly these added lines, nothing removed.
+  const PART3C_SCHEMA = [
+    '+  // Identity verification (Phase 6 part 3c) — separate from the affiliate IdentityVerification.',
+    '+  identityVerification RecruiterIdentityVerification?',
+    "+/// A recruiter's identity verification (CIN front + back) — Phase 6 part 3c. SEPARATE from the",
+    '+/// affiliate IdentityVerification. One row per recruiter (no row = NOT_SUBMITTED). Transitions and',
+    '+/// the status/review columns are enforced by the DB (migration 20261111): PENDING → APPROVED |',
+    '+/// REJECTED, APPROVED → REJECTED (revocation), REJECTED → PENDING only through a new upload',
+    '+/// (submission + 1). The row is never deleted; history lives in recruiter_audit_log.',
+    '+model RecruiterIdentityVerification {',
+    '+  id              String    @id @default(uuid())',
+    '+  recruiterId     String    @unique',
+    '+  status          String // PENDING | APPROVED | REJECTED',
+    '+  submission      Int // 1, 2, … — an admin decision names it, so a stale decision is refused',
+    '+  cinFrontFile    String // private storage key — never returned to a recruiter, never audited',
+    '+  cinBackFile     String // private storage key',
+    '+  rejectionReason String?',
+    '+  submittedAt     DateTime',
+    '+  reviewedBy      String?',
+    '+  reviewedAt      DateTime?',
+    '+  approvedAt      DateTime?',
+    '+  createdAt       DateTime  @default(now())',
+    '+  updatedAt       DateTime  @updatedAt',
+    '+  recruiter       Recruiter @relation(fields: [recruiterId], references: [id], onDelete: Restrict)',
+    '+',
+    '+  @@index([status, submittedAt])',
+    '+  @@map("recruiter_identity_verifications")',
+    '+}',
+    '+',
+  ];
+  ok('prisma/schema.prisma differs from the part 3 base commit only by the Part 3a `cycle Int` column (+ its 3 comment lines) and the Part 3c recruiter KYC model + back-relation (exact lines)',
+    schemaDiff.length === 4 + PART3C_SCHEMA.length && eq(schemaDiff.slice(0, PART3C_SCHEMA.length), PART3C_SCHEMA)
+    && schemaDiff.slice(PART3C_SCHEMA.length).every((l) => l.startsWith('+')) && schemaDiff.at(-1).trim() === '+  cycle           Int'.trim(), big(schemaDiff));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

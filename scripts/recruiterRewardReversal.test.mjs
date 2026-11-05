@@ -451,12 +451,21 @@ console.log('\n11. Affiliate commissions, points, balances and payouts untouched
   ok('src/lib/services/affiliateSystemService.js is byte-identical to the part 3 base commit', git(['show', `${PART3_BASE}:src/lib/services/affiliateSystemService.js`]) === read('src/lib/services/affiliateSystemService.js'));
   const changed = git(['diff', '--name-only', PART3_BASE, '--', 'src']).split('\n').filter(Boolean).sort();
   const untracked = git(['ls-files', '--others', '--exclude-standard', '--', 'src']).split('\n').filter(Boolean);
-  // Exact allowlist: the Part 3a files, plus exactly the two files only Part 3b (withdrawal protection) adds.
-  ok('src/ changed versus the part 3 base commit ONLY in the Part 3a files + the Part 3b files errorLabels.js / recruiterRewardAdminHandlers.js (no commission / points / balance / payout file)', eq(changed, [
-    'src/app/admin/recruiter-rewards/page.jsx', 'src/app/api/admin/affiliate-orders/route.js', 'src/app/recruiter/errorLabels.js', 'src/app/recruiter/wallet/page.jsx',
+  // Exact allowlist: the Part 3a files, plus exactly the two files only Part 3b (withdrawal protection) adds,
+  // plus exactly the Part 3c (recruiter KYC) files — 8 new (untracked before the commit, tracked additions
+  // after it: both forms are accepted, the exact set is not) and 3 more modified (dashboard link, admin
+  // sidebar link, the wallet handlers' 403 status). No commission / points / balance / payout / affiliate-KYC file.
+  const allSrc = [...new Set([...changed, ...untracked])].sort();
+  ok('src/ changed versus the part 3 base commit ONLY in the Part 3a files + the Part 3b files errorLabels.js / recruiterRewardAdminHandlers.js + the exact Part 3c recruiter KYC files (no commission / points / balance / payout / affiliate KYC file)', eq(allSrc, [
+    'src/app/admin/recruiter-identity/page.jsx', 'src/app/admin/recruiter-rewards/page.jsx', 'src/app/api/admin/affiliate-orders/route.js',
+    'src/app/api/admin/recruiter-identity/[id]/[side]/route.js', 'src/app/api/admin/recruiter-identity/route.js', 'src/app/api/recruiter/identity/route.js',
+    'src/app/recruiter/errorLabels.js', 'src/app/recruiter/page.jsx', 'src/app/recruiter/verification/page.jsx', 'src/app/recruiter/wallet/page.jsx',
+    'src/components/admin/SideBar.jsx',
+    'src/lib/recruiterIdentityAdminHandlers.js', 'src/lib/recruiterIdentityRouteHandlers.js',
     'src/lib/recruiterRewardAdminHandlers.js', 'src/lib/recruiterRewardHooks.js',
-    'src/lib/recruiterSettings.js', 'src/lib/recruiterVisibility.js', 'src/lib/services/orderService.js', 'src/lib/services/recruiterRewardService.js', 'src/lib/services/recruiterWalletService.js',
-  ]) && untracked.length === 0, big({ changed, untracked }));
+    'src/lib/recruiterSettings.js', 'src/lib/recruiterVisibility.js', 'src/lib/recruiterWalletRouteHandlers.js', 'src/lib/services/orderService.js',
+    'src/lib/services/recruiterIdentityService.js', 'src/lib/services/recruiterRewardService.js', 'src/lib/services/recruiterWalletService.js',
+  ]), big({ changed, untracked }));
   const os2 = git(['diff', PART3_BASE, '--', 'src/lib/services/orderService.js']).split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l));
   ok('orderService.js: only the hook import, its comment and the post-sync call were added (nothing removed)', eq(os2, [
     "+import { onRecruiterLinkedOrderSynced } from '../recruiterRewardHooks.js';",

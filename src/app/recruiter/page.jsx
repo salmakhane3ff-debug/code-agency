@@ -25,7 +25,7 @@ const SECTIONS = [
   { id: "network", label: "شبكة الأفلييت ديالي", Icon: Users, href: "/recruiter/network" },
   { id: "add", label: "إضافة أفلييت جديد", Icon: UserPlus, href: "/recruiter/affiliates/new" },
   { id: "tree", label: "شجرة المستويات", Icon: GitBranch, href: "/recruiter/network" },
-  { id: "verification", label: "طلبات التحقق", Icon: ShieldCheck },
+  { id: "verification", label: "التحقق من الهوية", Icon: ShieldCheck, href: "/recruiter/verification" },
   { id: "orders", label: "الطلبات المسلّمة وغير المسلّمة", Icon: PackageCheck, href: "/recruiter/network/stats" },
   { id: "rewards", label: "مكافآتي", Icon: Gift, href: "/recruiter/wallet" },
   { id: "log", label: "سجل العمليات", Icon: History },
@@ -248,7 +248,7 @@ export default function RecruiterDashboardPage() {
           </section>
 
           <section className="bg-white rounded-2xl border border-dashed border-slate-300 p-5 text-sm text-slate-600" data-coming-soon>
-            باقي الأقسام (طلبات التحقق، السجل) ستكون متاحة قريباً.
+            باقي الأقسام (السجل) ستكون متاحة قريباً.
           </section>
         </main>
       </div>

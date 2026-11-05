@@ -28,6 +28,8 @@ const ADMIN_ERRORS = {
   INVALID_STATE: [409, 'Ce retrait a déjà été traité.'],
   // Phase 6 part 3b: paying would exceed the recruiter's net earned (a reward was reversed).
   INSUFFICIENT_BALANCE: [409, 'Paiement refusé : le solde net du recruteur (récompenses moins annulations) ne couvre pas ce retrait. Rejetez la demande pour la libérer.'],
+  // Phase 6 part 3c: the recruiter's identity (CIN) must be APPROVED at payment time.
+  RECRUITER_IDENTITY_NOT_APPROVED: [409, "Paiement refusé : l'identité (CIN) du recruteur n'est pas approuvée. Le retrait reste en attente ; vous pouvez le rejeter pour libérer les fonds."],
 };
 function adminError(e) {
   const known = ADMIN_ERRORS[e?.code];

@@ -33,6 +33,15 @@
  *                       lock 'recruit:<id>' held until the transaction ends, `affiliateOrder.count`
  *                       (affiliateId + status + isFake only), `affiliateOrder.findMany` (where { orderId,
  *                       isFake: false }, select { affiliateId } only) and `recruiterSettingsVersion.findUnique`.
+ *                       Phase 6 part 3c (migration 20261111): `recruiterIdentityVerification` — the
+ *                       recruiter KYC row (unique recruiterId → P2002, FK, the state CHECK: status /
+ *                       review columns / reason 1–500 / <uuid>.jpg keys, front ≠ back), the guard
+ *                       (insert PENDING submission 1 only; PENDING → APPROVED | REJECTED and APPROVED →
+ *                       REJECTED with the same submission and files; REJECTED → PENDING as submission + 1
+ *                       with two new files; immutables; no delete). A row updated by an open transaction
+ *                       is row-locked until it ends (a concurrent conditional update waits, then
+ *                       re-evaluates the committed row) and other contexts read its committed version.
+ *                       `seed.recruiterIdentity(data)` seeds one (bypasses the guard, e.g. APPROVED).
  *
  *   Phase 6 part 1 (with phase 3+): `affiliateActivationCode` (CHECKs of the migration, unique
  *                       selector, ONE active code per affiliate → P2002, the life-cycle guard:
@@ -150,7 +159,7 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
   const T = {
     recruiter: [], recruiterAuditLog: [], affiliate: [], recruiterAffiliateLink: [], affiliateOrder: [], identityVerification: [],
     recruiterSettingsVersion: [], recruiterRewardLedger: [], affiliatePayout: [], affiliateActivationCode: [],
-    affiliateActivationRecovery: [],
+    affiliateActivationRecovery: [], recruiterIdentityVerification: [],
   };
   const payoutCalls = [];
   let seq = 0;
@@ -657,6 +666,7 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
   const recruiterSettingsVersion = {};
   const recruiterRewardLedger = {};
   const affiliatePayout = {};
+  const recruiterIdentityVerification = {}; // Phase 6 part 3c (filled in the phase-5 block)
   const genericMatch = (r, where) => Object.entries(where || {}).every(([k, v]) => {
     if (k === 'OR') return Array.isArray(v) && v.some((w) => genericMatch(r, w));
     if (k === 'AND') return (Array.isArray(v) ? v : [v]).every((w) => genericMatch(r, w));
@@ -887,6 +897,116 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
       affiliatePayout[op] = async () => { throw new Error(`fake db: affiliatePayout.${op} is not allowed`); };
     }
 
+    // ── Phase 6 part 3c: recruiter_identity_verifications (recruiter KYC) ──────────
+    const KYC_KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg$/;
+    const kycShadow = new WeakMap(); // row → { tx, prev } while an open transaction has updated it
+    const kycRead = (row) => {
+      const sh = kycShadow.get(row);
+      return sh && openTx.has(sh.tx) && sh.tx !== ctx()?.id ? sh.prev : row;
+    };
+    const kycRows = () => rows('recruiterIdentityVerification').map(kycRead);
+    const kycCheck = (r) => {
+      const len = (v) => (typeof v === 'string' ? v.length : 0);
+      const ok = Number.isInteger(r.submission) && r.submission >= 1
+        && KYC_KEY_RE.test(String(r.cinFrontFile ?? '')) && KYC_KEY_RE.test(String(r.cinBackFile ?? '')) && r.cinFrontFile !== r.cinBackFile
+        && ((r.status === 'PENDING' && r.rejectionReason == null && r.reviewedBy == null && r.reviewedAt == null && r.approvedAt == null)
+          || (r.status === 'APPROVED' && r.rejectionReason == null && len(r.reviewedBy) >= 1 && len(r.reviewedBy) <= 200 && r.reviewedAt != null && r.approvedAt != null)
+          || (r.status === 'REJECTED' && String(r.rejectionReason ?? '').trim().length >= 1 && String(r.rejectionReason ?? '').trim().length <= 500
+            && len(r.reviewedBy) >= 1 && len(r.reviewedBy) <= 200 && r.reviewedAt != null && r.approvedAt == null));
+      if (!ok) throw checkErr('recruiter_identity_verifications_state_check');
+      for (const k of ['recruiterId', 'status', 'submission', 'cinFrontFile', 'cinBackFile', 'submittedAt']) {
+        if (r[k] == null) throw Object.assign(new Error(`${k} NOT NULL`), { code: 'P2011' });
+      }
+    };
+    const kycGuard = (old, next) => {
+      if (next.id !== old.id || next.recruiterId !== old.recruiterId || val(next.createdAt) !== val(old.createdAt)) {
+        throw triggerErr('recruiter identity id / recruiterId / createdAt are immutable');
+      }
+      if ((old.status === 'PENDING' && ['APPROVED', 'REJECTED'].includes(next.status)) || (old.status === 'APPROVED' && next.status === 'REJECTED')) {
+        if (next.submission !== old.submission || next.cinFrontFile !== old.cinFrontFile || next.cinBackFile !== old.cinBackFile || val(next.submittedAt) !== val(old.submittedAt)) {
+          throw triggerErr('a recruiter identity decision cannot change the submission or its files');
+        }
+        return;
+      }
+      if (old.status === 'REJECTED' && next.status === 'PENDING') {
+        if (next.submission !== old.submission + 1 || [old.cinFrontFile, old.cinBackFile].includes(next.cinFrontFile) || [old.cinFrontFile, old.cinBackFile].includes(next.cinBackFile)) {
+          throw triggerErr('a recruiter identity resubmission needs the next submission number and two new files');
+        }
+        return;
+      }
+      throw triggerErr(`recruiter identity transition ${old.status} → ${next.status} refused`);
+    };
+    const kycWhere = (where) => {
+      const k = Object.keys(where || {});
+      if (k.length !== 1 || !['id', 'recruiterId'].includes(k[0]) || typeof where[k[0]] !== 'string') throw new Error(`fake recruiterIdentityVerification.findUnique: unsupported where ${JSON.stringify(where)}`);
+      return k[0];
+    };
+    const kycProject = (row, select) => {
+      if (!row) return null;
+      if (!select) return clone(row);
+      const out = {};
+      for (const [k, v] of Object.entries(select)) {
+        if (!v) continue;
+        if (k === 'recruiter') {
+          const rec = T.recruiter.find((x) => x.id === row.recruiterId);
+          out.recruiter = rec ? pick(rec, v.select) : null;
+        } else out[k] = clone(row[k]);
+      }
+      return out;
+    };
+    Object.assign(recruiterIdentityVerification, {
+      async findUnique({ where, select } = {}) {
+        await before('recruiterIdentityVerification', 'findUnique', { where });
+        const k = kycWhere(where);
+        return kycProject(kycRows().find((r) => r[k] === where[k]), select);
+      },
+      async findMany({ where, orderBy, take, select } = {}) {
+        await before('recruiterIdentityVerification', 'findMany', { where });
+        return takeRows(sortRows(kycRows().filter((r) => genericMatch(r, where)), orderBy), take).map((r) => kycProject(r, select));
+      },
+      async create({ data }) {
+        await before('recruiterIdentityVerification', 'create', { data });
+        const now = new Date();
+        const r = { id: randomUUID(), rejectionReason: null, reviewedBy: null, reviewedAt: null, approvedAt: null, createdAt: now, updatedAt: now, ...clone(data) };
+        if (r.status !== 'PENDING' || r.submission !== 1) throw triggerErr('a recruiter identity starts as PENDING, submission 1');
+        kycCheck(r);
+        if (!T.recruiter.some((x) => x.id === r.recruiterId)) throw fkErr('recruiterId');
+        if (T.recruiterIdentityVerification.some((x) => x.recruiterId === r.recruiterId)) throw p2002('recruiterId');
+        T.recruiterIdentityVerification.push(r);
+        markWritten(r);
+        undoPush(() => { T.recruiterIdentityVerification.splice(T.recruiterIdentityVerification.indexOf(r), 1); });
+        return clone(r);
+      },
+      async updateMany({ where = {}, data } = {}) {
+        await before('recruiterIdentityVerification', 'updateMany', { where, data });
+        const wk = Object.keys(where);
+        if (!wk.includes('id') && !wk.includes('recruiterId')) throw new Error('fake recruiterIdentityVerification.updateMany: where needs id or recruiterId');
+        // Row lock on the target (PostgreSQL: the UPDATE waits for a concurrent writer, then
+        // re-evaluates the WHERE against the committed row).
+        const target = rows('recruiterIdentityVerification').find((r) => (where.id ? r.id === where.id : r.recruiterId === where.recruiterId));
+        if (target) await lockRecruiterRow(`__kyc__:${target.id}`);
+        const targets = rows('recruiterIdentityVerification').filter((r) => genericMatch(kycRead(r), where));
+        for (const row of targets) {
+          const old = clone(row);
+          const next = { ...row, ...clone(data), updatedAt: new Date() };
+          kycGuard(old, next);
+          kycCheck(next);
+          Object.assign(row, next);
+          const c = ctx();
+          if (c && !kycShadow.has(row)) kycShadow.set(row, { tx: c.id, prev: old });
+          else if (c && kycShadow.get(row).tx !== c.id) kycShadow.set(row, { tx: c.id, prev: old });
+          undoPush(() => { Object.keys(row).forEach((k) => delete row[k]); Object.assign(row, old); kycShadow.delete(row); });
+        }
+        return { count: targets.length };
+      },
+    });
+    for (const op of ['update', 'upsert', 'delete', 'deleteMany', 'createMany']) {
+      recruiterIdentityVerification[op] = async () => {
+        if (op === 'delete' || op === 'deleteMany') throw triggerErr('recruiter_identity_verifications rows cannot be deleted');
+        throw new Error(`fake db: recruiterIdentityVerification.${op} is not used by the recruiter KYC`);
+      };
+    }
+
     // Reads used by the reward hooks / service (status only — never a document field).
     affiliateOrder.findUnique = async ({ where, select } = {}) => {
       await before('affiliateOrder', 'findUnique', { where });
@@ -1066,6 +1186,18 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
     },
     // Seeded rows default to cycle 1 (what every pre-20261110 row reads through the column default).
     ledger(data) { const r = { id: randomUUID(), seq: BigInt(++seq), affiliateId: null, reason: null, actorId: null, settingsVersion: null, actorType: 'SYSTEM', cycle: 1, createdAt: new Date(), ...clone(data) }; T.recruiterRewardLedger.push(r); return clone(r); },
+    // Phase 6 part 3c: a recruiter KYC row as-is (e.g. APPROVED), bypassing the guard (CHECK still applies).
+    recruiterIdentity(data) {
+      const now = new Date();
+      const r = {
+        id: randomUUID(), status: 'APPROVED', submission: 1, cinFrontFile: `${randomUUID()}.jpg`, cinBackFile: `${randomUUID()}.jpg`,
+        rejectionReason: null, submittedAt: now, reviewedBy: 'admin-seed', reviewedAt: now, approvedAt: now, createdAt: now, updatedAt: now, ...clone(data),
+      };
+      if (r.status === 'PENDING') { r.reviewedBy = data?.reviewedBy ?? null; r.reviewedAt = data?.reviewedAt ?? null; r.approvedAt = data?.approvedAt ?? null; }
+      if (r.status === 'REJECTED') { r.approvedAt = data?.approvedAt ?? null; r.rejectionReason = data?.rejectionReason ?? 'seeded rejection'; }
+      T.recruiterIdentityVerification.push(r);
+      return clone(r);
+    },
     recruiter(data) {
       const now = new Date();
       const r = {
@@ -1082,7 +1214,7 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
     recruiter, recruiterAuditLog, $transaction,
     ...(phase3 ? { affiliate, recruiterAffiliateLink, $queryRaw, affiliateActivationCode, $executeRaw } : {}),
     ...(phase4 ? { affiliateOrder, identityVerification } : {}),
-    ...(phase5 ? { recruiterSettingsVersion, recruiterRewardLedger, affiliatePayout } : {}),
+    ...(phase5 ? { recruiterSettingsVersion, recruiterRewardLedger, affiliatePayout, recruiterIdentityVerification } : {}),
     ...(recovery ? { affiliateActivationRecovery } : {}),
     _queryCount: () => log.filter((l) => l.model !== '$transaction').length,
     _tables: T, _log: log, _state: state, _seed: seed, _openTx: openTx, _locks: locks, _payoutCalls: payoutCalls,

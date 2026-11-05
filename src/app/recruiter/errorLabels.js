@@ -21,6 +21,9 @@ const LABELS = {
   INCOMPLETE_BANK_INFO: "أكمل معلوماتك البنكية أولاً",
   // Phase 5 (built from parts: this file keeps the Phase 1 contract wording rule).
   [["INSUFFICIENT", "BAL" + "ANCE"].join("_")]: "رصيدك المتاح غير كافٍ لهذا المبلغ (المكافآت المسحوبة بعد إلغاء أو إرجاع طلبيات لا تُحتسب)",
+  // Phase 6 part 3c: identity verification (KYC)
+  RECRUITER_IDENTITY_NOT_APPROVED: "لا يمكن طلب السحب قبل قبول التحقق من هويتك (البطاقة الوطنية).",
+  IDENTITY_SUBMISSION_NOT_ALLOWED: "لا يمكن إرسال وثائق جديدة الآن: طلبك قيد المراجعة أو تم قبوله.",
 };
 export const GENERIC_ERROR = "وقع خطأ، المرجو المحاولة من جديد.";
 
@@ -36,7 +39,7 @@ const FIELD_LABELS = {
   phone: { INVALID_PHONE: "رقم الهاتف غير صحيح (من 8 إلى 15 رقماً)." },
   parentId: { INVALID_PARENT: "الأفلييت الأب غير صالح." },
   requestId: { INVALID_REQUEST_ID: "وقع خطأ في الطلب، المرجو إعادة المحاولة." },
-  body: { UNKNOWN_FIELD: "الطلب يحتوي على معلومات غير مقبولة." },
+  body: { UNKNOWN_FIELD: "الطلب يحتوي على معلومات غير مقبولة.", TOO_LARGE: "حجم الملفات كبير جداً (5 ميغابايت على الأكثر لكل صورة)." },
   amountMad: { INVALID_AMOUNT: "المبلغ غير صالح (بالدرهم، رقمان بعد الفاصلة على الأكثر)." },
   bankName: { INVALID_BANK_NAME: "اسم البنك مطلوب (80 حرفاً على الأكثر، بدون < و >)." },
   rib: { INVALID_RIB: "رقم RIB يجب أن يكون بين 10 و34 حرفاً/رقماً" },
@@ -44,6 +47,9 @@ const FIELD_LABELS = {
   // Phase 6 part 2: password change
   newPassword: { INVALID_PASSWORD: "كلمة السر يجب أن تكون بين 8 و128 حرفاً" },
   newPasswordConfirm: { PASSWORD_MISMATCH: "كلمتا السر غير متطابقتين" },
+  // Phase 6 part 3c: CIN upload
+  front: { FILE_REQUIRED: "صورة الوجه الأمامي للبطاقة مطلوبة.", FILE_TOO_LARGE: "الصورة أكبر من 5 ميغابايت.", INVALID_FILE: "الملف ليس صورة صالحة (JPG أو PNG أو WEBP)." },
+  back: { FILE_REQUIRED: "صورة الوجه الخلفي للبطاقة مطلوبة.", FILE_TOO_LARGE: "الصورة أكبر من 5 ميغابايت.", INVALID_FILE: "الملف ليس صورة صالحة (JPG أو PNG أو WEBP)." },
 };
 export const GENERIC_FIELD_ERROR = "قيمة غير صالحة.";
 

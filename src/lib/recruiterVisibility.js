@@ -83,6 +83,8 @@ export const RECRUITER_ERROR_CODES = Object.freeze([
   'UNAUTHORIZED', 'RECRUITER_DISABLED', 'FORBIDDEN', 'NOT_FOUND', 'INVALID_INPUT', 'USERNAME_TAKEN',
   'PHONE_TAKEN', 'PARENT_NOT_IN_NETWORK', 'RATE_LIMITED', 'INVALID_CREDENTIALS', 'IDEMPOTENCY_CONFLICT',
   'INSUFFICIENT_BALANCE', 'INCOMPLETE_BANK_INFO', 'ACTIVATION_NOT_AVAILABLE',
+  // Phase 6 part 3c: recruiter identity verification (KYC)
+  'RECRUITER_IDENTITY_NOT_APPROVED', 'IDENTITY_SUBMISSION_NOT_ALLOWED',
 ]);
 
 /** Per-field validation codes of the affiliate-creation form (Phase 3): field → allowed codes. */
@@ -93,7 +95,7 @@ export const RECRUITER_FIELD_ERROR_CODES = Object.freeze({
   phone: Object.freeze(['INVALID_PHONE']),
   parentId: Object.freeze(['INVALID_PARENT']),
   requestId: Object.freeze(['INVALID_REQUEST_ID']),
-  body: Object.freeze(['UNKNOWN_FIELD']),
+  body: Object.freeze(['UNKNOWN_FIELD', 'TOO_LARGE']),
   // Phase 5: withdrawal request and bank details
   amountMad: Object.freeze(['INVALID_AMOUNT']),
   bankName: Object.freeze(['INVALID_BANK_NAME']),
@@ -102,6 +104,9 @@ export const RECRUITER_FIELD_ERROR_CODES = Object.freeze({
   // Phase 6 part 2: password change
   newPassword: Object.freeze(['INVALID_PASSWORD']),
   newPasswordConfirm: Object.freeze(['PASSWORD_MISMATCH']),
+  // Phase 6 part 3c: CIN upload (front / back)
+  front: Object.freeze(['FILE_REQUIRED', 'FILE_TOO_LARGE', 'INVALID_FILE']),
+  back: Object.freeze(['FILE_REQUIRED', 'FILE_TOO_LARGE', 'INVALID_FILE']),
 });
 
 /**
@@ -292,5 +297,26 @@ export function toRecruiterPendingActivationView(row) {
     affiliate: { id: str(a?.id), username: str(a?.username), name: str(a?.name), createdAt: iso(a?.createdAt) },
     state,
     expiresAt: iso(row?.expiresAt),
+  };
+}
+
+// ── Phase 6 part 3c: the recruiter's OWN identity verification (KYC) ──────────
+export const RECRUITER_IDENTITY_VIEW_STATUS = Object.freeze({
+  NOT_SUBMITTED: 'NOT_SUBMITTED', PENDING: 'PENDING', APPROVED: 'APPROVED', REJECTED: 'REJECTED',
+});
+/**
+ * The recruiter's own KYC state: status, the rejection reason (REJECTED only), when it was
+ * submitted / reviewed, and whether a (new) upload is possible. Never a file key, a storage
+ * path, a reviewer identity or an image.
+ */
+export function toRecruiterIdentityView(row) {
+  const status = Object.values(RECRUITER_IDENTITY_VIEW_STATUS).includes(row?.status) ? row.status : 'NOT_SUBMITTED';
+  const reviewed = status === 'APPROVED' || status === 'REJECTED';
+  return {
+    status,
+    rejectionReason: status === 'REJECTED' && typeof row?.rejectionReason === 'string' ? row.rejectionReason.slice(0, 500) : null,
+    submittedAt: status === 'NOT_SUBMITTED' ? null : iso(row?.submittedAt),
+    reviewedAt: reviewed ? iso(row?.reviewedAt) : null,
+    canSubmit: status === 'NOT_SUBMITTED' || status === 'REJECTED',
   };
 }

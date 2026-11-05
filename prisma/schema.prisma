@@ -1937,9 +1937,36 @@ model Recruiter {
   rewards             RecruiterRewardLedger[]
   auditLogs           RecruiterAuditLog[]
   payouts             AffiliatePayout[]
+  // Identity verification (Phase 6 part 3c) — separate from the affiliate IdentityVerification.
+  identityVerification RecruiterIdentityVerification?
 
   @@index([isActive])
   @@map("recruiters")
+}
+
+/// A recruiter's identity verification (CIN front + back) — Phase 6 part 3c. SEPARATE from the
+/// affiliate IdentityVerification. One row per recruiter (no row = NOT_SUBMITTED). Transitions and
+/// the status/review columns are enforced by the DB (migration 20261111): PENDING → APPROVED |
+/// REJECTED, APPROVED → REJECTED (revocation), REJECTED → PENDING only through a new upload
+/// (submission + 1). The row is never deleted; history lives in recruiter_audit_log.
+model RecruiterIdentityVerification {
+  id              String    @id @default(uuid())
+  recruiterId     String    @unique
+  status          String // PENDING | APPROVED | REJECTED
+  submission      Int // 1, 2, … — an admin decision names it, so a stale decision is refused
+  cinFrontFile    String // private storage key — never returned to a recruiter, never audited
+  cinBackFile     String // private storage key
+  rejectionReason String?
+  submittedAt     DateTime
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  approvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  recruiter       Recruiter @relation(fields: [recruiterId], references: [id], onDelete: Restrict)
+
+  @@index([status, submittedAt])
+  @@map("recruiter_identity_verifications")
 }
 
 /// The recruiter who CREATED an affiliate (one per affiliate). Only insertable in the

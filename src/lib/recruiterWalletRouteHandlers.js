@@ -22,7 +22,7 @@ import { json, recruiterErrorResponse } from './recruiterRouteHandlers.js';
 
 export const RECRUITER_WALLET_RATE = Object.freeze({ read: { max: 60, windowMs: 60_000 }, write: { max: 10, windowMs: 60_000 } });
 /** HTTP status of the wallet's own allowlisted codes (a refused request, never a server error). */
-export const RECRUITER_WALLET_STATUS = Object.freeze({ INSUFFICIENT_BALANCE: 400, INCOMPLETE_BANK_INFO: 400 });
+export const RECRUITER_WALLET_STATUS = Object.freeze({ INSUFFICIENT_BALANCE: 400, INCOMPLETE_BANK_INFO: 400, RECRUITER_IDENTITY_NOT_APPROVED: 403 });
 
 export function recruiterWalletHandlers(deps = {}) {
   const { db = prisma, now = () => new Date(), rateLimit = defaultRateLimit, toRecruiterError = defaultToRecruiterError } = deps;

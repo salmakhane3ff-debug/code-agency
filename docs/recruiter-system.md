@@ -127,8 +127,10 @@ Service: `src/lib/services/recruiterNetworkService.js`. Nothing in Phase 4 write
 - **Rule:** exactly section 2: real delivered orders (`status === 'delivered'` AND `isFake === false`, actual
   `affiliate_orders` rows) ≥ the threshold AND `IdentityVerification.status === 'APPROVED'`. `isActive` and UGC are
   never read.
-- **Immediate award:** post-commit hooks (`src/lib/recruiterRewardHooks.js`, never throw) after an admin sets an
-  order to `delivered` (`PUT /api/admin/affiliate-orders`) or approves an identity (`PUT /api/admin/identity`).
+- **Immediate award:** post-commit hooks (`src/lib/recruiterRewardHooks.js`, never throw) after **every** admin
+  affiliate-order status change (`PUT /api/admin/affiliate-orders`), after the fake-order status sync
+  (`orderService.updateOrder` → `onRecruiterLinkedOrderSynced`) and after an affiliate identity approval
+  (`PUT /api/admin/identity`). Since Phase 6 part 3a a status change can also reverse a recruiter reward (section 9).
   Reconcile passes (batched) run on the recruiter wallet read, after every settings change, and from the admin
   "recheck" action, so a missed event is caught.
 - **Ledger:** rewards are recorded in versioned cycles: at most one `RECRUIT_REWARD` per affiliate and cycle
@@ -474,3 +476,53 @@ implemented here.
   and a "solde négatif" marker in the balances table.
 - **Unchanged:** the withdrawal history (no row rewritten), the append-only ledger, affiliate payouts and
   `affiliateSystemService.js`. No migration.
+
+## 11. Phase 6 part 3c — recruiter identity verification (KYC)
+
+Decisions D1–D6 approved after the Part 3c audit. The affiliate KYC (`identity_verifications`, `identityService.js`,
+`/api/affiliate/identity`, `/api/admin/identity`, `/admin/identity`) is **unchanged**.
+
+- **Table `recruiter_identity_verifications`** (migration `20261111_recruiter_identity_verifications`), separate from the
+  affiliate table: one row per recruiter (`recruiterId` unique, FK `ON DELETE RESTRICT`); no row = `NOT_SUBMITTED`.
+  - `status` `PENDING | APPROVED | REJECTED`; the review columns are tied to it by a CHECK (PENDING: no reviewer;
+    APPROVED: reviewer, `reviewedAt`, `approvedAt`; REJECTED: reviewer, `reviewedAt`, a reason of 1–500 characters).
+  - `submission` = 1, 2, … (one per upload). File keys must be `<uuid>.jpg` (CHECK), front ≠ back.
+  - Guard trigger: the row is never deleted (nor truncated); `id`, `recruiterId`, `createdAt` never change. Only
+    transitions: insert → PENDING (submission 1); PENDING → APPROVED / REJECTED and APPROVED → REJECTED (same
+    submission, same files); REJECTED → PENDING only as a new upload (submission + 1, two new files). A REJECTED
+    submission can never be approved directly (D1); an APPROVED one can be revoked (D2).
+- **History:** the append-only `recruiter_audit_log` — `RECRUITER_IDENTITY_SUBMITTED` (actor RECRUITER),
+  `RECRUITER_IDENTITY_APPROVED` / `_REJECTED` (actor = the admin's user id), details `{ submission, from, to, reason? }`.
+  Never a file key, an image, a password or any file content.
+- **Service** `src/lib/services/recruiterIdentityService.js`:
+  - Upload (recruiter): both sides required; each ≤ 5 MB with an accepted declared type **and** a matching real
+    signature (JPEG / PNG / WEBP magic bytes); then the existing owner-agnostic private storage
+    (`identityStorage.js`: sharp re-encode to JPEG, metadata dropped, `<uuid>.jpg`). New files are written first,
+    the row changes in one conditional transaction, superseded files are deleted only **after the commit** (the new
+    files are deleted instead if the transaction fails) (D3).
+  - Admin decision: names the status and submission it saw (`expectedStatus`, `submission`); a stale decision is
+    refused (`STALE_DECISION`, 409). Approve only from PENDING; reject from PENDING or APPROVED (revocation).
+- **Withdrawal gates** (`recruiterWalletService.js`):
+  - Request: KYC must be `APPROVED`, read inside the request transaction under the recruiter row lock →
+    `RECRUITER_IDENTITY_NOT_APPROVED` (HTTP 403) otherwise (D6).
+  - Payment: KYC must be `APPROVED` **at payment time**, read after the money lock → refused with
+    `RECRUITER_IDENTITY_NOT_APPROVED` (HTTP 409, French text). This also covers withdrawals requested before the KYC
+    existed. Reject never checks the KYC: a pending withdrawal can always be rejected (funds released); pending
+    withdrawals are never auto-rejected (D4).
+  - An admin KYC decision takes the per-recruiter money lock `recruiter-money:<recruiterId>`: a payment and a
+    rejection / revocation are strictly serialised. Lock order (no cycle): decision = money lock → KYC row;
+    payment = recruiter row → money lock (KYC read only); request = recruiter row (KYC read only); upload = KYC row
+    only; reversal = affiliate lock → money lock. Part 3b balance protection is unchanged.
+  - Recruiter rewards never read this table: a rejected KYC never stops reward accrual.
+- **APIs:** recruiter `GET/POST /api/recruiter/identity` (session recruiter only; multipart body capped at
+  2 × 5 MB + 64 KiB while streaming; 5 uploads / 15 min; response = status, reason when REJECTED, dates,
+  `canSubmit` — never a file key, path, reviewer or image). Admin `GET/PUT /api/admin/recruiter-identity` and
+  `GET /api/admin/recruiter-identity/[id]/[front|back]` (`withAdminAuth`; image `no-store, private`, `nosniff`,
+  `image/jpeg`, inline).
+- **UI:** recruiter `/recruiter/verification` (Arabic, RTL: status, reason, front / back upload, resubmission) and a
+  KYC banner + link on `/recruiter/wallet` (the API stays authoritative). Admin `/admin/recruiter-identity` (queue by
+  status, CIN preview fetched into a revoked blob URL, approve / reject with reason, history) + sidebar link.
+- **Deployment:** apply migration `20261111_recruiter_identity_verifications` (after `20261110`). CIN files share the
+  affiliate private directory `private_uploads/identity` on the app server's disk: it must be persistent, private,
+  backed up and shared if several instances run. Recruiters cannot withdraw until an admin approves their KYC —
+  announce the requirement before deploying.

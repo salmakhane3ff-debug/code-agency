@@ -38,6 +38,14 @@
  *   • a REQUEST does not take that lock: it reserves nothing a reversal reads, and any
  *     request/reversal interleaving equals "request first, then reversal" — covered by the
  *     payment re-check.
+ *
+ * Phase 6 part 3c — recruiter KYC gate (recruiter_identity_verifications):
+ *   • a request needs the recruiter's KYC APPROVED, read inside the request transaction under
+ *     the recruiter row lock (RECRUITER_IDENTITY_NOT_APPROVED otherwise);
+ *   • a payment needs it APPROVED at PAYMENT time, read after the money lock — this also
+ *     covers withdrawals requested before the KYC existed. An admin KYC decision takes the
+ *     same money lock, so a payment and a rejection / revocation are strictly serialised.
+ *   • a reject never checks the KYC: a pending withdrawal can always be rejected (released).
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -53,6 +61,10 @@ export const RECRUITER_WITHDRAWAL_LIMITS = Object.freeze({ MIN_CENTS: 1, MAX_CEN
 const fail = (code, extra = {}) => Object.assign(new Error(code), { code, ...extra });
 const toCents = (amount) => Math.round(Number(amount || 0) * 100);
 const releasing = (status) => PAYOUT_RELEASING_STATUSES.includes(status);
+/** The recruiter's KYC is APPROVED (Phase 6 part 3c) — read in the caller's transaction. */
+const identityApproved = async (tx, recruiterId) => (
+  await tx.recruiterIdentityVerification.findUnique({ where: { recruiterId }, select: { status: true } })
+)?.status === 'APPROVED';
 
 /** Totals of one recruiter, in cents. Read inside or outside a transaction. */
 async function walletTotals(db, recruiterId) {
@@ -176,7 +188,9 @@ export async function requestRecruiterWithdrawal(recruiterId, input, { db = pris
       if (!row || toCents(row.amount) !== cents) throw fail('IDEMPOTENCY_CONFLICT');
       return { withdrawal: { id: row.id, amountCents: toCents(row.amount), status: row.status, createdAt: row.createdAt }, replayed: true };
     }
-    // 3. Same gates as the affiliate workflow: bank details, then available funds.
+    // 3. Recruiter KYC APPROVED (Phase 6 part 3c), then the affiliate-workflow gates: bank
+    //    details, then available funds.
+    if (!(await identityApproved(tx, recruiterId))) throw fail('RECRUITER_IDENTITY_NOT_APPROVED');
     if (validateBankInfo(me).length > 0) throw fail('INCOMPLETE_BANK_INFO');
     const totals = await walletTotals(tx, recruiterId);
     if (totals.availableCents <= 0 || cents > totals.availableCents) throw fail('INSUFFICIENT_BALANCE');
@@ -240,6 +254,9 @@ export async function adminProcessRecruiterPayout(id, action, { db = prisma, act
       await lockRecruiterMoney(tx, row.recruiterId); // serialised with reward reversals
       const current = await tx.affiliatePayout.findFirst({ where: { id, recruiterId: row.recruiterId }, select: { status: true } });
       if (current?.status !== 'pending') throw fail('INVALID_STATE');
+      // KYC APPROVED at payment time (Phase 6 part 3c) — after the money lock, which an admin
+      // KYC decision also takes: a rejection / revocation and a payment never interleave.
+      if (!(await identityApproved(tx, row.recruiterId))) throw fail('RECRUITER_IDENTITY_NOT_APPROVED');
       const totals = await walletTotals(tx, row.recruiterId);
       if (totals.paidCents + toCents(row.amount) > totals.earnedCents) throw fail('INSUFFICIENT_BALANCE');
     }

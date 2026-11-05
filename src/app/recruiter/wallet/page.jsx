@@ -6,15 +6,17 @@
  *                                                withdrawals, bank details (the recruiter's OWN only)
  *   • PUT  /api/recruiter/wallet/bank          → { bankName, rib, accountName }
  *   • POST /api/recruiter/wallet/withdrawals   → { amountMad, requestId }
- * The server is the authority (bank gate, available funds, idempotency); client checks are
- * hints only. Only error CODES are read and shown with fixed Arabic texts. No CIN, customer
- * or order detail is ever requested or shown.
+ *   • GET  /api/recruiter/identity             → the recruiter's KYC status (Phase 6 part 3c): a
+ *                                                withdrawal needs it APPROVED (banner + link)
+ * The server is the authority (KYC gate, bank gate, available funds, idempotency); client
+ * checks are hints only. Only error CODES are read and shown with fixed Arabic texts. No CIN
+ * image, file, customer or order detail is ever requested or shown.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Banknote, CheckCircle2, Gift, Landmark, Loader2, RefreshCw, Wallet } from "lucide-react";
-import { toRecruiterError, toRecruiterWalletView } from "@/lib/recruiterVisibility";
+import { ArrowRight, Banknote, CheckCircle2, Gift, Landmark, Loader2, RefreshCw, ShieldCheck, Wallet } from "lucide-react";
+import { toRecruiterError, toRecruiterIdentityView, toRecruiterWalletView } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel, recruiterFieldErrorLabel } from "../errorLabels";
 
 const EMPTY_BANK = { bankName: "", rib: "", accountName: "" };
@@ -95,6 +97,7 @@ function TotalCard({ label, value, hook, tone = "slate" }) {
 export default function RecruiterWalletPage() {
   const router = useRouter();
   const [wallet, setWallet] = useState(null);
+  const [identity, setIdentity] = useState(null); // KYC view (Phase 6 part 3c)
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [notice, setNotice] = useState("");
@@ -134,9 +137,15 @@ export default function RecruiterWalletPage() {
     setLoading(true);
     setLoadError("");
     try {
-      const res = await fetch("/api/recruiter/wallet", { credentials: "include", cache: "no-store" });
+      const [res, idRes] = await Promise.all([
+        fetch("/api/recruiter/wallet", { credentials: "include", cache: "no-store" }),
+        fetch("/api/recruiter/identity", { credentials: "include", cache: "no-store" }).catch(() => null),
+      ]);
       const body = await res.json().catch(() => null);
+      const idBody = idRes?.ok ? await idRes.json().catch(() => null) : null;
       if (!aliveRef.current) return;
+      // KYC unknown (request failed) → shown as not approved; the server decides anyway.
+      setIdentity(idBody?.identity ? toRecruiterIdentityView(idBody.identity) : null);
       if (!res.ok) {
         const err = toRecruiterError(body);
         if (authGate(res, err)) return;
@@ -204,7 +213,8 @@ export default function RecruiterWalletPage() {
   // ── Withdrawal request ────────────────────────────────────────────────────
   const available = wallet?.totals.availableCents ?? 0;
   const bankComplete = wallet?.bank.complete === true;
-  const canRequest = bankComplete && available > 0;
+  const identityApproved = identity?.status === "APPROVED";
+  const canRequest = identityApproved && bankComplete && available > 0;
 
   const editAmount = (v) => {
     requestIdRef.current = null; // any edit = a new attempt
@@ -243,7 +253,7 @@ export default function RecruiterWalletPage() {
       requestIdRef.current = null; // a definitive answer: the next submit is a new attempt
       if (err.fields?.amountMad) setAmountError(recruiterFieldErrorLabel("amountMad", err.fields.amountMad));
       setWError(recruiterErrorLabel(err.code));
-      if (err.code === ["INSUFFICIENT", "BALANCE"].join("_") || err.code === "INCOMPLETE_BANK_INFO") await load({ keepBank: true });
+      if (err.code === ["INSUFFICIENT", "BALANCE"].join("_") || err.code === "INCOMPLETE_BANK_INFO" || err.code === "RECRUITER_IDENTITY_NOT_APPROVED") await load({ keepBank: true });
     } catch {
       // Network failure: keep the requestId so a retry of THIS attempt cannot create twice.
       setWError(recruiterErrorLabel(null));
@@ -326,6 +336,19 @@ export default function RecruiterWalletPage() {
               <h2 id="w-title" className="text-base font-bold flex items-center gap-2">
                 <Banknote className="w-5 h-5 text-emerald-600" aria-hidden="true" /> طلب سحب
               </h2>
+              {!identityApproved && (
+                <div className="text-sm rounded-xl border border-amber-200 bg-amber-50 text-amber-900 px-3 py-2 space-y-1.5" data-identity-required={identity?.status ?? "UNKNOWN"}>
+                  <p className="font-semibold">
+                    {identity?.status === "PENDING" ? "التحقق من هويتك قيد المراجعة. يمكنك طلب السحب بعد قبوله."
+                      : identity?.status === "REJECTED" ? "تم رفض التحقق من هويتك. أرسل صوراً جديدة لبطاقتك الوطنية لتتمكن من طلب السحب."
+                      : "يجب التحقق من هويتك (البطاقة الوطنية) قبل طلب أي سحب."}
+                  </p>
+                  <Link href="/recruiter/verification" data-identity-link
+                    className="inline-flex items-center gap-1.5 font-bold text-emerald-700 hover:underline">
+                    <ShieldCheck className="w-4 h-4 shrink-0" aria-hidden="true" /> صفحة التحقق من الهوية
+                  </Link>
+                </div>
+              )}
               {!bankComplete && (
                 <p className="text-sm rounded-xl border border-amber-200 bg-amber-50 text-amber-900 px-3 py-2" data-bank-required>
                   أضف معلوماتك البنكية قبل طلب السحب.

@@ -83,6 +83,9 @@ function setup({ failOnce = {}, settings = { version: 1, enabled: true, rewardAm
   const A = db._seed.recruiter({ username: 'rec.a', name: 'Recruteur A' });
   const B = db._seed.recruiter({ username: 'rec.b', name: 'Recruteur B' });
   if (settings) db._seed.settings(settings);
+  // Phase 6 part 3c: a withdrawal needs the recruiter's KYC APPROVED — both recruiters are verified
+  // here (the KYC gate itself is covered by scripts/recruiterIdentity.test.mjs).
+  for (const r of [A, B]) db._seed.recruiterIdentity({ recruiterId: r.id, status: 'APPROVED' });
   return { db, A, B, hookBox };
 }
 /** An affiliate linked to `rec` (seeded: created earlier by the recruiter). */
