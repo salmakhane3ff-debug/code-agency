@@ -6,9 +6,10 @@
  * The route files only wrap them with withAdminAuth / withRecruiterAuth; tests
  * inject a fake db, clock and rate limiter.
  *
- *   Admin (withAdminAuth, role ADMIN): list, create, enable / disable recruiters.
+ *   Admin (withAdminAuth, role ADMIN): list, create, enable / disable recruiters, set their
+ *     permissions (canViewOrders / canCreateAffiliates, Phase 6 part 4).
  *   Recruiter: login (sets the HttpOnly cookie recruiter_token, Path=/api/recruiter),
- *     logout (clears it), me (own profile; refused when disabled).
+ *     logout (clears it), me (own profile + own permissions; refused when disabled).
  * Recruiter responses are built ONLY with recruiterVisibility.js (profile view and
  * error codes) — never raw rows, never error messages.
  * ─────────────────────────────────────────────────────────────────────────────
@@ -17,11 +18,11 @@
 import prisma from './prisma.js';
 import { trustedRateLimit as defaultRateLimit } from './trustedProxy.js';
 import {
-  adminCreateRecruiter, adminListRecruiters, adminResetRecruiterPassword, adminSetRecruiterActive, changeRecruiterPassword, loginRecruiter,
-  recordRecruiterLogout, requireActiveRecruiter,
+  adminCreateRecruiter, adminListRecruiters, adminResetRecruiterPassword, adminSetRecruiterActive, adminSetRecruiterPermissions,
+  changeRecruiterPassword, loginRecruiter, recordRecruiterLogout, requireActiveRecruiter,
 } from './services/recruiterService.js';
 import { toRecruiterError as defaultToRecruiterError } from './recruiterVisibility.js';
-import { toRecruiterProfileView } from './recruiterProfileView.js';
+import { toRecruiterPermissionsView, toRecruiterProfileView } from './recruiterProfileView.js';
 import { RECRUITER_COOKIE, readRecruiterToken } from './middleware/withRecruiterAuth.js';
 
 export const RECRUITER_COOKIE_MAX_AGE = 7 * 24 * 3600; // = JWT lifetime (authService: 7d)
@@ -89,6 +90,11 @@ export function adminRecruiterHandlers(deps = {}) {
       if (body.action !== 'enable' && body.action !== 'disable') throw Object.assign(new Error('INVALID_INPUT'), { code: 'INVALID_INPUT' });
       return json(await adminSetRecruiterActive(await param(ctx, 'id'), body.action === 'enable', { db, actorId: actorOf(user), reason: body.reason ?? null, now: now() }));
     }),
+    /**
+     * PATCH { canViewOrders?: boolean, canCreateAffiliates?: boolean } (Phase 6 part 4) → set the
+     * recruiter's permissions independently; one audit row per changed permission, none on a no-op.
+     */
+    setPermissions: safe(async (req, ctx, user) => json(await adminSetRecruiterPermissions(await param(ctx, 'id'), await readJson(req), { db, actorId: actorOf(user), now: now() }))),
     /** POST { newPassword } → reset (every session revoked; isActive never changed). Never echoes the password. */
     resetPassword: safe(async (req, ctx, user) => json(await adminResetRecruiterPassword(await param(ctx, 'id'), await readJson(req), { db, actorId: actorOf(user), now: now() }))),
   };
@@ -127,7 +133,7 @@ export function recruiterHandlers(deps = {}) {
     me: async (req, ctx, decoded) => {
       try {
         const row = await requireActiveRecruiter(decoded, { db });
-        return json({ recruiter: toRecruiterProfileView(row) });
+        return json({ recruiter: toRecruiterProfileView(row), permissions: toRecruiterPermissionsView(row) });
       } catch (e) {
         const res = recruiterErrorResponse(e, toRecruiterError);
         if (res.status === 401 || res.status === 403) res.headers.set('Set-Cookie', cookieHeader('', 0));

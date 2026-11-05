@@ -10,6 +10,8 @@
  * never overflow, and the level is shown as a badge. `?root=<id>` shows the sub-network of one
  * of the recruiter's own affiliates (the server refuses any other id: 404 NOT_FOUND).
  * Real and fake orders are always shown apart; a fake order is never a real delivered sale.
+ * Phase 6 part 4: when the admin turned off order visibility the server sends `orders: null` —
+ * the order counts are then not shown at all (never as zeros) and a short note explains why.
  */
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -17,7 +19,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronLeft, Network, UserPlus } from "lucide-react";
 import { toRecruiterNetworkNodeView, toRecruiterNetworkPathView, toRecruiterNetworkStatsView } from "@/lib/recruiterVisibility";
 import {
-  Breadcrumb, Chip, ErrorBox, FAKE_LABEL, IDENTITY_LABEL, Loading, NetworkHeader, ORDER_KEYS, ORDER_LABEL, PageNotice,
+  Breadcrumb, Chip, ErrorBox, FAKE_LABEL, IDENTITY_LABEL, Loading, NetworkHeader, ORDER_KEYS, ORDER_LABEL, OrdersHidden, PageNotice,
   STATUS_LABEL, fmt, getJson, handleAuth, identityTone,
 } from "./networkUi";
 
@@ -32,8 +34,10 @@ function SummaryStrip({ stats, root }) {
     [root ? "المباشرون تحته" : "المباشرون", t.direct, {}],
     ["مفعّلون", t.active, {}],
     ["غير مفعّلين", t.inactive, {}],
-    ["طلبات مسلّمة حقيقية", stats.orders.real.delivered, { "data-real-delivered": "" }],
-    ["طلبات تجريبية مسلّمة (غير محتسبة)", stats.orders.fake.delivered, { "data-fake-total": "" }],
+    ...(stats.orders ? [
+      ["طلبات مسلّمة حقيقية", stats.orders.real.delivered, { "data-real-delivered": "" }],
+      ["طلبات تجريبية مسلّمة (غير محتسبة)", stats.orders.fake.delivered, { "data-fake-total": "" }],
+    ] : []),
   ];
   return (
     <section className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3" data-summary aria-label="ملخص الشبكة">
@@ -45,6 +49,7 @@ function SummaryStrip({ stats, root }) {
           </div>
         ))}
       </dl>
+      {!stats.orders && <OrdersHidden />}
       <Link href={`/recruiter/network/stats${root ? `?root=${encodeURIComponent(root)}` : ""}`} className="inline-block text-sm font-semibold text-emerald-700 hover:underline" data-stats-link>
         عرض كل الإحصائيات ‹
       </Link>
@@ -54,6 +59,7 @@ function SummaryStrip({ stats, root }) {
 
 /** Order counts of one affiliate: REAL by status, FAKE apart (never added to real). */
 function NodeOrders({ orders }) {
+  if (!orders) return null; // order visibility turned off by the admin: nothing, never zeros
   const real = orders.real;
   const shown = ORDER_KEYS.filter((k) => k === "delivered" || real[k] > 0);
   return (

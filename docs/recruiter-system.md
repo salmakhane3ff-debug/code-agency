@@ -526,3 +526,38 @@ Decisions D1–D6 approved after the Part 3c audit. The affiliate KYC (`identity
   affiliate private directory `private_uploads/identity` on the app server's disk: it must be persistent, private,
   backed up and shared if several instances run. Recruiters cannot withdraw until an admin approves their KYC —
   announce the requirement before deploying.
+
+## 12. Phase 6 part 4 — recruiter permissions (`canViewOrders`, `canCreateAffiliates`)
+
+Decisions D1–D6 approved after the Part 4 audit. The two columns already existed on `recruiters`
+(`NOT NULL DEFAULT true`, migration `20261105`); **no migration** in this part.
+
+- **Admin control** (`PATCH /api/admin/recruiters/[id]/permissions`, `withAdminAuth`, `adminSetRecruiterPermissions`):
+  - Body `{ canViewOrders?: boolean, canCreateAffiliates?: boolean }` — at least one field, booleans only, no other field
+    (`INVALID_INPUT` otherwise). Each permission is independent.
+  - One transaction: the recruiter row is locked (`FOR NO KEY UPDATE` — the same lock an affiliate creation or an
+    activation-code regeneration takes, so a change is serialised with them), the flags are re-read, only the fields that
+    actually change are written, and **one** append-only audit row is written per changed permission:
+    `RECRUITER_PERMISSION_CHANGED`, actor ADMIN (the admin's user id), `recruiterId` / `entityId` = the recruiter,
+    `details: { permission, from, to }`, `createdAt`. A no-op writes nothing. Never a password, token or other data.
+  - No session bump (D4): permissions are re-read on every recruiter request (`requireActiveRecruiter`), so a change
+    applies on the next request.
+  - Creation (D5): `POST /api/admin/recruiters` accepts optional `canViewOrders` / `canCreateAffiliates` booleans
+    (omitted = `true`); `RECRUITER_CREATED` records both.
+  - `/admin/recruiters`: both permissions shown on every card as independent toggles (with confirmation), and two
+    checkboxes (on by default) in the creation form.
+- **`canViewOrders`** (D1, D2): enforced in the network handlers (`/api/recruiter/network/stats` and `/nodes`, every
+  `rootId`, `parentId`, cursor and `view`): when off, **no order query runs** and every `orders` (scope totals, levels,
+  nodes) is `null` — never zero-filled counts. The tree, member data, identity counts and the reward history (it explains
+  money, no order counts) stay available. No other recruiter route returns order counts. The recruiter dashboard and
+  network pages hide the order entries, cards, sections and columns and explain that the admin turned them off.
+- **`canCreateAffiliates`** (D3): enforced in the services, under the recruiter row lock — affiliate creation
+  (`recruiterCreateAffiliate`, unchanged) and activation-code regeneration (`regenerateActivationCode`, new) both refuse
+  with `FORBIDDEN` (403). Pending affiliates stay listed; the admin recovery path stays available for them. The dashboard
+  hides "add affiliate", the creation page and the activation page explain the restriction.
+- **`/api/recruiter/me`** returns `permissions: { canViewOrders, canCreateAffiliates }` next to the profile, for the UI
+  only (the server enforces).
+- **Known limitation (D6, outside Part 4):** `canViewOrders` only governs what the **recruiter** account can see. A
+  recruiter receives each affiliate's one-time activation code; if they redeem it themselves and the admin later activates
+  that affiliate account, they could log in **as the affiliate** and see that affiliate's own orders through the affiliate
+  routes. `canViewOrders` does not prevent that; activation-code security is not redesigned in this part.

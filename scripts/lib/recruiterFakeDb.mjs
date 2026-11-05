@@ -56,6 +56,12 @@
  *                       older session — Phase 6 part 2); every other affiliate update still throws.
  *                       Phase 6 part 2: recruiters carry tokenVersion (default 0); recruiter.update
  *                       and recruiter.updateMany accept { increment } on it.
+ *   Phase 6 part 4 (every mode): the admin permission row lock
+ *                       `SELECT "canViewOrders", "canCreateAffiliates" FROM "recruiters" WHERE "id" = $1 FOR NO KEY UPDATE`
+ *                       (same per-recruiter row lock as the creation / regeneration lock, held until the
+ *                       transaction ends; the waiter re-reads the committed row). In Phase 2 mode `$queryRaw`
+ *                       accepts ONLY this statement (any other raw statement still throws — isolation).
+ *                       The recruiter permission columns are NOT NULL booleans (a non-boolean → CHECK error).
  *   Phase 6 recovery ({ recovery: true }, implies phase 5): `affiliateActivationRecovery`
  *                       (CHECKs of 20261108, ONE PENDING request per affiliate → P2002, the
  *                       guard: only PENDING → APPROVED | REJECTED once with the review columns;
@@ -108,6 +114,8 @@ function checkRecruiter(r) {
   if (n < 2 || n > 80) throw checkErr('recruiters_name_check');
   if (!BCRYPT_RE.test(String(r.passwordHash ?? ''))) throw checkErr('recruiters_password_hash_check');
   if (!r.isActive && (r.disabledAt == null || r.disabledBy == null)) throw checkErr('recruiters_disabled_check');
+  // NOT NULL BOOLEAN columns (migration 20261105): a permission is always true or false.
+  if (typeof r.canViewOrders !== 'boolean' || typeof r.canCreateAffiliates !== 'boolean') throw checkErr('recruiters_permission_not_null');
   if (typeof r.createdBy !== 'string' || !r.createdBy) throw Object.assign(new Error('createdBy NOT NULL'), { code: 'P2011' });
 }
 
@@ -1095,6 +1103,15 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
     await tick();
     if (state.failOnce['$queryRaw.query']) { const e = state.failOnce['$queryRaw.query']; delete state.failOnce['$queryRaw.query']; throw e instanceof Error ? e : new Error('$queryRaw failed (injected)'); }
     const norm = sql.replace(/\s+/g, ' ').trim();
+    // Phase 6 part 4: the admin permission change locks the recruiter row and re-reads both flags.
+    if (/^SELECT "canViewOrders", "canCreateAffiliates" FROM "recruiters" WHERE "id" = \$\? FOR NO KEY UPDATE$/.test(norm)) {
+      const id = values[0];
+      if (!ctx()) throw new Error('fake $queryRaw: FOR NO KEY UPDATE outside a transaction (the lock would be released at once)');
+      await lockRecruiterRow(id);
+      const r = rows('recruiter').find((x) => x.id === id); // re-read after the wait (latest committed row)
+      return r ? [{ canViewOrders: r.canViewOrders, canCreateAffiliates: r.canCreateAffiliates }] : [];
+    }
+    if (!phase3) throw new Error('fake db: access to model "$queryRaw" is not allowed in recruiter code (isolation) — Phase 2 mode allows only the permission row lock');
     if (/^SELECT "isActive", "canCreateAffiliates" FROM "recruiters" WHERE "id" = \$\? FOR NO KEY UPDATE$/.test(norm)) {
       const id = values[0];
       if (!ctx()) throw new Error('fake $queryRaw: FOR NO KEY UPDATE outside a transaction (the lock would be released at once)');
@@ -1211,8 +1228,9 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
   };
 
   const base = {
-    recruiter, recruiterAuditLog, $transaction,
-    ...(phase3 ? { affiliate, recruiterAffiliateLink, $queryRaw, affiliateActivationCode, $executeRaw } : {}),
+    // $queryRaw in every mode: Phase 2 accepts only the Phase 6 part 4 permission row lock (see above).
+    recruiter, recruiterAuditLog, $transaction, $queryRaw,
+    ...(phase3 ? { affiliate, recruiterAffiliateLink, affiliateActivationCode, $executeRaw } : {}),
     ...(phase4 ? { affiliateOrder, identityVerification } : {}),
     ...(phase5 ? { recruiterSettingsVersion, recruiterRewardLedger, affiliatePayout, recruiterIdentityVerification } : {}),
     ...(recovery ? { affiliateActivationRecovery } : {}),

@@ -128,3 +128,11 @@ export function ErrorBox({ code, onRetry }) {
 }
 
 export const Loading = ({ label = "جارٍ التحميل…" }) => <p className="text-sm text-slate-500 py-3" aria-live="polite" data-loading>{label}</p>;
+
+/** Phase 6 part 4: the admin turned off order visibility (canViewOrders) — the server sends orders: null. */
+export const ORDERS_HIDDEN_TEXT = "عرض أرقام الطلبات معطّل لحسابك من طرف الإدارة. باقي معلومات الشبكة تبقى متاحة.";
+export function OrdersHidden() {
+  return (
+    <p className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2" data-orders-hidden>{ORDERS_HIDDEN_TEXT}</p>
+  );
+}

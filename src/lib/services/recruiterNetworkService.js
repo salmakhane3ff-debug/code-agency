@@ -160,8 +160,10 @@ const addOrders = (into, from) => { for (const k of Object.keys(into)) into[k] +
  * Statistics of the whole network, or of the sub-network under `rootId` (one of the
  * recruiter's own affiliates; anything else → NOT_FOUND). Levels are relative to the scope:
  * level 1 = network roots, or the direct affiliates of `rootId`.
+ * `includeOrders: false` (the recruiter's canViewOrders is off, Phase 6 part 4): NO order query
+ * is run and every `orders` is null (never zero-filled counts).
  */
-export async function getNetworkStats(recruiterId, { db = prisma, rootId = null } = {}) {
+export async function getNetworkStats(recruiterId, { db = prisma, rootId = null, includeOrders = true } = {}) {
   const tree = await loadNetworkTree(recruiterId, { db });
   let scope; // Map(id → level)
   if (rootId !== null && rootId !== undefined && rootId !== '') {
@@ -171,23 +173,24 @@ export async function getNetworkStats(recruiterId, { db = prisma, rootId = null 
     scope = new Map([...tree.nodes.values()].map((n) => [n.id, n.depth]));
   }
   const ids = [...scope.keys()];
-  const [orders, identity] = await Promise.all([orderCounts(db, ids), identityStatuses(db, ids)]);
+  const withOrders = includeOrders === true;
+  const [orders, identity] = await Promise.all([withOrders ? orderCounts(db, ids) : null, identityStatuses(db, ids)]);
 
   const totals = { affiliates: ids.length, direct: 0, active: 0, inactive: 0, maxLevel: 0, unplaced: rootId ? 0 : tree.unplaced };
   const idTotals = emptyIdentity();
-  const ordTotals = { real: emptyOrders(), fake: emptyOrders() };
+  const ordTotals = withOrders ? { real: emptyOrders(), fake: emptyOrders() } : null;
   const levels = new Map();
   for (const [id, level] of scope) {
     const n = tree.nodes.get(id);
     if (level === 1) totals.direct += 1;
     totals.maxLevel = Math.max(totals.maxLevel, level);
-    if (!levels.has(level)) levels.set(level, { level, affiliates: 0, active: 0, inactive: 0, identity: emptyIdentity(), orders: { real: emptyOrders(), fake: emptyOrders() } });
+    if (!levels.has(level)) levels.set(level, { level, affiliates: 0, active: 0, inactive: 0, identity: emptyIdentity(), orders: withOrders ? { real: emptyOrders(), fake: emptyOrders() } : null });
     const L = levels.get(level);
     L.affiliates += 1;
     if (n.active) { totals.active += 1; L.active += 1; } else { totals.inactive += 1; L.inactive += 1; }
     const idStatus = identity.get(id) ?? 'NONE';
     idTotals[idStatus] += 1; L.identity[idStatus] += 1;
-    const o = orders.get(id);
+    const o = withOrders ? orders.get(id) : null;
     if (o) { addOrders(ordTotals.real, o.real); addOrders(ordTotals.fake, o.fake); addOrders(L.orders.real, o.real); addOrders(L.orders.fake, o.fake); }
   }
   return {
@@ -202,8 +205,10 @@ export async function getNetworkStats(recruiterId, { db = prisma, rootId = null 
  * (one of the recruiter's own affiliates; anything else → NOT_FOUND), each with its level,
  * activation status, identity status, children / descendant counts and order counts.
  * `view: 'unplaced'` lists the members no root reaches (malformed data).
+ * `includeOrders: false` (canViewOrders off, Phase 6 part 4): NO order query; every node's
+ * `orders` is null.
  */
-export async function getNetworkNodes(recruiterId, { db = prisma, parentId = null, view = null, cursor = 0, limit = NETWORK_LIMITS.PAGE_DEFAULT } = {}) {
+export async function getNetworkNodes(recruiterId, { db = prisma, parentId = null, view = null, cursor = 0, limit = NETWORK_LIMITS.PAGE_DEFAULT, includeOrders = true } = {}) {
   const tree = await loadNetworkTree(recruiterId, { db });
   const size = Math.min(Math.max(Number.isInteger(limit) ? limit : NETWORK_LIMITS.PAGE_DEFAULT, 1), NETWORK_LIMITS.PAGE_MAX);
   const start = Number.isInteger(cursor) && cursor >= 0 ? cursor : 0;
@@ -228,7 +233,7 @@ export async function getNetworkNodes(recruiterId, { db = prisma, parentId = nul
   const lookup = [...new Set([...pageIds, ...path])];
   const [rows, orders, identity] = await Promise.all([
     lookup.length ? db.affiliate.findMany({ where: { id: { in: lookup } }, select: { id: true, username: true, name: true } }) : [],
-    orderCounts(db, pageIds),
+    includeOrders === true ? orderCounts(db, pageIds) : null,
     identityStatuses(db, pageIds),
   ]);
   const info = new Map(rows.map((r) => [r.id, r]));
@@ -243,7 +248,7 @@ export async function getNetworkNodes(recruiterId, { db = prisma, parentId = nul
       identityStatus: identity.get(id) ?? 'NONE',
       childrenCount: n ? n.children.length : 0,
       descendantsCount: n ? desc.get(id) ?? 0 : 0,
-      orders: orders.get(id) ?? { real: emptyOrders(), fake: emptyOrders() },
+      orders: orders ? orders.get(id) ?? { real: emptyOrders(), fake: emptyOrders() } : null,
     };
   };
   return {

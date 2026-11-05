@@ -37,6 +37,9 @@ export function normalizeUsername(v) {
   return typeof v === 'string' ? v.trim().toLowerCase() : '';
 }
 
+/** The two independent recruiter permissions an admin can switch (Phase 6 part 4). */
+export const RECRUITER_PERMISSION_KEYS = Object.freeze(['canViewOrders', 'canCreateAffiliates']);
+
 /** Admin input → { value } or { errors: { field: code } }. */
 export function validateRecruiterInput(input) {
   const src = input && typeof input === 'object' ? input : {};
@@ -52,8 +55,15 @@ export function validateRecruiterInput(input) {
     phone = String(src.phone).replace(/[\s.-]/g, '');
     if (!PHONE_RE.test(phone)) errors.phone = 'INVALID_PHONE';
   }
+  // Phase 6 part 4 (D5): optional permissions at creation — booleans only; omitted = true.
+  const permissions = {};
+  for (const key of RECRUITER_PERMISSION_KEYS) {
+    if (src[key] === undefined) permissions[key] = true;
+    else if (typeof src[key] === 'boolean') permissions[key] = src[key];
+    else errors[key] = 'INVALID_PERMISSION';
+  }
   if (Object.keys(errors).length) return { errors };
-  return { value: { username, name, password, phone } };
+  return { value: { username, name, password, phone, ...permissions } };
 }
 
 /** Admin-facing shape (never the password hash). */
@@ -79,9 +89,15 @@ export async function adminCreateRecruiter(input, { db = prisma, actorId, now = 
   try {
     const row = await db.$transaction(async (tx) => {
       const created = await tx.recruiter.create({
-        data: { username: v.username, name: v.name, phone: v.phone, passwordHash, isActive: true, createdBy: actorId },
+        data: {
+          username: v.username, name: v.name, phone: v.phone, passwordHash, isActive: true, createdBy: actorId,
+          canViewOrders: v.canViewOrders, canCreateAffiliates: v.canCreateAffiliates,
+        },
       });
-      await audit(tx, { recruiterId: created.id, actorType: 'ADMIN', actorId, action: 'RECRUITER_CREATED', details: { username: v.username }, at: now });
+      await audit(tx, {
+        recruiterId: created.id, actorType: 'ADMIN', actorId, action: 'RECRUITER_CREATED',
+        details: { username: v.username, canViewOrders: v.canViewOrders, canCreateAffiliates: v.canCreateAffiliates }, at: now,
+      });
       return created;
     });
     return adminRecruiterView(row);
@@ -96,6 +112,59 @@ export async function adminCreateRecruiter(input, { db = prisma, actorId, now = 
 export async function adminListRecruiters({ db = prisma } = {}) {
   const rows = await db.recruiter.findMany({ orderBy: [{ createdAt: 'desc' }, { id: 'asc' }] });
   return rows.map(adminRecruiterView);
+}
+
+/**
+ * Admin input for a permission change → { value } or { errors }: an object with at least one of
+ * RECRUITER_PERMISSION_KEYS, each a boolean; any other key is refused.
+ */
+export function validateRecruiterPermissionsInput(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return { errors: { body: 'INVALID_BODY' } };
+  const errors = {};
+  const value = {};
+  for (const key of Object.keys(input)) {
+    if (!RECRUITER_PERMISSION_KEYS.includes(key)) errors[key] = 'UNKNOWN_FIELD';
+    else if (typeof input[key] !== 'boolean') errors[key] = 'INVALID_PERMISSION';
+    else value[key] = input[key];
+  }
+  if (!Object.keys(errors).length && !Object.keys(value).length) errors.body = 'NO_PERMISSION';
+  return Object.keys(errors).length ? { errors } : { value };
+}
+
+/**
+ * Admin: set one or both recruiter permissions (canViewOrders, canCreateAffiliates), independently.
+ * Locks the recruiter row (FOR NO KEY UPDATE — the same lock an affiliate creation / code
+ * regeneration takes), re-reads the flags, writes ONLY the fields that change and one append-only
+ * audit row per changed permission (RECRUITER_PERMISSION_CHANGED { permission, from, to }); a no-op
+ * writes nothing. No session bump (D4): permissions are re-read on every recruiter request.
+ * → { recruiter, changed, changes: [{ permission, from, to }] }
+ */
+export async function adminSetRecruiterPermissions(id, input, { db = prisma, actorId, now = new Date() } = {}) {
+  if (typeof actorId !== 'string' || !actorId) throw fail('UNAUTHORIZED');
+  if (typeof id !== 'string' || !ID_RE.test(id)) throw fail('NOT_FOUND');
+  const { value, errors } = validateRecruiterPermissionsInput(input);
+  if (errors) throw Object.assign(fail('INVALID_INPUT'), { errors });
+  return db.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw`SELECT "canViewOrders", "canCreateAffiliates" FROM "recruiters" WHERE "id" = ${id} FOR NO KEY UPDATE`;
+    const current = Array.isArray(locked) ? locked[0] : null;
+    if (!current) throw fail('NOT_FOUND');
+    const changes = [];
+    const data = {};
+    for (const key of RECRUITER_PERMISSION_KEYS) {
+      if (value[key] === undefined) continue;
+      const from = current[key] === true;
+      if (from === value[key]) continue;
+      data[key] = value[key];
+      changes.push({ permission: key, from, to: value[key] });
+    }
+    const row = changes.length
+      ? await tx.recruiter.update({ where: { id }, data })
+      : await tx.recruiter.findUnique({ where: { id } });
+    for (const c of changes) {
+      await audit(tx, { recruiterId: id, actorType: 'ADMIN', actorId, action: 'RECRUITER_PERMISSION_CHANGED', details: c, at: now });
+    }
+    return { recruiter: adminRecruiterView(row), changed: changes.length > 0, changes };
+  });
 }
 
 /** Admin: enable or disable a recruiter (idempotent). Disabling records when, by whom and why. */

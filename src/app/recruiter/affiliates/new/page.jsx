@@ -14,6 +14,9 @@
  * creation response carries a one-time activation code, shown ONCE here (React state only,
  * never stored); the affiliate chooses their own password with it on /affiliate/activate.
  * A replayed creation has no code any more: the recruiter can issue a new one.
+ *
+ * Phase 6 part 4: when the admin turned off the recruiter's canCreateAffiliates (read from
+ * /api/recruiter/me), the form is replaced by a note; the server refuses anyway (403 FORBIDDEN).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -75,6 +78,7 @@ export default function RecruiterNewAffiliatePage() {
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState(null);
   const [regen, setRegen] = useState({ busy: false, error: "" });
+  const [canCreate, setCanCreate] = useState(true); // Phase 6 part 4
   const requestIdRef = useRef(null);
   const aliveRef = useRef(true);
 
@@ -94,7 +98,13 @@ export default function RecruiterNewAffiliatePage() {
       try {
         const res = await fetch("/api/recruiter/me", { credentials: "include", cache: "no-store" });
         if (!aliveRef.current) return;
-        if (res.ok) { setReady(true); return; }
+        if (res.ok) {
+          const body = await res.json().catch(() => null);
+          if (!aliveRef.current) return;
+          setCanCreate(body?.permissions?.canCreateAffiliates !== false);
+          setReady(true);
+          return;
+        }
         const { code } = toRecruiterError(await res.json().catch(() => null));
         toLogin(res.status === 403 ? code : "UNAUTHORIZED");
       } catch {
@@ -194,6 +204,7 @@ export default function RecruiterNewAffiliatePage() {
       if (err.code === "USERNAME_TAKEN") setFieldErrors((fe) => ({ ...fe, username: "TAKEN" }));
       if (err.code === "PHONE_TAKEN") setFieldErrors((fe) => ({ ...fe, phone: "TAKEN" }));
       if (err.code === "PARENT_NOT_IN_NETWORK") setFieldErrors((fe) => ({ ...fe, parentId: "NOT_IN_NETWORK" }));
+      if (err.code === "FORBIDDEN") { setCanCreate(false); return; } // turned off by the admin meanwhile
       setError(recruiterErrorLabel(err.code));
     } catch {
       // Network failure: keep the requestId so a retry of THIS attempt cannot create twice.
@@ -308,6 +319,11 @@ export default function RecruiterNewAffiliatePage() {
                 الرجوع للوحة
               </Link>
             </div>
+          </section>
+        ) : !canCreate ? (
+          <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 space-y-3 text-sm text-amber-900" data-create-disabled>
+            <p>إنشاء أفلييت جدد معطّل لحسابك من طرف الإدارة. يمكنك دائماً الاطلاع على شبكتك.</p>
+            <Link href="/recruiter/network" className="inline-block font-bold text-emerald-700 hover:underline">شبكتي</Link>
           </section>
         ) : (
           <form onSubmit={submit} noValidate className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4" data-create-affiliate-form>

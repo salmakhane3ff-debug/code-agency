@@ -33,7 +33,7 @@ const { withAdminAuth } = await import('../src/lib/middleware/withAdminAuth.js')
 const { withAffiliateAuth } = await import('../src/lib/middleware/withAffiliateAuth.js');
 const { signToken } = await import('../src/lib/services/authService.js');
 const { RECRUITER_ERROR_CODES } = await import('../src/lib/recruiterVisibility.js');
-const { toRecruiterProfileView } = await import('../src/lib/recruiterProfileView.js');
+const { toRecruiterProfileView, toRecruiterPermissionsView } = await import('../src/lib/recruiterProfileView.js');
 const S = await import('../src/lib/services/recruiterService.js');
 
 let pass = 0, fail = 0;
@@ -100,9 +100,12 @@ console.log('\n1. Admin create');
     /^\$2[aby]\$12\$.{53}$/.test(row.passwordHash) && row.passwordHash !== VALID.password && bcrypt.compareSync(VALID.password, row.passwordHash));
   ok('createdBy = the admin actor (userId from the admin token)', row.createdBy === 'admin-1' && res.body.recruiter.createdBy === 'admin-1');
   const aud = A.db._tables.recruiterAuditLog;
-  ok('exactly one RECRUITER_CREATED audit row: actorType ADMIN, actorId admin-1, entity = the recruiter, details = username only',
+  // Phase 6 part 4 (D5, documented exception): RECRUITER_CREATED also records the two initial permissions
+  // (omitted at creation → both true). Still exactly these keys — never the password or its hash.
+  ok('exactly one RECRUITER_CREATED audit row: actorType ADMIN, actorId admin-1, entity = the recruiter, details = username + the two initial permissions only',
     aud.length === 1 && aud[0].action === 'RECRUITER_CREATED' && aud[0].actorType === 'ADMIN' && aud[0].actorId === 'admin-1'
-    && aud[0].recruiterId === row.id && aud[0].entityType === 'recruiter' && aud[0].entityId === row.id && eq(aud[0].details, { username: 'ali.r' }));
+    && aud[0].recruiterId === row.id && aud[0].entityType === 'recruiter' && aud[0].entityId === row.id
+    && eq(aud[0].details, { username: 'ali.r', canViewOrders: true, canCreateAffiliates: true }), JSON.stringify(aud[0]?.details));
   const txs = A.db._log.filter((l) => l.model === '$transaction').length;
   ok('the create and its audit row are written in ONE transaction', txs === 1 && A.db._log.findIndex((l) => l.op === 'create' && l.model === 'recruiter') > A.db._log.findIndex((l) => l.model === '$transaction'));
 
@@ -313,7 +316,12 @@ console.log('\n5. /api/recruiter/me');
   const token = cookieOf(login.setCookie);
   const row = A.db._tables.recruiter.find((r) => r.id === id);
   const me = track(await meVia(A, token));
-  ok('valid cookie → 200 { recruiter: toRecruiterProfileView(row) }', me.status === 200 && eq(me.body, { recruiter: toRecruiterProfileView(row) }) && !me.setCookie, JSON.stringify(me.body));
+  // Phase 6 part 4 (documented exception): /me also carries the recruiter's OWN permissions, exactly
+  // { canViewOrders, canCreateAffiliates } (strict booleans) — the profile view itself is unchanged.
+  ok('valid cookie → 200 { recruiter: toRecruiterProfileView(row), permissions: toRecruiterPermissionsView(row) }',
+    me.status === 200 && eq(me.body, { recruiter: toRecruiterProfileView(row), permissions: toRecruiterPermissionsView(row) }) && !me.setCookie, JSON.stringify(me.body));
+  ok('/me permissions are exactly { canViewOrders, canCreateAffiliates } booleans (no other flag, no admin field)',
+    eq(keys(me.body.permissions), ['canCreateAffiliates', 'canViewOrders']) && me.body.permissions.canViewOrders === true && me.body.permissions.canCreateAffiliates === true);
   const withOther = track(await call(A.rec.me, req('/api/recruiter/me', { cookie: `foo=bar; ${RECRUITER_COOKIE}=${token}; baz=1` })));
   ok('the recruiter cookie is found among other cookies', withOther.status === 200);
   const noCookie = track(await meVia(A, null));
@@ -463,8 +471,10 @@ console.log('\n8. Error hygiene');
 {
   const allowed = new Set([...RECRUITER_ERROR_CODES, 'SERVER_ERROR']);
   const shapes = recruiterBodies.map((r) => r.body);
-  ok(`every recruiter-facing response body (${shapes.length}) is exactly { code } or { recruiter }`,
-    shapes.length > 30 && shapes.every((b) => eq(keys(b), ['code']) || eq(keys(b), ['recruiter'])), JSON.stringify(shapes.filter((b) => !(eq(keys(b), ['code']) || eq(keys(b), ['recruiter'])))));
+  // Phase 6 part 4 (documented exception): the /me body is { permissions, recruiter }; nothing else changes.
+  const shapeOk = (b) => eq(keys(b), ['code']) || eq(keys(b), ['recruiter']) || (eq(keys(b), ['permissions', 'recruiter']) && eq(keys(b.permissions), ['canCreateAffiliates', 'canViewOrders']));
+  ok(`every recruiter-facing response body (${shapes.length}) is exactly { code }, { recruiter } or (/me) { recruiter, permissions }`,
+    shapes.length > 30 && shapes.every(shapeOk), JSON.stringify(shapes.filter((b) => !shapeOk(b))));
   ok('every recruiter error code is in RECRUITER_ERROR_CODES or SERVER_ERROR', shapes.filter((b) => 'code' in b).every((b) => allowed.has(b.code)));
   ok('no recruiter response carries message / error / stack / details text', recruiterBodies.every((r) => !/"(message|error|stack|details|errors)"/.test(r.text)));
 
@@ -489,6 +499,8 @@ console.log('\n9. Static wiring and model isolation');
     'src/app/api/recruiter/me/route.js': ['GET'],
     'src/app/api/admin/recruiters/route.js': ['GET', 'POST'],
     'src/app/api/admin/recruiters/[id]/route.js': ['PATCH'],
+    // Phase 6 part 4: the permission switches (PATCH only).
+    'src/app/api/admin/recruiters/[id]/permissions/route.js': ['PATCH'],
   };
   const HTTP = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$/;
   const found = {};
@@ -500,8 +512,10 @@ console.log('\n9. Static wiring and model isolation');
   ok('recruiter / admin route files export only the documented HTTP methods', Object.keys(routes).every((f) => found[f + ':ok']), JSON.stringify(found));
   const adminA = stripJs(read('src/app/api/admin/recruiters/route.js'));
   const adminB = stripJs(read('src/app/api/admin/recruiters/[id]/route.js'));
-  ok('admin recruiter routes: every method is wrapped in withAdminAuth',
-    /export const GET = withAdminAuth\(h\.list\)/.test(adminA) && /export const POST = withAdminAuth\(h\.create\)/.test(adminA) && /export const PATCH = withAdminAuth\(h\.setActive\)/.test(adminB));
+  const adminC = stripJs(read('src/app/api/admin/recruiters/[id]/permissions/route.js'));
+  ok('admin recruiter routes: every method is wrapped in withAdminAuth (incl. the Phase 6 part 4 permissions PATCH)',
+    /export const GET = withAdminAuth\(h\.list\)/.test(adminA) && /export const POST = withAdminAuth\(h\.create\)/.test(adminA) && /export const PATCH = withAdminAuth\(h\.setActive\)/.test(adminB)
+    && /export const PATCH = withAdminAuth\(h\.setPermissions\)/.test(adminC));
   const me = stripJs(read('src/app/api/recruiter/me/route.js'));
   const auth = stripJs(read('src/app/api/recruiter/auth/route.js'));
   ok('/api/recruiter/me is wrapped in withRecruiterAuth; login / logout are public by design (login validates credentials, logout only clears)',
@@ -514,17 +528,27 @@ console.log('\n9. Static wiring and model isolation');
   const models = (file) => new Set([...stripJs(read(file)).matchAll(/\b(?:db|tx)\.(\$?\w+)/g)].map((m) => m[1]));
   const svc = models('src/lib/services/recruiterService.js');
   const hnd = models('src/lib/recruiterRouteHandlers.js');
-  ok('recruiterService.js touches only recruiter / recruiterAuditLog / $transaction', [...svc].every((m) => ['recruiter', 'recruiterAuditLog', '$transaction'].includes(m)), [...svc].join(','));
+  // Phase 6 part 4 (documented exception): $queryRaw is allowed in recruiterService.js for EXACTLY one
+  // statement — the recruiter row lock of adminSetRecruiterPermissions (asserted just below).
+  ok('recruiterService.js touches only recruiter / recruiterAuditLog / $transaction (+ the one permission row lock via $queryRaw)', [...svc].every((m) => ['recruiter', 'recruiterAuditLog', '$transaction', '$queryRaw'].includes(m)), [...svc].join(','));
+  {
+    const svcSrc = stripJs(read('src/lib/services/recruiterService.js'));
+    const raws = [...svcSrc.matchAll(/\$queryRaw(Unsafe)?`([^`]*)`/g)];
+    ok('the ONLY raw SQL of recruiterService.js is the permissions row lock: SELECT "canViewOrders", "canCreateAffiliates" FROM "recruiters" WHERE "id" = ${id} FOR NO KEY UPDATE (bound, not Unsafe)',
+      raws.length === 1 && !raws[0][1] && raws[0][2] === 'SELECT "canViewOrders", "canCreateAffiliates" FROM "recruiters" WHERE "id" = ${id} FOR NO KEY UPDATE'
+      && !/\$executeRaw|\$queryRawUnsafe|\$executeRawUnsafe/.test(svcSrc), raws.map((m) => m[0]).join(' | '));
+  }
   ok('recruiterRouteHandlers.js accesses no model directly (only via the service)', hnd.size === 0, [...hnd].join(','));
   ok('no recruiter Phase 2 file reads affiliates, orders, identity, UGC or any financial model',
     ['src/lib/services/recruiterService.js', 'src/lib/recruiterRouteHandlers.js', 'src/lib/middleware/withRecruiterAuth.js']
       // Only the recruiter's own permission-flag columns are exempt (canCreateAffiliates / canViewOrders).
       .every((f) => !/\baffiliate\b\.|affiliates|affiliateOrder|identityVerification|ugc|payout|balance|commission|wallet/i
         .test(stripJs(read(f)).replace(/\bcanCreateAffiliates\b|\bcanViewOrders\b/g, ''))));
-  ok('every db / tx / prisma access in Phase 2 files targets recruiter, recruiterAuditLog or $transaction only',
+  // Phase 6 part 4 (documented exception): `tx.$queryRaw` — the one permission row lock asserted above.
+  ok('every db / tx / prisma access in Phase 2 files targets recruiter, recruiterAuditLog or $transaction only (+ that one tx.$queryRaw)',
     ['src/lib/services/recruiterService.js', 'src/lib/recruiterRouteHandlers.js', 'src/lib/middleware/withRecruiterAuth.js']
       .every((f) => !/\b(?:db|tx|prisma|client)\s*\.\s*(?!recruiter\b|recruiterAuditLog\b|\$transaction\b|js['"])[\w$]+/
-        .test(stripJs(read(f)))));
+        .test(stripJs(read(f)).replace(/\btx\.\$queryRaw`SELECT "canViewOrders", "canCreateAffiliates" FROM "recruiters" WHERE "id" = \$\{id\} FOR NO KEY UPDATE`/g, ''))));
 
   // runtime proof: the fake db throws on ANY other model — every flow above ran on it
   const probe = makeRecruiterFakeDb();

@@ -6,9 +6,12 @@
  * Phase 5: "مكافآتي" links to the recruiter's rewards page /recruiter/wallet;
  * Phase 6: "تفعيل الحسابات" links to /recruiter/affiliates/activation; part 2: "تغيير كلمة السر"
  * links to /recruiter/password).
- * Arabic, RTL. Data comes ONLY from GET /api/recruiter/me (toRecruiterProfileView);
- * 401 / 403 → back to the login page. The other sections arrive in later phases and
- * are shown disabled ("قريباً").
+ * Arabic, RTL. Data comes ONLY from GET /api/recruiter/me (toRecruiterProfileView + the
+ * recruiter's own permissions, Phase 6 part 4); 401 / 403 → back to the login page. The other
+ * sections arrive in later phases and are shown disabled ("قريباً").
+ * Phase 6 part 4: when the admin turned off a permission, its entries are hidden and a short note
+ * explains why (canCreateAffiliates → no "add affiliate"; canViewOrders → no order tracking).
+ * The server enforces both on every request; hiding here is only a convenience.
  */
 import { useEffect, useState } from "react";
 import Link from "next/link";
@@ -34,10 +37,14 @@ const SECTIONS = [
 const DATE_FMT = new Intl.DateTimeFormat("ar-MA", { timeZone: "Africa/Casablanca", dateStyle: "medium", timeStyle: "short" });
 const fmtDate = (iso) => (iso ? DATE_FMT.format(new Date(iso)) : "—");
 
-function Nav({ onNavigate }) {
+/** Menu sections the recruiter's permissions allow (only an explicit `false` hides one). */
+const allowedSections = (perms) => SECTIONS.filter((s) =>
+  !(s.id === "add" && perms?.canCreateAffiliates === false) && !(s.id === "orders" && perms?.canViewOrders === false));
+
+function Nav({ onNavigate, perms }) {
   return (
     <nav aria-label="القائمة الرئيسية" className="space-y-1">
-      {SECTIONS.map(({ id, label, Icon, active, href }) => (
+      {allowedSections(perms).map(({ id, label, Icon, active, href }) => (
         href ? (
           <Link key={id} href={href} onClick={onNavigate} data-section={id}
             className="w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-700">
@@ -75,6 +82,7 @@ function InfoRow({ label, value, dirLtr = false }) {
 export default function RecruiterDashboardPage() {
   const router = useRouter();
   const [me, setMe] = useState(null);
+  const [perms, setPerms] = useState(null); // { canViewOrders, canCreateAffiliates } (Phase 6 part 4)
   const [notice, setNotice] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -85,7 +93,16 @@ export default function RecruiterDashboardPage() {
       try {
         const res = await fetch("/api/recruiter/me", { credentials: "include", cache: "no-store" });
         if (!alive) return;
-        if (res.ok) { const body = await res.json(); if (alive) setMe(body?.recruiter ?? null); return; }
+        if (res.ok) {
+          const body = await res.json();
+          if (alive) {
+            setPerms(body?.permissions && typeof body.permissions === "object"
+              ? { canViewOrders: body.permissions.canViewOrders === true, canCreateAffiliates: body.permissions.canCreateAffiliates === true }
+              : null);
+            setMe(body?.recruiter ?? null);
+          }
+          return;
+        }
         const { code } = toRecruiterError(await res.json().catch(() => null));
         if (res.status === 403 && code === "RECRUITER_DISABLED") {
           setNotice(recruiterErrorLabel(code));
@@ -117,6 +134,8 @@ export default function RecruiterDashboardPage() {
   }
 
   const active = me.status === "ACTIVE";
+  const canCreate = perms?.canCreateAffiliates !== false;
+  const canViewOrders = perms?.canViewOrders !== false;
   return (
     <div className="min-h-screen lg:flex [contain:inline-size]" data-recruiter-dashboard>
       {/* Desktop sidebar */}
@@ -125,7 +144,7 @@ export default function RecruiterDashboardPage() {
           <UserCog className="w-6 h-6 text-emerald-600" aria-hidden="true" />
           <span className="font-bold">مسؤول التوظيف</span>
         </div>
-        <Nav />
+        <Nav perms={perms} />
       </aside>
 
       <div className="flex-1 min-w-0">
@@ -157,7 +176,7 @@ export default function RecruiterDashboardPage() {
                   <X className="w-5 h-5" aria-hidden="true" />
                 </button>
               </div>
-              <Nav onNavigate={() => setMenuOpen(false)} />
+              <Nav perms={perms} onNavigate={() => setMenuOpen(false)} />
             </div>
           </div>
         )}
@@ -181,7 +200,7 @@ export default function RecruiterDashboardPage() {
             </dl>
           </section>
 
-          {active && (
+          {active && canCreate && (
             <section className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col sm:flex-row sm:items-center gap-3 justify-between" data-add-cta>
               <div className="min-w-0">
                 <h2 className="text-base font-bold">إضافة أفلييت جديد</h2>
@@ -195,13 +214,21 @@ export default function RecruiterDashboardPage() {
             </section>
           )}
 
+          {active && !canCreate && (
+            <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" data-create-disabled>
+              إنشاء أفلييت جدد وإنشاء رموز تفعيل جديدة معطّلان لحسابك من طرف الإدارة. يمكنك دائماً الاطلاع على شبكتك.
+            </section>
+          )}
+
           <section data-activation-cta>
             <Link href="/recruiter/affiliates/activation" data-activation-link
               className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex items-start gap-3 hover:border-emerald-300 min-w-0">
               <KeyRound className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" aria-hidden="true" />
               <span className="min-w-0">
                 <span className="block text-base font-bold">تفعيل الحسابات</span>
-                <span className="block text-sm text-slate-500 mt-0.5">الأفلييت الذين لم يختاروا كلمة السر بعد، وإنشاء رمز تفعيل جديد.</span>
+                <span className="block text-sm text-slate-500 mt-0.5">
+                  {canCreate ? "الأفلييت الذين لم يختاروا كلمة السر بعد، وإنشاء رمز تفعيل جديد." : "الأفلييت الذين لم يختاروا كلمة السر بعد (إنشاء رمز جديد معطّل)."}
+                </span>
               </span>
             </Link>
           </section>
@@ -219,8 +246,10 @@ export default function RecruiterDashboardPage() {
               className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex items-start gap-3 hover:border-emerald-300 min-w-0">
               <BarChart3 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" aria-hidden="true" />
               <span className="min-w-0">
-                <span className="block text-base font-bold">الإحصائيات وتتبّع الطلبات</span>
-                <span className="block text-sm text-slate-500 mt-0.5">الأفلييت حسب المستوى، التحقق، والطلبات الحقيقية والتجريبية.</span>
+                <span className="block text-base font-bold">{canViewOrders ? "الإحصائيات وتتبّع الطلبات" : "الإحصائيات"}</span>
+                <span className="block text-sm text-slate-500 mt-0.5">
+                  {canViewOrders ? "الأفلييت حسب المستوى، التحقق، والطلبات الحقيقية والتجريبية." : "الأفلييت حسب المستوى والتحقق (عرض الطلبات معطّل من طرف الإدارة)."}
+                </span>
               </span>
             </Link>
           </section>

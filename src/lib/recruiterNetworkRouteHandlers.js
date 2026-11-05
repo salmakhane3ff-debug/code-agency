@@ -11,7 +11,8 @@
  *                                                  one of their affiliates, or `unplaced`)
  * Every request re-checks the recruiter account (active); ownership of rootId / parentId is
  * enforced by the service (anything outside the network → 404 NOT_FOUND). Responses are
- * built ONLY with recruiterVisibility.js.
+ * built ONLY with recruiterVisibility.js. Phase 6 part 4: when the recruiter's canViewOrders is
+ * off, no order query runs and every `orders` is null (the tree and identity counts stay).
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -42,7 +43,8 @@ export function recruiterNetworkHandlers(deps = {}) {
   };
   return {
     stats: safe(async (q, me) => {
-      const stats = await getNetworkStats(me.id, { db, rootId: q.get('rootId') || null });
+      // canViewOrders (Phase 6 part 4), re-read with the account on every request: off → no order query, orders null.
+      const stats = await getNetworkStats(me.id, { db, rootId: q.get('rootId') || null, includeOrders: me.canViewOrders === true });
       return json({ stats: toRecruiterNetworkStatsView(stats) });
     }),
     nodes: safe(async (q, me) => {
@@ -54,6 +56,7 @@ export function recruiterNetworkHandlers(deps = {}) {
       const page = await getNetworkNodes(me.id, {
         db, parentId: view ? null : q.get('parentId') || null, view,
         cursor: cursor === null ? 0 : Number(cursor), ...(limit === null ? {} : { limit: Number(limit) }),
+        includeOrders: me.canViewOrders === true,
       });
       return json({
         parent: page.parent ? toRecruiterNetworkPathView(page.parent) : null,

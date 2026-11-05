@@ -6,9 +6,13 @@
  * Phase 6 part 2: "Réinitialiser le mot de passe" (POST /api/admin/recruiters/<id>/password)
  * closes every session of the recruiter and never changes its active / disabled state; the
  * new password is never echoed back and is cleared after the request.
+ * Phase 6 part 4: two independent permissions per recruiter — "Voir les commandes"
+ * (canViewOrders) and "Créer des affiliés" (canCreateAffiliates) — chosen at creation (both on by
+ * default) and switched with PATCH /api/admin/recruiters/<id>/permissions after a confirmation.
+ * The server enforces them on every recruiter request; each change is audited.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Eye, EyeOff, KeyRound, Loader2, Plus, RefreshCw, UserCog } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Loader2, Plus, RefreshCw, ShieldCheck, UserCog } from "lucide-react";
 
 const API = "/api/admin/recruiters";
 
@@ -29,7 +33,12 @@ const ERROR_TEXT = {
 
 const DATE_FMT = new Intl.DateTimeFormat("fr-FR", { timeZone: "Africa/Casablanca", dateStyle: "short", timeStyle: "short" });
 const fmtDate = (iso) => (iso ? DATE_FMT.format(new Date(iso)) : "—");
-const EMPTY_FORM = { name: "", username: "", password: "", phone: "" };
+const EMPTY_FORM = { name: "", username: "", password: "", phone: "", canViewOrders: true, canCreateAffiliates: true };
+/** Recruiter permissions (Phase 6 part 4): label + what switching it off means. */
+const PERMISSIONS = [
+  { key: "canViewOrders", label: "Voir les commandes", off: "Le recruteur ne verra plus les compteurs de commandes de son réseau (l'arbre et l'historique des récompenses restent visibles)." },
+  { key: "canCreateAffiliates", label: "Créer des affiliés", off: "Le recruteur ne pourra plus créer d'affiliés ni régénérer de codes d'activation (la récupération admin reste possible)." },
+];
 
 async function readBody(res) {
   return res.json().catch(() => null);
@@ -72,7 +81,10 @@ function CreateForm({ onCreated }) {
     e.preventDefault();
     if (busy) return;
     setBusy(true); setError(""); setOk(""); setFieldErrors({});
-    const payload = { name: form.name, username: form.username.trim(), password: form.password, phone: form.phone.trim() || undefined };
+    const payload = {
+      name: form.name, username: form.username.trim(), password: form.password, phone: form.phone.trim() || undefined,
+      canViewOrders: form.canViewOrders === true, canCreateAffiliates: form.canCreateAffiliates === true,
+    };
     try {
       const res = await fetch(API, {
         method: "POST", credentials: "include", cache: "no-store",
@@ -128,6 +140,18 @@ function CreateForm({ onCreated }) {
             autoComplete="off" dir="ltr" aria-invalid={!!fieldErrors.phone} aria-describedby={fieldErrors.phone ? "rc-phone-err" : undefined} />
         </Field>
       </div>
+      <fieldset className="min-w-0" data-create-permissions>
+        <legend className="text-xs font-semibold text-gray-700 mb-1">Permissions</legend>
+        <div className="flex flex-wrap gap-x-5 gap-y-2">
+          {PERMISSIONS.map((p) => (
+            <label key={p.key} className="inline-flex items-center gap-2 text-sm text-gray-800">
+              <input type="checkbox" checked={form[p.key] === true} data-create-permission={p.key}
+                onChange={(e) => setForm((f) => ({ ...f, [p.key]: e.target.checked }))} className="h-4 w-4 rounded border-gray-300" />
+              {p.label}
+            </label>
+          ))}
+        </div>
+      </fieldset>
       {error && <p role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2" data-create-error>{error}</p>}
       {ok && <p role="status" className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2" data-create-ok>{ok}</p>}
       <button type="submit" disabled={busy} className="inline-flex items-center gap-2 rounded-xl bg-gray-900 text-white px-4 py-2 text-sm font-semibold disabled:opacity-60">
@@ -192,6 +216,61 @@ function ConfirmDialog({ target, onCancel, onDone }) {
             className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-60 ${disabling ? "bg-red-600" : "bg-emerald-600"}`}>
             {busy && <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />}
             {disabling ? "Désactiver" : "Réactiver"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Confirm one permission change (PATCH /permissions with exactly that field). */
+function PermissionDialog({ target, permission, onCancel, onDone }) {
+  const meta = PERMISSIONS.find((p) => p.key === permission);
+  const to = target[permission] !== true;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape" && !busy) onCancel(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onCancel]);
+
+  async function confirm() {
+    setBusy(true); setError("");
+    try {
+      const res = await fetch(`${API}/${encodeURIComponent(target.id)}/permissions`, {
+        method: "PATCH", credentials: "include", cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [permission]: to }),
+      });
+      const body = await readBody(res);
+      if (res.ok) { onDone(body?.recruiter); return; }
+      setError(errorText(res, body));
+    } catch {
+      setError(GENERIC_ERROR);
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="rc-perm-title" data-permission-dialog={permission}>
+      <button type="button" className="absolute inset-0 bg-gray-900/40" aria-label="Annuler" onClick={() => !busy && onCancel()} />
+      <div className="relative w-full max-w-md bg-white rounded-2xl shadow-xl p-5 space-y-4 min-w-0">
+        <h3 id="rc-perm-title" className="text-base font-bold text-gray-900 break-words">
+          {to ? "Activer" : "Désactiver"} « {meta?.label} » pour « {target.username} » ?
+        </h3>
+        <p className="text-sm text-gray-600">
+          {to ? "La permission s'appliquera dès la prochaine requête du recruteur." : meta?.off}
+          {" "}La session du recruteur n&apos;est pas fermée ; la modification est enregistrée dans le journal.
+        </p>
+        {error && <p role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2" data-permission-error>{error}</p>}
+        <div className="flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={onCancel} disabled={busy} className="rounded-xl border border-gray-300 px-4 py-2 text-sm font-semibold disabled:opacity-60">Annuler</button>
+          <button type="button" onClick={confirm} disabled={busy} data-permission-confirm
+            className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-60 ${to ? "bg-emerald-600" : "bg-red-600"}`}>
+            {busy && <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />}
+            {to ? "Activer" : "Désactiver"}
           </button>
         </div>
       </div>
@@ -301,18 +380,18 @@ function StatusBadge({ active }) {
   );
 }
 
-function RecruiterCard({ r, onToggle, onReset }) {
+function RecruiterCard({ r, onToggle, onReset, onPermission }) {
   return (
     <li className="bg-white rounded-2xl border border-gray-200 p-4 min-w-0" data-recruiter-row={r.id}>
-      <div className="flex items-start justify-between gap-3 min-w-0">
-        <div className="min-w-0">
+      <div className="flex flex-wrap items-start justify-between gap-3 min-w-0">
+        <div className="min-w-0 flex-1 basis-48">
           <div className="flex items-center gap-2 min-w-0">
             <p className="font-semibold text-gray-900 truncate">{r.name}</p>
             <StatusBadge active={r.isActive} />
           </div>
           <p className="text-xs text-gray-500 truncate" dir="ltr">@{r.username}{r.phone ? ` · ${r.phone}` : ""}</p>
         </div>
-        <div className="shrink-0 flex flex-wrap justify-end gap-2">
+        <div className="flex flex-wrap justify-start sm:justify-end gap-2 min-w-0">
           <button type="button" onClick={() => onReset(r)} data-reset-password
             className="inline-flex items-center gap-1 rounded-xl px-3 py-1.5 text-xs font-semibold border border-gray-300 text-gray-700 hover:bg-gray-50">
             <KeyRound className="w-3.5 h-3.5" aria-hidden="true" />
@@ -334,6 +413,20 @@ function RecruiterCard({ r, onToggle, onReset }) {
           </>
         )}
       </dl>
+      <div className="mt-3 pt-3 border-t border-gray-100 flex flex-wrap items-center gap-2 min-w-0" data-permissions>
+        <span className="inline-flex items-center gap-1 text-xs font-semibold text-gray-500"><ShieldCheck className="w-3.5 h-3.5" aria-hidden="true" /> Permissions :</span>
+        {PERMISSIONS.map((p) => {
+          const on = r[p.key] === true;
+          return (
+            <button key={p.key} type="button" onClick={() => onPermission(r, p.key)} aria-pressed={on} data-permission={p.key} data-permission-state={on ? "on" : "off"}
+              title={on ? "Cliquer pour désactiver" : "Cliquer pour activer"}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold ${on ? "bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100" : "bg-gray-100 text-gray-600 border-gray-300 hover:bg-gray-200"}`}>
+              <span className={`h-2 w-2 rounded-full ${on ? "bg-emerald-500" : "bg-gray-400"}`} aria-hidden="true" />
+              {p.label} : {on ? "Oui" : "Non"}
+            </button>
+          );
+        })}
+      </div>
     </li>
   );
 }
@@ -344,6 +437,7 @@ export default function AdminRecruitersPage() {
   const [loading, setLoading] = useState(false);
   const [target, setTarget] = useState(null);
   const [resetTarget, setResetTarget] = useState(null);
+  const [permTarget, setPermTarget] = useState(null); // { recruiter, permission }
 
   const load = useCallback(async () => {
     setLoading(true); setLoadError("");
@@ -364,6 +458,7 @@ export default function AdminRecruitersPage() {
   const replace = (rec) => { if (rec?.id) setList((l) => (l ?? []).map((x) => (x.id === rec.id ? rec : x))); };
   const closeDialog = useCallback(() => setTarget(null), []);
   const closeReset = useCallback(() => setResetTarget(null), []);
+  const closePerm = useCallback(() => setPermTarget(null), []);
   const activeCount = (list ?? []).filter((r) => r.isActive).length;
 
   return (
@@ -373,7 +468,7 @@ export default function AdminRecruitersPage() {
           <UserCog className="w-6 h-6 text-gray-700 shrink-0" aria-hidden="true" />
           <div className="min-w-0">
             <h1 className="text-xl sm:text-2xl font-bold text-gray-900">🧑‍💼 Recruteurs</h1>
-            <p className="text-sm text-gray-500">Comptes des recruteurs d&apos;affiliés : création, activation et désactivation.</p>
+            <p className="text-sm text-gray-500">Comptes des recruteurs d&apos;affiliés : création, activation, désactivation et permissions.</p>
           </div>
         </div>
         <button type="button" onClick={load} disabled={loading} aria-label="Actualiser"
@@ -393,13 +488,17 @@ export default function AdminRecruitersPage() {
         {list && list.length === 0 && <p className="text-sm text-gray-500" data-empty>Aucun recruteur pour le moment.</p>}
         {list && list.length > 0 && (
           <ul className="space-y-2 min-w-0">
-            {list.map((r) => <RecruiterCard key={r.id} r={r} onToggle={setTarget} onReset={setResetTarget} />)}
+            {list.map((r) => <RecruiterCard key={r.id} r={r} onToggle={setTarget} onReset={setResetTarget} onPermission={(rec, permission) => setPermTarget({ recruiter: rec, permission })} />)}
           </ul>
         )}
       </section>
 
       {target && <ConfirmDialog target={target} onCancel={closeDialog} onDone={(rec) => { replace(rec); setTarget(null); }} />}
       {resetTarget && <ResetPasswordDialog key={resetTarget.id} target={resetTarget} onCancel={closeReset} />}
+      {permTarget && (
+        <PermissionDialog key={`${permTarget.recruiter.id}-${permTarget.permission}`} target={permTarget.recruiter} permission={permTarget.permission}
+          onCancel={closePerm} onDone={(rec) => { replace(rec); setPermTarget(null); }} />
+      )}
     </div>
   );
 }

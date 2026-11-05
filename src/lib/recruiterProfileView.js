@@ -26,3 +26,12 @@ export function toRecruiterProfileView(row) {
     lastLoginAt: iso(row?.lastLoginAt),
   };
 }
+
+/**
+ * The recruiter's OWN permissions (Phase 6 part 4), set by an admin and re-read on every request:
+ * exactly { canViewOrders, canCreateAffiliates } (strict booleans). The server enforces them; the
+ * dashboard only uses them to hide what the recruiter cannot do.
+ */
+export function toRecruiterPermissionsView(row) {
+  return { canViewOrders: row?.canViewOrders === true, canCreateAffiliates: row?.canCreateAffiliates === true };
+}

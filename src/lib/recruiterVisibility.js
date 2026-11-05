@@ -157,6 +157,8 @@ function ordersCountView(o) {
 function realFakeView(o) {
   return { real: ordersCountView(o?.real), fake: ordersCountView(o?.fake) };
 }
+/** Order counts, or null when they are withheld (the recruiter's canViewOrders is off) — never zeros. */
+const ordersOrNull = (o) => (o === null ? null : realFakeView(o));
 function identityCountView(o) {
   const out = {};
   for (const k of NETWORK_IDENTITY_KEYS) out[k] = count(o?.[k]);
@@ -166,7 +168,8 @@ function identityCountView(o) {
 /**
  * Recruiter-facing node of their network tree: identity, level, account status, identity
  * STATUS only, counts of children / descendants and order counts (real vs fake) — never a
- * document, password, phone, customer field, amount or any order detail.
+ * document, password, phone, customer field, amount or any order detail. `orders` is null when
+ * the recruiter may not view orders (Phase 6 part 4).
  */
 export function toRecruiterNetworkNodeView(node) {
   return {
@@ -178,7 +181,7 @@ export function toRecruiterNetworkNodeView(node) {
     identityStatus: NETWORK_IDENTITY_KEYS.includes(node?.identityStatus) ? node.identityStatus : 'NONE',
     childrenCount: count(node?.childrenCount),
     descendantsCount: count(node?.descendantsCount),
-    orders: realFakeView(node?.orders),
+    orders: ordersOrNull(node?.orders),
   };
 }
 
@@ -198,10 +201,10 @@ export function toRecruiterNetworkStatsView(stats) {
       maxLevel: count(t?.maxLevel), unplaced: count(t?.unplaced),
     },
     identity: identityCountView(stats?.identity),
-    orders: realFakeView(stats?.orders),
+    orders: ordersOrNull(stats?.orders),
     levels: levels.map((l) => ({
       level: level(l?.level), affiliates: count(l?.affiliates), active: count(l?.active), inactive: count(l?.inactive),
-      identity: identityCountView(l?.identity), orders: realFakeView(l?.orders),
+      identity: identityCountView(l?.identity), orders: ordersOrNull(l?.orders),
     })),
   };
 }

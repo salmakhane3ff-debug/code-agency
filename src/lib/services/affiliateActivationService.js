@@ -99,16 +99,21 @@ async function credentialsStillPending(tx, affiliateId) {
 
 /**
  * Recruiter: a NEW code for one of THEIR affiliates whose credentials are still pending.
- * → { code, expiresAt } ; NOT_FOUND (not their affiliate) / ACTIVATION_NOT_AVAILABLE.
+ * → { code, expiresAt } ; NOT_FOUND (not their affiliate) / ACTIVATION_NOT_AVAILABLE /
+ * FORBIDDEN (the recruiter's canCreateAffiliates is off — Phase 6 part 4; the admin recovery
+ * path stays available for such affiliates).
  */
 export async function regenerateActivationCode(recruiterId, affiliateId, { db = prisma, now = new Date() } = {}) {
   if (typeof recruiterId !== 'string' || !ID_RE.test(recruiterId)) throw fail('UNAUTHORIZED');
   if (typeof affiliateId !== 'string' || !ID_RE.test(affiliateId)) throw fail('NOT_FOUND');
   return db.$transaction(async (tx) => {
-    const locked = await tx.$queryRaw`SELECT "isActive" FROM "recruiters" WHERE "id" = ${recruiterId} FOR NO KEY UPDATE`;
+    const locked = await tx.$queryRaw`SELECT "isActive", "canCreateAffiliates" FROM "recruiters" WHERE "id" = ${recruiterId} FOR NO KEY UPDATE`;
     const me = Array.isArray(locked) ? locked[0] : null;
     if (!me) throw fail('UNAUTHORIZED');
     if (me.isActive !== true) throw fail('RECRUITER_DISABLED');
+    // Phase 6 part 4 (D3): issuing credentials is part of creating affiliates — same permission,
+    // read under the same row lock as the creation (an admin change is serialised with it).
+    if (me.canCreateAffiliates !== true) throw fail('FORBIDDEN');
     const link = await tx.recruiterAffiliateLink.findUnique({ where: { affiliateId }, select: { recruiterId: true } });
     if (!link || link.recruiterId !== recruiterId) throw fail('NOT_FOUND');
     await lockAffiliateCodes(tx, affiliateId);

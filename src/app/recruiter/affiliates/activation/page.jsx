@@ -7,6 +7,9 @@
  *   • POST /api/recruiter/affiliates/<id>/activation-code → a NEW one-time code (the previous
  *     one is cancelled), shown ONCE in React state — never stored, never fetched again.
  * Refused once the affiliate has set a password (409 ACTIVATION_NOT_AVAILABLE).
+ * Phase 6 part 4: when the admin turned off the recruiter's canCreateAffiliates, the list stays
+ * visible but no new code can be issued (the server refuses with 403 FORBIDDEN; the button is
+ * hidden and a note explains it — the admin recovery path remains for these affiliates).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -43,6 +46,7 @@ export default function RecruiterActivationPage() {
   const [issued, setIssued] = useState({}); // affiliateId → { code, expiresAt } (memory only)
   const [rowBusy, setRowBusy] = useState("");
   const [rowError, setRowError] = useState({});
+  const [canCreate, setCanCreate] = useState(true); // Phase 6 part 4 (from /api/recruiter/me)
   const aliveRef = useRef(true);
 
   const toLogin = useCallback((code) => {
@@ -57,9 +61,14 @@ export default function RecruiterActivationPage() {
   const load = useCallback(async () => {
     setState((s) => ({ ...s, loading: true, error: "" }));
     try {
-      const res = await fetch("/api/recruiter/affiliates/activation", { credentials: "include", cache: "no-store" });
+      const [res, meRes] = await Promise.all([
+        fetch("/api/recruiter/affiliates/activation", { credentials: "include", cache: "no-store" }),
+        fetch("/api/recruiter/me", { credentials: "include", cache: "no-store" }).catch(() => null),
+      ]);
       const body = await res.json().catch(() => null);
+      const meBody = meRes?.ok ? await meRes.json().catch(() => null) : null;
       if (!aliveRef.current) return;
+      if (meBody?.permissions) setCanCreate(meBody.permissions.canCreateAffiliates !== false);
       if (res.status === 401 || res.status === 403) {
         const { code } = toRecruiterError(body);
         toLogin(res.status === 403 ? code : "UNAUTHORIZED");
@@ -92,6 +101,8 @@ export default function RecruiterActivationPage() {
         setState((s) => ({ ...s, list: s.list.map((p) => (p.affiliate.id === id ? { ...p, state: "ACTIVE", expiresAt: r.activation.expiresAt } : p)) }));
       } else if (r.status === 401 || (r.status === 403 && r.code === "RECRUITER_DISABLED")) {
         toLogin(r.status === 403 ? r.code : "UNAUTHORIZED");
+      } else if (r.code === "FORBIDDEN") {
+        setCanCreate(false); // turned off by the admin meanwhile
       } else {
         setRowError((e) => ({ ...e, [id]: recruiterErrorLabel(r.code) }));
       }
@@ -127,6 +138,12 @@ export default function RecruiterActivationPage() {
           الرمز الجديد يلغي الرمز السابق، ويظهر مرة واحدة فقط.
         </p>
 
+        {!canCreate && (
+          <p className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" data-create-disabled>
+            إنشاء رموز تفعيل جديدة معطّل لحسابك من طرف الإدارة. يمكن للأفلييت المعني طلب استرجاع التفعيل من الإدارة.
+          </p>
+        )}
+
         {state.loading ? (
           <p className="text-sm text-slate-500" aria-live="polite" data-loading>جارٍ التحميل…</p>
         ) : state.error ? (
@@ -152,11 +169,13 @@ export default function RecruiterActivationPage() {
                   </div>
                   <StateChip state={p.state} expiresAt={p.expiresAt} />
                 </div>
-                <button type="button" onClick={() => regenerate(p.affiliate.id)} disabled={rowBusy === p.affiliate.id} data-regenerate={p.affiliate.username ?? ""}
-                  className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
-                  <KeyRound className="w-4 h-4" aria-hidden="true" />
-                  {rowBusy === p.affiliate.id ? "جارٍ الإنشاء…" : "إنشاء رمز جديد"}
-                </button>
+                {canCreate && (
+                  <button type="button" onClick={() => regenerate(p.affiliate.id)} disabled={rowBusy === p.affiliate.id} data-regenerate={p.affiliate.username ?? ""}
+                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
+                    <KeyRound className="w-4 h-4" aria-hidden="true" />
+                    {rowBusy === p.affiliate.id ? "جارٍ الإنشاء…" : "إنشاء رمز جديد"}
+                  </button>
+                )}
                 {rowError[p.affiliate.id] && <p role="alert" className="text-xs text-red-700" data-row-error>{rowError[p.affiliate.id]}</p>}
                 {issued[p.affiliate.id] && <ActivationCodeCard activation={issued[p.affiliate.id]} />}
               </li>

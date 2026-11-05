@@ -8,6 +8,8 @@
  * `?root=<id>` scopes everything to the sub-network of one of the recruiter's own affiliates
  * (levels are then relative to it: level 1 = its direct affiliates). Fake orders are always
  * reported apart and are never counted as real delivered sales.
+ * Phase 6 part 4: `orders: null` (order visibility turned off by the admin) → the order section
+ * and the per-level order columns are not shown (never zeros); a note explains why.
  */
 import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
@@ -15,7 +17,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toRecruiterNetworkPathView, toRecruiterNetworkStatsView } from "@/lib/recruiterVisibility";
 import {
   Breadcrumb, ErrorBox, FAKE_LABEL, IDENTITY_KEYS, IDENTITY_LABEL, Loading, NetworkHeader, ORDER_KEYS, ORDER_LABEL, PageNotice,
-  fmt, getJson, handleAuth,
+  OrdersHidden, fmt, getJson, handleAuth,
 } from "../networkUi";
 
 function Card({ label, value, attrs = {}, tone = "slate" }) {
@@ -99,6 +101,11 @@ function NetworkStats() {
               </dl>
             </Section>
 
+            {!stats.orders ? (
+              <Section title="تتبّع الطلبات" data-orders>
+                <OrdersHidden />
+              </Section>
+            ) : (
             <Section title="تتبّع الطلبات" data-orders>
               <p className="text-xs text-violet-800 bg-violet-50 border border-violet-200 rounded-xl px-3 py-2" data-fake-note>
                 الطلبات التجريبية تظهر منفصلة ولا تُحتسب أبداً ضمن الطلبات الحقيقية المسلّمة.
@@ -133,13 +140,14 @@ function NetworkStats() {
                 </table>
               </div>
             </Section>
+            )}
 
             <Section title={root ? "حسب المستوى (1 = المباشرون تحت هذا الحساب)" : "حسب المستوى"} data-levels>
               <div className="overflow-x-auto max-w-full rounded-xl border border-slate-200" data-levels-scroll>
                 <table className="min-w-[44rem] w-full text-sm">
                   <thead className="bg-slate-50 text-slate-600">
                     <tr>
-                      {["المستوى", "الأفلييت", "مفعّلون", "غير مفعّلين", ...IDENTITY_KEYS.map((k) => `البطاقة: ${IDENTITY_LABEL[k]}`), "حقيقية مسلّمة", "حقيقية غير مسلّمة", "تجريبية"].map((h) => (
+                      {["المستوى", "الأفلييت", "مفعّلون", "غير مفعّلين", ...IDENTITY_KEYS.map((k) => `البطاقة: ${IDENTITY_LABEL[k]}`), ...(stats.orders ? ["حقيقية مسلّمة", "حقيقية غير مسلّمة", "تجريبية"] : [])].map((h) => (
                         <th key={h} scope="col" className="text-start font-semibold px-3 py-2 whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -152,9 +160,13 @@ function NetworkStats() {
                         <td className="px-3 py-2">{fmt(l.active)}</td>
                         <td className="px-3 py-2">{fmt(l.inactive)}</td>
                         {IDENTITY_KEYS.map((k) => <td key={k} className="px-3 py-2">{fmt(l.identity[k])}</td>)}
-                        <td className="px-3 py-2 font-semibold text-emerald-700" data-level-real-delivered>{fmt(l.orders.real.delivered)}</td>
-                        <td className="px-3 py-2">{fmt(l.orders.real.total - l.orders.real.delivered)}</td>
-                        <td className="px-3 py-2 text-violet-700" data-level-fake>{fmt(l.orders.fake.total)}</td>
+                        {l.orders && (
+                          <>
+                            <td className="px-3 py-2 font-semibold text-emerald-700" data-level-real-delivered>{fmt(l.orders.real.delivered)}</td>
+                            <td className="px-3 py-2">{fmt(l.orders.real.total - l.orders.real.delivered)}</td>
+                            <td className="px-3 py-2 text-violet-700" data-level-fake>{fmt(l.orders.fake.total)}</td>
+                          </>
+                        )}
                       </tr>
                     ))}
                   </tbody>
