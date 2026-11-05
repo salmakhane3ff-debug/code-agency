@@ -4,7 +4,8 @@
  * Phase 3: "إضافة أفلييت جديد" links to /recruiter/affiliates/new; Phase 4: the network
  * tree /recruiter/network and its statistics / order tracking /recruiter/network/stats;
  * Phase 5: "مكافآتي" links to the recruiter's rewards page /recruiter/wallet;
- * Phase 6: "تفعيل الحسابات" links to /recruiter/affiliates/activation).
+ * Phase 6: "تفعيل الحسابات" links to /recruiter/affiliates/activation; part 2: "تغيير كلمة السر"
+ * links to /recruiter/password).
  * Arabic, RTL. Data comes ONLY from GET /api/recruiter/me (toRecruiterProfileView);
  * 401 / 403 → back to the login page. The other sections arrive in later phases and
  * are shown disabled ("قريباً").
@@ -14,7 +15,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Home, Users, UserPlus, GitBranch, ShieldCheck, PackageCheck, Gift, History, LogOut, Menu, X, UserCog, BarChart3,
-  Wallet, KeyRound,
+  Wallet, KeyRound, Lock,
 } from "lucide-react";
 import { toRecruiterError } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel } from "./errorLabels";
@@ -231,6 +232,17 @@ export default function RecruiterDashboardPage() {
               <span className="min-w-0">
                 <span className="block text-base font-bold">أرباحي والسحب</span>
                 <span className="block text-sm text-slate-500 mt-0.5">مكافآتك المكتسبة، الرصيد المتاح، معلوماتك البنكية وطلبات السحب.</span>
+              </span>
+            </Link>
+          </section>
+
+          <section data-password-cta>
+            <Link href="/recruiter/password" data-password-link
+              className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex items-start gap-3 hover:border-emerald-300 min-w-0">
+              <Lock className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" aria-hidden="true" />
+              <span className="min-w-0">
+                <span className="block text-base font-bold">تغيير كلمة السر</span>
+                <span className="block text-sm text-slate-500 mt-0.5">غيّر كلمة السر ديالك وسجّل الخروج من الأجهزة الأخرى.</span>
               </span>
             </Link>
           </section>

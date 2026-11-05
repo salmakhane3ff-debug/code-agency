@@ -40,6 +40,9 @@ export function makeRewardsFakeDb(seed = {}) {
     rewardPointsAccount: [], rewardPointsLedger: [], rewardOrderAward: [],
     rewardGift: [], rewardRedemption: [], rewardRedemptionHistory: [], rewardAuditLog: [],
     shippingCompany: [],
+    // Phase 6 part 2: adminUpdateAffiliate audits a real activation change / password reset
+    // (recruiter_audit_log, ADMIN actor) in the same transaction as the affiliate update.
+    recruiterAuditLog: [],
   };
   for (const [k, rows] of Object.entries(seed)) T[k] = rows.map((r) => ({ ...r }));
   let seq = 1;

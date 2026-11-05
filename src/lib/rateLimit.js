@@ -33,8 +33,16 @@ setInterval(() => {
  * @returns {Response|null}  — 429 Response if limited, null if allowed
  */
 export function rateLimit(req, key, { max = 30, windowMs = 60_000 } = {}) {
-  const ip = getIp(req);
-  const storeKey = `${key}:${ip}`;
+  return rateLimitStoreKey(`${key}:${getIp(req)}`, { max, windowMs });
+}
+
+/**
+ * The same sliding counter for an explicit store key (no IP derivation). Used by callers that
+ * derive the client identity themselves (e.g. src/lib/trustedProxy.js). rateLimit() above is
+ * unchanged: it calls this with `${key}:${ip}` exactly as before.
+ * @returns {Response|null} — 429 Response if limited, null if allowed
+ */
+export function rateLimitStoreKey(storeKey, { max = 30, windowMs = 60_000 } = {}) {
   const now = Date.now();
 
   let entry = store.get(storeKey);

@@ -15,9 +15,9 @@
  */
 
 import prisma from './prisma.js';
-import { rateLimit as defaultRateLimit } from './rateLimit.js';
+import { trustedRateLimit as defaultRateLimit } from './trustedProxy.js';
 import {
-  adminCreateRecruiter, adminListRecruiters, adminSetRecruiterActive, loginRecruiter,
+  adminCreateRecruiter, adminListRecruiters, adminResetRecruiterPassword, adminSetRecruiterActive, changeRecruiterPassword, loginRecruiter,
   recordRecruiterLogout, requireActiveRecruiter,
 } from './services/recruiterService.js';
 import { toRecruiterError as defaultToRecruiterError } from './recruiterVisibility.js';
@@ -89,6 +89,8 @@ export function adminRecruiterHandlers(deps = {}) {
       if (body.action !== 'enable' && body.action !== 'disable') throw Object.assign(new Error('INVALID_INPUT'), { code: 'INVALID_INPUT' });
       return json(await adminSetRecruiterActive(await param(ctx, 'id'), body.action === 'enable', { db, actorId: actorOf(user), reason: body.reason ?? null, now: now() }));
     }),
+    /** POST { newPassword } → reset (every session revoked; isActive never changed). Never echoes the password. */
+    resetPassword: safe(async (req, ctx, user) => json(await adminResetRecruiterPassword(await param(ctx, 'id'), await readJson(req), { db, actorId: actorOf(user), now: now() }))),
   };
 }
 
@@ -101,6 +103,18 @@ export function recruiterHandlers(deps = {}) {
       if (rateLimit(req, 'recruiter-auth', { max: 10, windowMs: 60_000 })) return json({ code: 'RATE_LIMITED' }, 429);
       const body = await readJson(req);
       const { token, recruiter } = await loginRecruiter(body.username, body.password, { db, now: now() });
+      return json({ recruiter: toRecruiterProfileView(recruiter) }, 200, { 'Set-Cookie': cookieHeader(token, RECRUITER_COOKIE_MAX_AGE) });
+    }),
+    /**
+     * PUT { currentPassword, newPassword, newPasswordConfirm } (withRecruiterAuth) → every older
+     * session is revoked; the caller gets a fresh cookie for the new session version.
+     */
+    changePassword: safe(async (req, _ctx, decoded) => {
+      const rid = typeof decoded?.recruiterId === 'string' ? decoded.recruiterId : '-';
+      if (rateLimit(req, `recruiter-password:${rid}`, { max: 5, windowMs: 15 * 60_000 })) return json({ code: 'RATE_LIMITED' }, 429);
+      const me = await requireActiveRecruiter(decoded, { db });
+      const body = await req.json().catch(() => undefined);
+      const { token, recruiter } = await changeRecruiterPassword(me.id, body, { db, now: now() });
       return json({ recruiter: toRecruiterProfileView(recruiter) }, 200, { 'Set-Cookie': cookieHeader(token, RECRUITER_COOKIE_MAX_AGE) });
     }),
     /** DELETE → clears the cookie (always 200); audited when the token is valid. */

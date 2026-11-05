@@ -23,7 +23,6 @@ process.env.JWT_SECRET = process.env.JWT_SECRET_TEST_ONLY || 'affiliate-activati
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { makeRecruiterFakeDb } from './lib/recruiterFakeDb.mjs';
@@ -289,8 +288,13 @@ console.log('\n6. Login: never before the admin approval; works after approval +
 {
   const asys = read('src/lib/services/affiliateSystemService.js');
   const login = asys.slice(asys.indexOf('export async function loginAffiliate'), asys.indexOf('// ── Profile'));
-  ok('loginAffiliate refuses an INACTIVE account BEFORE any password check or token (unchanged rule)',
-    login.indexOf('if (!affiliate.isActive)') > 0 && login.indexOf('if (!affiliate.isActive)') < login.indexOf('comparePassword') && login.indexOf('comparePassword') < login.indexOf('signToken'));
+  // Phase 6 part 2 (D4, docs §8): the password is now verified FIRST (an unknown identifier runs a
+  // dummy bcrypt compare), and "inactive" is only answered AFTER a correct password — still before
+  // any token: an inactive account never gets a session.
+  ok('loginAffiliate: password verified first (dummy hash for an unknown identifier), then an INACTIVE account is refused, and only then a token is signed',
+    login.indexOf('comparePassword(password, affiliate ? affiliate.password : LOGIN_TIMING_HASH)') > 0
+    && login.indexOf('comparePassword') < login.indexOf('if (!affiliate.isActive)')
+    && login.indexOf('if (!affiliate.isActive)') < login.indexOf('affiliateSessionToken(affiliate)'));
   const E = setup({ now: at(HOUR) });
   const r = await create(E, E.A);
   const id = r.body.affiliate.id;
@@ -473,19 +477,23 @@ console.log('\n11. Life-cycle guard and constraints (as in the migration)');
 // ── 12. existing systems unchanged ───────────────────────────────────────────
 console.log('\n12. Existing affiliate login, payouts, identity and admin creation unchanged');
 {
-  let diff = 'unavailable';
+  // Phase 6 part 2 (documented allowance, docs/recruiter-system.md §8): only the exact pinned Part 2
+  // diffs (session version, password-before-state login, audited admin reset, per-request account check).
+  const { checkUnchangedExceptPart2 } = await import('./lib/phase6Part2Allowance.mjs');
+  let p2;
   try {
-    diff = execFileSync('git', ['diff', 'd8f92dbd88f509c68453eaa1c96d9f5a7eddddda', '--', 'src/lib/services/affiliateSystemService.js', 'src/app/api/affiliate', 'src/lib/middleware',
-      'src/lib/services/authService.js', 'src/lib/balance', 'src/app/api/admin/affiliates', 'src/lib/services/identityService.js', 'src/app/api/admin/identity', 'src/app/api/admin/affiliate-payouts'], { cwd: ROOT, encoding: 'utf8' }).trim();
-  } catch (e) { diff = `git error ${e.status}`; }
-  ok('affiliate login, affiliate routes, middlewares, authService, balances, admin affiliate creation, identity and payouts: git diff vs d8f92db is empty', diff === '', diff.slice(0, 300));
+    p2 = checkUnchangedExceptPart2('d8f92dbd88f509c68453eaa1c96d9f5a7eddddda', ['src/lib/services/affiliateSystemService.js', 'src/app/api/affiliate', 'src/lib/middleware',
+      'src/lib/services/authService.js', 'src/lib/balance', 'src/app/api/admin/affiliates', 'src/lib/services/identityService.js', 'src/app/api/admin/identity', 'src/app/api/admin/affiliate-payouts']);
+  } catch (e) { p2 = { ok: false, error: `git error ${e.status}` }; }
+  ok('authService, balances, identity, admin identity and payouts are unchanged vs d8f92db; affiliate login / me / admin affiliates / withAffiliateAuth / affiliateSystemService differ ONLY by the exact pinned Phase 6 part 2 diff', p2.ok, JSON.stringify(p2));
   const asys = read('src/lib/services/affiliateSystemService.js');
   const adminCreate = asys.slice(asys.indexOf('export async function adminCreateAffiliate'), asys.indexOf('export async function adminUpdateAffiliate'));
   ok('adminCreateAffiliate still takes the admin-chosen password and creates the account inactive (admin flow unchanged)',
     /const hashed = await hashPassword\(password\);/.test(adminCreate) && /isActive:\s+false,/.test(adminCreate) && !/activation/i.test(adminCreate));
   const svc = stripJs(read('src/lib/services/affiliateActivationService.js'));
-  ok('the activation service only ever writes the affiliate PASSWORD (never isActive / any other column)',
-    (svc.match(/tx\.affiliate\.update\(/g) || []).length === 1 && /tx\.affiliate\.update\(\{ where: \{ id: affiliate\.id \}, data: \{ password: passwordHash \}/.test(svc) && !/isActive:\s*(true|false)/.test(svc));
+  ok('the activation service only ever writes the affiliate PASSWORD + the session-version bump (Phase 6 part 2) — never isActive / any other column',
+    (svc.match(/tx\.affiliate\.update\(/g) || []).length === 1
+    && /tx\.affiliate\.update\(\{ where: \{ id: affiliate\.id \}, data: \{ password: passwordHash, tokenVersion: \{ increment: 1 \} \}/.test(svc) && !/isActive:\s*(true|false)/.test(svc));
   ok('the public route creates no session (no Set-Cookie / signToken anywhere in the activation path)',
     !/signToken|Set-Cookie|set-cookie/.test(stripJs(read('src/lib/affiliateActivationHandlers.js'))) && !/signToken|Set-Cookie/.test(svc) && !/signToken|Set-Cookie/.test(stripJs(read('src/app/api/affiliate-activation/route.js'))));
 }

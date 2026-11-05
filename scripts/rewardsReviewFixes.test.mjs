@@ -93,11 +93,17 @@ console.log("\n2. Deactivated-affiliate policy");
   const tokA = signToken({ affiliateId: "A", type: "affiliate" }); // issued while A is active
   const ship = { fullName: "Salma Test", phone: "+212612345678", city: "Casablanca", address: "12 rue des Fleurs" };
   let seq = 0;
-  const callAll = async (token, pendingId) => {
+  // Phase 6 part 2: withAffiliateAuth reads the account on every request — the fake db is
+  // injected. `direct` calls the handler WITHOUT the middleware (decoded token passed as-is) to
+  // keep proving the handler's own AFFILIATE_INACTIVE guard (defence in depth).
+  const callAll = async (token, pendingId, { direct = false, as = "A" } = {}) => {
     const run = async (fn, { method = "GET", body, params = {} } = {}) => {
-      const res = await withAffiliateAuth(fn)(new Request("http://x/api/affiliate/rewards", {
+      const req = new Request("http://x/api/affiliate/rewards", {
         method, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}),
-      }), { params: Promise.resolve(params) });
+      });
+      const res = direct
+        ? await fn(req, { params: Promise.resolve(params) }, { affiliateId: as, type: "affiliate" })
+        : await withAffiliateAuth(fn, { db })(req, { params: Promise.resolve(params) });
       return { status: res.status, body: await res.json() };
     };
     return {
@@ -120,9 +126,14 @@ console.log("\n2. Deactivated-affiliate policy");
   const redBefore = db._tables.rewardRedemption.length;
   const off = await callAll(tokA, keep.id);
   for (const [name, r] of Object.entries(off)) {
-    ok(`deactivated (old token): ${name} → 403 AFFILIATE_INACTIVE`, r.status === 403 && r.body.code === "AFFILIATE_INACTIVE");
+    ok(`deactivated (old token): ${name} → 401 at the auth layer (Phase 6 part 2: inactive accounts are refused per request)`, r.status === 401);
   }
   ok("…no data leaked", !off.overview.body.points && !Array.isArray(off.redemptions.body) && !off.ledger.body.items);
+  const offDirect = await callAll(tokA, keep.id, { direct: true });
+  for (const [name, r] of Object.entries(offDirect)) {
+    ok(`deactivated, handler alone (auth layer bypassed): ${name} → 403 AFFILIATE_INACTIVE`, r.status === 403 && r.body.code === "AFFILIATE_INACTIVE");
+  }
+  ok("…handler alone: no data leaked either", !offDirect.overview.body.points && !Array.isArray(offDirect.redemptions.body) && !offDirect.ledger.body.items);
   ok("…nothing written (no request, no cancel/refund)", db._tables.rewardPointsLedger.length === ledgerBefore
     && db._tables.rewardRedemption.length === redBefore && db._tables.rewardRedemption.find((r) => r.id === keep.id).status === "PENDING_REVIEW");
 
@@ -136,7 +147,9 @@ console.log("\n2. Deactivated-affiliate policy");
   db._tables.affiliate.find((a) => a.id === "A").isActive = true;          // reactivated
   ok("reactivated → access restored", (await callAll(tokA, "none")).overview.status === 200);
   const ghost = await callAll(signToken({ affiliateId: "DELETED", type: "affiliate" }), "none");
-  ok("token for a deleted account → 403", Object.values(ghost).every((r) => r.status === 403));
+  ok("token for a deleted account → 401 at the auth layer (Phase 6 part 2: the account is read per request)", Object.values(ghost).every((r) => r.status === 401));
+  const ghostDirect = await callAll(signToken({ affiliateId: "DELETED", type: "affiliate" }), "none", { direct: true, as: "DELETED" });
+  ok("token for a deleted account, handler alone → 403", Object.values(ghostDirect).every((r) => r.status === 403));
   ok("books still balance", (await verifyAccountBalance("A", { db })).ok);
 }
 

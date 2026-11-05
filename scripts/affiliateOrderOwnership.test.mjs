@@ -190,11 +190,18 @@ console.log("\n6. Route wiring");
 // ── 7. Route behaviour (real handler, '@/' resolved to src/) ─────────────────
 // Only paths that return BEFORE any database query are exercised here, so no DB
 // is needed. JWT_SECRET is a throwaway test value, set only in this process.
+// Phase 6 part 2: withAffiliateAuth now reads the account (isActive + tokenVersion) on every
+// request. The narrowest seam: ONLY the middleware's own `../prisma.js` import is resolved to an
+// in-memory account table (one active affiliate "A", tokenVersion 0); every other module keeps
+// its real imports, and the handler paths below still return before any database query.
 console.log("\n7. Route request handling");
 {
   register(`data:text/javascript,${encodeURIComponent(`
     const SRC = ${JSON.stringify(new URL("../src/", import.meta.url).href)};
     export async function resolve(spec, ctx, next) {
+      if (spec === "../prisma.js" && String(ctx.parentURL || "").endsWith("/src/lib/middleware/withAffiliateAuth.js")) {
+        return { url: "data:text/javascript,export default globalThis.__affiliateAuthTestDb;", shortCircuit: true };
+      }
       if (spec.startsWith("@/")) {
         const base = SRC + spec.slice(2);
         try { return await next(base, ctx); } catch { return next(base + ".js", ctx); }
@@ -202,6 +209,15 @@ console.log("\n7. Route request handling");
       return next(spec, ctx);
     }`)}`);
   process.env.JWT_SECRET ||= "test-only-secret-not-used-anywhere-else";
+  const authReads = [];
+  globalThis.__affiliateAuthTestDb = {
+    affiliate: {
+      async findUnique({ where, select }) {
+        authReads.push({ where, select });
+        return where?.id === "A" ? { isActive: true, tokenVersion: 0 } : null;
+      },
+    },
+  };
   const { PUT } = await import("../src/app/api/affiliate/orders/route.js");
   const { signToken } = await import("../src/lib/services/authService.js");
   const token = signToken({ affiliateId: "A", username: "a", type: "affiliate" });
@@ -225,6 +241,8 @@ console.log("\n7. Route request handling");
     ok("status 'delivered' → 400 with message", inv.status === 400 && (await inv.json()).error === "Statut non autorisé");
     ok("object id → 400", (await call(JSON.stringify({ id: { in: ["x"] }, status: "cancelled" }))).status === 400);
     ok("no token → 401", (await call(JSON.stringify({ id: "a-pending", status: "cancelled" }), false)).status === 401);
+    ok("the auth layer read the account per request (by id, isActive + tokenVersion only)",
+      authReads.length === 9 && authReads.every((r) => r.where?.id === "A" && JSON.stringify(Object.keys(r.select || {})) === '["isActive","tokenVersion"]'));
   } finally {
     console.error = silence;
   }

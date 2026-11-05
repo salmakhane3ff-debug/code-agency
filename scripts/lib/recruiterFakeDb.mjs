@@ -34,8 +34,11 @@
  *                       ends), the recruiter row lock `SELECT "isActive" … FOR NO KEY UPDATE`, and
  *                       the relation filter `affiliate: { activationCodes: { some, none } }`.
  *                       `{ allowPasswordUpdate: true }` additionally allows `affiliate.update`
- *                       with data = { password } ONLY (the activation redemption); every other
- *                       affiliate update still throws.
+ *                       with data = { password, tokenVersion: { increment: 1 } } EXACTLY (the
+ *                       activation redemption / admin recovery: a password set revokes every
+ *                       older session — Phase 6 part 2); every other affiliate update still throws.
+ *                       Phase 6 part 2: recruiters carry tokenVersion (default 0); recruiter.update
+ *                       and recruiter.updateMany accept { increment } on it.
  *   Phase 6 recovery ({ recovery: true }, implies phase 5): `affiliateActivationRecovery`
  *                       (CHECKs of 20261108, ONE PENDING request per affiliate → P2002, the
  *                       guard: only PENDING → APPROVED | REJECTED once with the review columns;
@@ -189,13 +192,23 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
     c.locks.length = 0;
   }
 
+  // { field: { increment: n } } → the incremented number (Prisma atomic number operations).
+  function applyOps(row, data) {
+    const out = {};
+    for (const [k, v] of Object.entries(data || {})) {
+      if (v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date) && ('increment' in v || 'decrement' in v)) {
+        out[k] = (Number.isInteger(row[k]) ? row[k] : 0) + (v.increment ?? 0) - (v.decrement ?? 0);
+      } else out[k] = v;
+    }
+    return out;
+  }
   const recruiter = {
     async create({ data }) {
       await before('recruiter', 'create', { data });
       const now = new Date();
       const r = {
         id: randomUUID(), phone: null, isActive: true, canCreateAffiliates: true, canViewOrders: true,
-        disabledAt: null, disabledBy: null, disabledReason: null, lastLoginAt: null,
+        disabledAt: null, disabledBy: null, disabledReason: null, lastLoginAt: null, tokenVersion: 0,
         createdAt: now, updatedAt: now, ...clone(data),
       };
       if (T.recruiter.some((x) => x.username === r.username)) throw p2002('username');
@@ -223,13 +236,27 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
       const row = rows('recruiter').find((x) => x.id === where?.id);
       if (!row) throw Object.assign(new Error('Record to update not found.'), { code: 'P2025' });
       const prev = clone(row);
-      const next = { ...row, ...clone(data), updatedAt: new Date() };
+      const next = { ...row, ...applyOps(row, clone(data)), updatedAt: new Date() };
       if (next.username !== row.username && T.recruiter.some((x) => x !== row && x.username === next.username)) throw p2002('username');
       if (next.phone != null && next.phone !== row.phone && T.recruiter.some((x) => x !== row && x.phone === next.phone)) throw p2002('phone');
       checkRecruiter(next);
       Object.assign(row, next);
       undoPush(() => { Object.keys(row).forEach((k) => delete row[k]); Object.assign(row, prev); });
       return clone(row);
+    },
+    // Phase 6 part 2: the conditional password change (where id + passwordHash + isActive).
+    async updateMany({ where = {}, data } = {}) {
+      await before('recruiter', 'updateMany', { where, data });
+      if (where.id) await lockRecruiterRow(where.id);
+      const targets = rows('recruiter').filter((r) => Object.entries(where).every(([k, v]) => matchScalar(r[k], v)));
+      for (const row of targets) {
+        const prev = clone(row);
+        const next = { ...row, ...applyOps(row, clone(data)), updatedAt: new Date() };
+        checkRecruiter(next);
+        Object.assign(row, next);
+        undoPush(() => { Object.keys(row).forEach((k) => delete row[k]); Object.assign(row, prev); });
+      }
+      return { count: targets.length };
     },
   };
 
@@ -331,11 +358,15 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
       await before('affiliate', 'update', { where, data });
       const k = Object.keys(where || {});
       if (k.length !== 1 || k[0] !== 'id') throw new Error(`fake affiliate.update: unsupported where ${JSON.stringify(where)}`);
-      if (!data || Object.keys(data).join() !== 'password' || typeof data.password !== 'string') throw new Error(`fake affiliate.update: only { password } may change (got ${JSON.stringify(Object.keys(data || {}))})`);
+      if (!data || Object.keys(data).sort().join() !== 'password,tokenVersion' || typeof data.password !== 'string'
+        || JSON.stringify(data.tokenVersion) !== JSON.stringify({ increment: 1 })) {
+        throw new Error(`fake affiliate.update: only { password, tokenVersion: { increment: 1 } } may change (got ${JSON.stringify(data || {})})`);
+      }
       const r = rows('affiliate').find((x) => x.id === where.id);
       if (!r) throw Object.assign(new Error('Record to update not found.'), { code: 'P2025' });
       const prev = clone(r);
       r.password = data.password;
+      r.tokenVersion = (Number.isInteger(r.tokenVersion) ? r.tokenVersion : 0) + 1;
       r.updatedAt = new Date();
       undoPush(() => { Object.assign(r, prev); });
       return pick(r, select);

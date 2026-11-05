@@ -217,8 +217,9 @@ export async function redeemActivationCode(input, { db = prisma, now = new Date(
     }
     const used = await tx.affiliateActivationCode.updateMany({ where: { id: row.id, usedAt: null, invalidatedAt: null }, data: { usedAt: now } });
     if (used.count !== 1) return { ok: false };
-    // The password ONLY — the activation flag and everything else stay as they are.
-    await tx.affiliate.update({ where: { id: affiliate.id }, data: { password: passwordHash }, select: { id: true } });
+    // The password ONLY — the activation flag and everything else stay as they are. Any older
+    // session is revoked as for every password change (Phase 6 part 2: tokenVersion +1).
+    await tx.affiliate.update({ where: { id: affiliate.id }, data: { password: passwordHash, tokenVersion: { increment: 1 } }, select: { id: true } });
     const link = await tx.recruiterAffiliateLink.findUnique({ where: { affiliateId: affiliate.id }, select: { recruiterId: true } });
     await tx.recruiterAuditLog.create({
       data: {

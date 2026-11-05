@@ -48,15 +48,20 @@ async function postHandler(req) {
   }
 }
 
-async function putHandler(req) {
+async function putHandler(req, _ctx, user) {
   try {
     const body = await req.json();
     const { id, _id, ...data } = body;
     const affiliateId = id || _id;
 
     if (!affiliateId) return Response.json({ error: 'id requis' }, { status: 400 });
+    // Phase 6 part 2: a password reset follows the affiliate policy (6–128 characters).
+    if (typeof data.password === 'string' && data.password.trim() && (data.password.length < 6 || data.password.length > 128)) {
+      return Response.json({ error: 'Le mot de passe doit contenir entre 6 et 128 caractères' }, { status: 400 });
+    }
 
-    const affiliate = await adminUpdateAffiliate(affiliateId, data);
+    const actorId = user?.userId ? String(user.userId) : user?.email ? String(user.email) : user?.id ? String(user.id) : null;
+    const affiliate = await adminUpdateAffiliate(affiliateId, data, { actorId });
     return Response.json(affiliate);
   } catch (err) {
     console.error('Admin affiliates PUT error:', err);

@@ -219,9 +219,14 @@ console.log('\n1e. Data sources: real delivered orders (isFake = false) and the 
     loginBody.length > 200 && !/identity|APPROVED/i.test(stripJs(loginBody)) && !/identity|APPROVED/i.test(stripJs(authRoute)) && /loginAffiliate\(/.test(authRoute));
   ok('the affiliate identity route only reads the status / submits (getIdentityStatus, submitIdentity — no admin function)',
     (() => { const r = stripJs(read('src/app/api/affiliate/identity/route.js')); return /submitIdentity/.test(r) && !/adminApproveIdentity|adminRejectIdentity|adminResetIdentity|status:\s*'APPROVED'/.test(r); })());
-  ok('identityService.js, the affiliate identity / login routes, affiliateSystemService.js, ugcService.js and ugcStatus.js are unchanged versus the base ef79c6b (git diff empty)',
-    git(['diff', 'ef79c6bb1e445c964f915effe558e817844db9f0', '--', 'src/lib/services/identityService.js', 'src/app/api/affiliate/identity/route.js',
-      'src/app/api/affiliate/auth/route.js', 'src/lib/services/affiliateSystemService.js', 'src/lib/services/ugcService.js', 'src/lib/ugcStatus.js']) === '');
+  // Phase 6 part 2 (documented allowance, docs/recruiter-system.md §8): the affiliate login route
+  // (trusted-proxy limiter) and affiliateSystemService (session version, password-before-state
+  // login, audited admin reset) changed by EXACTLY their pinned Part 2 diff; everything else is unchanged.
+  const { checkUnchangedExceptPart2 } = await import('./lib/phase6Part2Allowance.mjs');
+  const p2 = checkUnchangedExceptPart2('ef79c6bb1e445c964f915effe558e817844db9f0', ['src/lib/services/identityService.js', 'src/app/api/affiliate/identity/route.js',
+    'src/app/api/affiliate/auth/route.js', 'src/lib/services/affiliateSystemService.js', 'src/lib/services/ugcService.js', 'src/lib/ugcStatus.js']);
+  ok('identityService.js, the affiliate identity route, ugcService.js and ugcStatus.js are unchanged versus the base ef79c6b; the affiliate login route and affiliateSystemService.js differ ONLY by the exact pinned Phase 6 part 2 diff',
+    p2.ok && JSON.stringify(p2.allowed) === JSON.stringify(['src/app/api/affiliate/auth/route.js', 'src/lib/services/affiliateSystemService.js']), JSON.stringify(p2));
   // Phase 5 (documented allowance, docs/recruiter-system.md §6): the admin identity route only
   // gained the post-commit recruiter reward hook around the UNCHANGED adminApproveIdentity call.
   const idDiff = git(['diff', 'ef79c6bb1e445c964f915effe558e817844db9f0', '--', 'src/app/api/admin/identity/route.js'])
@@ -370,8 +375,11 @@ console.log('\n3. Prisma schema (vs pre-recruiter base ef79c6b)');
   const hl = H.get('model Affiliate').split('\n'), nl = N.get('model Affiliate').split('\n');
   const extra = nl.filter((l) => !hl.includes(l));
   const missing = hl.filter((l) => !nl.includes(l));
-  ok('Affiliate gained only the 2 back-relation fields (+ their comment) and the Phase 6 activationCodes / activationRecoveries back-relations; no line removed or altered',
-    missing.length === 0 && extra.length === 5
+  ok('Affiliate gained only the 2 back-relation fields (+ their comment), the Phase 6 activationCodes / activationRecoveries back-relations and the Phase 6 part 2 tokenVersion field (+ its 2-line comment); no line removed or altered',
+    missing.length === 0 && extra.length === 8
+    && extra.includes('  // Session version (Phase 6 part 2): every token carries it; bumped on disable / enable /')
+    && extra.includes('  // password change / admin reset, so older tokens are rejected (a token without it = 0).')
+    && extra.includes('  tokenVersion         Int                     @default(0)')
     && extra.includes('  activationCodes      AffiliateActivationCode[]')
     && extra.includes('  activationRecoveries AffiliateActivationRecovery[]')
     && extra.some((l) => /^\s+recruiterLink\s+RecruiterAffiliateLink\?\s*$/.test(l))

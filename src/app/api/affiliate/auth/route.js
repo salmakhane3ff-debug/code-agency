@@ -11,7 +11,8 @@
  */
 
 import { loginAffiliate } from '@/lib/services/affiliateSystemService';
-import { rateLimit }      from '@/lib/rateLimit';
+// Phase 6 part 2: keyed on the TRUSTED client IP only (src/lib/trustedProxy.js).
+import { trustedRateLimit as rateLimit } from '@/lib/trustedProxy';
 
 const COOKIE_MAX_AGE = 7 * 24 * 60 * 60; // 7 days
 
@@ -40,6 +41,10 @@ export async function POST(req) {
   } catch (err) {
     if (err.code === 'INVALID_CREDENTIALS' || err.code === 'INACTIVE') {
       return Response.json({ error: err.message }, { status: 401 });
+    }
+    // Phase 6 part 2 (D5): per-account throttle — the same answer for every account / identifier.
+    if (err.code === 'LOGIN_THROTTLED') {
+      return Response.json({ error: 'Trop de tentatives. Réessayez plus tard.', code: 'RATE_LIMITED' }, { status: 429 });
     }
     console.error('Affiliate auth error:', err);
     return Response.json({ error: 'Erreur serveur' }, { status: 500 });

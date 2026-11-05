@@ -41,6 +41,9 @@ const FIELD_LABELS = {
   bankName: { INVALID_BANK_NAME: "اسم البنك مطلوب (80 حرفاً على الأكثر، بدون < و >)." },
   rib: { INVALID_RIB: "رقم RIB يجب أن يكون بين 10 و34 حرفاً/رقماً" },
   accountName: { INVALID_ACCOUNT_NAME: "اسم صاحب الحساب مطلوب (80 حرفاً على الأكثر، بدون < و >)." },
+  // Phase 6 part 2: password change
+  newPassword: { INVALID_PASSWORD: "كلمة السر يجب أن تكون بين 8 و128 حرفاً" },
+  newPasswordConfirm: { PASSWORD_MISMATCH: "كلمتا السر غير متطابقتين" },
 };
 export const GENERIC_FIELD_ERROR = "قيمة غير صالحة.";
 

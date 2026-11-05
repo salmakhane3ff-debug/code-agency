@@ -99,6 +99,9 @@ export const RECRUITER_FIELD_ERROR_CODES = Object.freeze({
   bankName: Object.freeze(['INVALID_BANK_NAME']),
   rib: Object.freeze(['INVALID_RIB']),
   accountName: Object.freeze(['INVALID_ACCOUNT_NAME']),
+  // Phase 6 part 2: password change
+  newPassword: Object.freeze(['INVALID_PASSWORD']),
+  newPasswordConfirm: Object.freeze(['PASSWORD_MISMATCH']),
 });
 
 /**

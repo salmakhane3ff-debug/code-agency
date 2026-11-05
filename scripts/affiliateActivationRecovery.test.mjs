@@ -19,7 +19,6 @@ process.env.JWT_SECRET = process.env.JWT_SECRET_TEST_ONLY || 'activation-recover
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { makeRecruiterFakeDb } from './lib/recruiterFakeDb.mjs';
 
@@ -133,12 +132,27 @@ console.log('\n1. A valid recovery request');
   const E = setup();
   const a = await hijacked(E);
   const before = audits(E).length;
-  const r = await ask(E, { identifier: a.username.toUpperCase(), message: `  ${MSG}  `, contactPhone: '06 12 34 56 78' }, { ip: '10.9.8.7' });
+  // Phase 6 part 2 (D6): the request IP is recorded ONLY when a configured trusted proxy vouches for
+  // it — here TRUSTED_PROXY_MODE=proxy (last x-forwarded-for hop), for this one request.
+  const savedMode = process.env.TRUSTED_PROXY_MODE;
+  process.env.TRUSTED_PROXY_MODE = 'proxy';
+  let r;
+  try { r = await ask(E, { identifier: a.username.toUpperCase(), message: `  ${MSG}  `, contactPhone: '06 12 34 56 78' }, { ip: '10.9.8.7' }); }
+  finally { if (savedMode === undefined) delete process.env.TRUSTED_PROXY_MODE; else process.env.TRUSTED_PROXY_MODE = savedMode; }
   ok('an inactive code-flow affiliate → 202 { ok:true }, no-store, no cookie', r.status === 202 && r.text === OK202 && /no-store/.test(r.cache || '') && !r.cookie, r.text);
   const rows = recoveries(E, a.id);
-  ok('exactly 1 PENDING request: trimmed message, normalised contact phone, request IP, requestedAt = now, no review fields',
+  ok('exactly 1 PENDING request: trimmed message, normalised contact phone, the TRUSTED request IP, requestedAt = now, no review fields',
     rows.length === 1 && rows[0].status === 'PENDING' && rows[0].message === MSG && rows[0].contactPhone === '0612345678' && rows[0].requestIp === '10.9.8.7'
     && new Date(rows[0].requestedAt).getTime() === T0.getTime() && rows[0].reviewedBy === null && rows[0].reviewedAt === null && rows[0].reviewNote === null && rows[0].activationCodeId === null, big(rows));
+  // Without a trusted-proxy configuration, a client-supplied x-forwarded-for is NEVER recorded.
+  const E2 = setup();
+  const a2 = await hijacked(E2);
+  const savedMode2 = process.env.TRUSTED_PROXY_MODE;
+  delete process.env.TRUSTED_PROXY_MODE;
+  try { await ask(E2, { identifier: a2.username, message: MSG }, { ip: '203.0.113.66' }); }
+  finally { if (savedMode2 !== undefined) process.env.TRUSTED_PROXY_MODE = savedMode2; }
+  const rows2 = recoveries(E2, a2.id);
+  ok('no trusted proxy configured → a spoofable x-forwarded-for is NOT recorded (requestIp null)', rows2.length === 1 && rows2[0].requestIp === null, big(rows2));
   const au = audits(E, 'ACTIVATION_RECOVERY_REQUESTED');
   ok('exactly 1 ACTIVATION_RECOVERY_REQUESTED audit row: SYSTEM / PUBLIC_FORM, recruiterId null, entity = the affiliate, details = { recoveryId }',
     audits(E).length === before + 1 && au.length === 1 && au[0].actorType === 'SYSTEM' && au[0].actorId === 'PUBLIC_FORM' && au[0].recruiterId === null
@@ -435,8 +449,8 @@ console.log('\n8. An active affiliate cannot be reset through the recovery');
   const ne = await review(N, seeded.id, { action: 'approve' });
   ok('an affiliate without any activation code (not the code flow) → 409 NOT_ELIGIBLE, the request stays PENDING', ne.status === 409 && ne.body.code === 'NOT_ELIGIBLE' && recoveries(N, odd.id)[0].status === 'PENDING', ne.text);
   const svc = stripJs(read('src/lib/services/affiliateActivationRecoveryService.js'));
-  ok('the recovery service never writes isActive (it only reads it) and only writes the affiliate password', !/data:\s*\{[^}]*isActive/.test(svc) && (svc.match(/tx\.affiliate\.update\(/g) || []).length === 1
-    && /tx\.affiliate\.update\(\{ where: \{ id: r\.affiliateId \}, data: \{ password: newHash \}/.test(svc));
+  ok('the recovery service never writes isActive (it only reads it) and only writes the affiliate password + the session-version bump (Phase 6 part 2)', !/data:\s*\{[^}]*isActive/.test(svc) && (svc.match(/tx\.affiliate\.update\(/g) || []).length === 1
+    && /tx\.affiliate\.update\(\{ where: \{ id: r\.affiliateId \}, data: \{ password: newHash, tokenVersion: \{ increment: 1 \} \}/.test(svc));
 }
 
 // ── 9. failure atomicity ─────────────────────────────────────────────────────
@@ -476,12 +490,14 @@ console.log('\n10. No plaintext code in the database, the audit or the logs');
 // ── 11. existing flows intact; migration (static) ────────────────────────────
 console.log('\n11. Existing flows unchanged; migration 20261108 (static)');
 {
-  let diff = 'unavailable';
+  // Phase 6 part 2 (documented allowance, docs/recruiter-system.md §8): only the exact pinned Part 2 diffs.
+  const { checkUnchangedExceptPart2 } = await import('./lib/phase6Part2Allowance.mjs');
+  let p2;
   try {
-    diff = execFileSync('git', ['diff', 'd8f92dbd88f509c68453eaa1c96d9f5a7eddddda', '--', 'src/lib/services/affiliateSystemService.js', 'src/app/api/affiliate', 'src/lib/middleware',
-      'src/lib/services/authService.js', 'src/lib/balance', 'src/app/api/admin/affiliates', 'src/app/api/admin/identity'], { cwd: ROOT, encoding: 'utf8' }).trim();
-  } catch (e) { diff = `git error ${e.status}`; }
-  ok('affiliateSystemService, /api/affiliate, the middlewares, authService, balances, admin affiliates and admin identity are unchanged versus d8f92db', diff === '', diff.slice(0, 300));
+    p2 = checkUnchangedExceptPart2('d8f92dbd88f509c68453eaa1c96d9f5a7eddddda', ['src/lib/services/affiliateSystemService.js', 'src/app/api/affiliate', 'src/lib/middleware',
+      'src/lib/services/authService.js', 'src/lib/balance', 'src/app/api/admin/affiliates', 'src/app/api/admin/identity']);
+  } catch (e) { p2 = { ok: false, error: `git error ${e.status}` }; }
+  ok('authService, balances and admin identity are unchanged versus d8f92db; affiliateSystemService, /api/affiliate, withAffiliateAuth and admin affiliates differ ONLY by the exact pinned Phase 6 part 2 diff', p2.ok, JSON.stringify(p2));
   const asys = read('src/lib/services/affiliateSystemService.js');
   ok('the admin affiliate approval (isActive via adminUpdateAffiliate) is untouched and the login still requires an active account',
     /if \(data\.isActive\s+!== undefined\) update\.isActive\s+= Boolean\(data\.isActive\);/.test(asys) && /if \(!affiliate\.isActive\)/.test(asys));

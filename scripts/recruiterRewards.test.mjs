@@ -668,8 +668,12 @@ console.log('\n9. Isolation: own wallet only, auth wrappers, every payout query 
 // ── 10. the affiliate side is unchanged ───────────────────────────────────────
 console.log('\n10. Affiliate payouts / balances unchanged and blind to recruiter rows');
 {
-  const d = git(['diff', PHASE4_HEAD, '--', 'src/lib/services/affiliateSystemService.js', 'src/lib/services/identityService.js', 'src/app/api/affiliate', 'src/lib/balance']);
-  ok('affiliateSystemService, identityService, every /api/affiliate route and the balance providers are unchanged versus 47d3254 (git diff empty)', d === '', d.slice(0, 300));
+  // Phase 6 part 2 (documented allowance, docs/recruiter-system.md §8): only the exact pinned Part 2
+  // diffs of affiliateSystemService / the affiliate login & me routes; identity and the balance providers are unchanged.
+  const { checkUnchangedExceptPart2 } = await import('./lib/phase6Part2Allowance.mjs');
+  const p2 = checkUnchangedExceptPart2(PHASE4_HEAD, ['src/lib/services/affiliateSystemService.js', 'src/lib/services/identityService.js', 'src/app/api/affiliate', 'src/lib/balance']);
+  ok('identityService and the balance providers are unchanged versus 47d3254; affiliateSystemService and the /api/affiliate routes differ ONLY by the exact pinned Phase 6 part 2 diff (no payout / balance code touched)',
+    p2.ok && p2.allowed.every((f) => ['src/lib/services/affiliateSystemService.js', 'src/app/api/affiliate/auth/route.js', 'src/app/api/affiliate/me/route.js'].includes(f)), JSON.stringify(p2));
   const E = setup();
   const x = E.db._seed.affiliate({ username: 'x1' });
   const y = E.db._seed.affiliate({ username: 'y1' });

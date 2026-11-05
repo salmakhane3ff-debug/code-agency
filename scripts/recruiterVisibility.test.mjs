@@ -251,8 +251,9 @@ console.log('\n7b. Phase 3 — allowlisted field errors and the network affiliat
 {
   const E = V.toRecruiterError;
   const F = V.RECRUITER_FIELD_ERROR_CODES;
-  ok('field-code allowlist: exactly 11 fields with their codes (Phase 5 adds amountMad, bankName, rib, accountName), deeply frozen',
-    eq(Object.keys(F).sort(), ['accountName', 'amountMad', 'bankName', 'body', 'name', 'parentId', 'password', 'phone', 'requestId', 'rib', 'username'])
+  ok('field-code allowlist: exactly 13 fields with their codes (Phase 5 adds amountMad, bankName, rib, accountName; Phase 6 part 2 adds newPassword, newPasswordConfirm), deeply frozen',
+    eq(Object.keys(F).sort(), ['accountName', 'amountMad', 'bankName', 'body', 'name', 'newPassword', 'newPasswordConfirm', 'parentId', 'password', 'phone', 'requestId', 'rib', 'username'])
+    && eq(F.newPassword, ['INVALID_PASSWORD']) && eq(F.newPasswordConfirm, ['PASSWORD_MISMATCH'])
     && eq(F.amountMad, ['INVALID_AMOUNT']) && eq(F.bankName, ['INVALID_BANK_NAME']) && eq(F.rib, ['INVALID_RIB']) && eq(F.accountName, ['INVALID_ACCOUNT_NAME'])
     && eq(F.username, ['INVALID_USERNAME']) && eq(F.name, ['INVALID_NAME']) && eq(F.password, ['INVALID_PASSWORD']) && eq(F.phone, ['INVALID_PHONE'])
     && eq(F.parentId, ['INVALID_PARENT']) && eq(F.requestId, ['INVALID_REQUEST_ID']) && eq(F.body, ['UNKNOWN_FIELD'])

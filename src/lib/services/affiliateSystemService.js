@@ -8,6 +8,7 @@
 
 import prisma                            from '../prisma.js';
 import { hashPassword, comparePassword, signToken } from './authService.js';
+import { checkLock, clearFailures, registerFailure, sweep, throttleKey } from '../loginThrottle.js';
 import {
   registerBalanceProvider, computeRegisteredBalance, BALANCE_PRIORITY,
 } from '../balance/providerRegistry.js';
@@ -194,20 +195,51 @@ function mapOrder(o, rawData = null) {
  * Login with username + password.
  * Returns { token, affiliate } or throws.
  */
-export async function loginAffiliate(username, password) {
+// A real bcrypt hash (cost 12) of a random string: compared when the identifier is unknown,
+// so an unknown account and a wrong password take about the same time (Phase 6 part 2).
+const LOGIN_TIMING_HASH = '$2a$12$C6UzMDM.H6dfI/f/IKcEeO5nBy2tQZcq2Yk1i3mUyQq3u1q0nJx7S';
+
+/** A session token bound to the affiliate's current tokenVersion (claim "tv"). */
+export function affiliateSessionToken(a) {
+  return signToken({ affiliateId: a.id, username: a.username, type: 'affiliate', tv: Number.isInteger(a.tokenVersion) ? a.tokenVersion : 0 });
+}
+
+// Per-ACCOUNT failed-login throttle (Phase 6 part 2, D5): 5 failures per 15-minute fixed
+// window (src/lib/loginThrottle.js), in this process — production runs ONE web instance.
+// Independent of the per-IP limiter of the route. The key is the matched account (so its
+// username and its phone share ONE counter), else the normalized identifier: an unknown
+// identifier locks exactly like a real one, so a lock reveals nothing.
+const affiliateLoginFailures = new Map();
+let affiliateLoginCalls = 0;
+/** Test hook: the throttle store (never exported to routes). */
+export const __affiliateLoginThrottleStore = affiliateLoginFailures;
+
+export async function loginAffiliate(username, password, { throttle = affiliateLoginFailures, now = () => Date.now() } = {}) {
   const input = username.toLowerCase().trim();
   // Accept login by username OR phone number
   const affiliate = await prisma.affiliate.findFirst({
     where: { OR: [{ username: input }, { phone: input }] },
   });
 
-  if (!affiliate) throw Object.assign(new Error('Identifiant ou mot de passe incorrect'), { code: 'INVALID_CREDENTIALS' });
+  // D5 — check AND reserve this attempt in ONE synchronous step, BEFORE the (slow) password
+  // comparison: concurrent attempts cannot all pass the check, at most 5 per window are
+  // evaluated. A correct password clears the counter.
+  const key = affiliate ? `affiliate:${affiliate.id}` : `affiliate-id:${throttleKey(input)}`;
+  const t = now();
+  if ((affiliateLoginCalls += 1) % 100 === 0) sweep(throttle, t);
+  if (checkLock(throttle, key, t).locked) {
+    throw Object.assign(new Error('Trop de tentatives. Réessayez plus tard.'), { code: 'LOGIN_THROTTLED' });
+  }
+  registerFailure(throttle, key, t);
+
+  // Phase 6 part 2: the password is checked BEFORE the activation state, so "inactive" is only
+  // ever said to someone who knows the password (no account / state enumeration).
+  const valid = await comparePassword(password, affiliate ? affiliate.password : LOGIN_TIMING_HASH);
+  if (!affiliate || !valid) throw Object.assign(new Error('Identifiant ou mot de passe incorrect'), { code: 'INVALID_CREDENTIALS' });
+  clearFailures(throttle, key); // the right password: not a guessing attempt
   if (!affiliate.isActive) throw Object.assign(new Error('Compte inactif. Contactez l\'administrateur.'), { code: 'INACTIVE' });
 
-  const valid = await comparePassword(password, affiliate.password);
-  if (!valid)  throw Object.assign(new Error('Identifiant ou mot de passe incorrect'), { code: 'INVALID_CREDENTIALS' });
-
-  const token = signToken({ affiliateId: affiliate.id, username: affiliate.username, type: 'affiliate' });
+  const token = affiliateSessionToken(affiliate);
   return { token, affiliate: mapAffiliate(affiliate) };
 }
 
@@ -233,6 +265,7 @@ export async function updateAffiliateProfile(id, data) {
   if (data.commissionRate !== undefined) update.commissionRate = parseFloat(data.commissionRate);
   if (data.password  !== undefined && data.password.trim()) {
     update.password = await hashPassword(data.password);
+    update.tokenVersion = { increment: 1 }; // Phase 6 part 2: revokes every older session
   }
 
   // Avatar URL — freely updatable
@@ -1086,7 +1119,7 @@ export async function adminCreateAffiliate({ name, username, password, commissio
   return mapAffiliate(a);
 }
 
-export async function adminUpdateAffiliate(id, data, { db = prisma } = {}) {
+export async function adminUpdateAffiliate(id, data, { db = prisma, actorId = null } = {}) {
   const update = {};
   if (data.name           !== undefined) update.name           = data.name;
   if (data.commissionRate !== undefined) update.commissionRate = parseFloat(data.commissionRate);
@@ -1104,12 +1137,32 @@ export async function adminUpdateAffiliate(id, data, { db = prisma } = {}) {
     const n = parseInt(data.goalValidReferrals, 10);
     update.goalValidReferrals = Number.isInteger(n) ? n : null;
   }
-  const before = update.isActive === true
+  const before = update.isActive !== undefined
     ? await db.affiliate.findUnique({ where: { id }, select: { isActive: true } })
     : null;
-  const a = await db.affiliate.update({ where: { id }, data: update });
+  // Phase 6 part 2: a real activation change or a password reset revokes every older session
+  // (tokenVersion +1), and is audited. Re-saving the same activation state changes nothing.
+  const activationChanged = !!before && before.isActive !== update.isActive;
+  const passwordReset = update.password !== undefined;
+  if (activationChanged || passwordReset) update.tokenVersion = { increment: 1 };
+  const auditRows = [
+    ...(passwordReset ? [{ action: 'AFFILIATE_PASSWORD_RESET', details: null }] : []),
+    ...(activationChanged ? [{ action: update.isActive ? 'AFFILIATE_ENABLED' : 'AFFILIATE_DISABLED', details: { sessionsRevoked: true } }] : []),
+  ];
+  const write = async (tx) => {
+    const row = await tx.affiliate.update({ where: { id }, data: update });
+    for (const r of auditRows) {
+      // The password reset records the account's ACTUAL activation state after the write.
+      const details = r.details ?? { sessionsRevoked: true, isActive: row.isActive === true };
+      await tx.recruiterAuditLog.create({
+        data: { recruiterId: null, actorType: 'ADMIN', actorId: actorId || 'ADMIN', action: r.action, entityType: 'affiliate', entityId: id, details },
+      });
+    }
+    return row;
+  };
+  const a = auditRows.length && typeof db.$transaction === 'function' ? await db.$transaction(write) : await write(db);
   // Rewards: signup bonus on the first inactive → active switch (post-commit, never throws).
-  if (before) await onAffiliateActivationCommitted(id, { wasActive: before.isActive, isActive: a.isActive, db });
+  if (update.isActive === true && before) await onAffiliateActivationCommitted(id, { wasActive: before.isActive, isActive: a.isActive, db });
   return mapAffiliate(a);
 }
 

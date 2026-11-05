@@ -298,6 +298,9 @@ model Affiliate {
   bonusBalance         Float                   @default(0) // credited on bonus claim
   goalOrders           Int? // Objectif commandes (per-affiliate; null → default 5)
   goalValidReferrals   Int? // Objectif parrainages valides (per-affiliate; null → computed)
+  // Session version (Phase 6 part 2): every token carries it; bumped on disable / enable /
+  // password change / admin reset, so older tokens are rejected (a token without it = 0).
+  tokenVersion         Int                     @default(0)
   clicks               AffiliateClick[]
   notifications        AffiliateNotification[]
   affiliateOrders      AffiliateOrder[]
@@ -1928,6 +1931,8 @@ model Recruiter {
   bankName            String?
   rib                 String?
   accountName         String?
+  // Session version (Phase 6 part 2): bumped on disable / enable / password change / reset.
+  tokenVersion        Int                        @default(0)
   affiliateLinks      RecruiterAffiliateLink[]
   rewards             RecruiterRewardLedger[]
   auditLogs           RecruiterAuditLog[]

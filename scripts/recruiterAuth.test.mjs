@@ -21,7 +21,6 @@ process.env.JWT_SECRET = process.env.JWT_SECRET_TEST_ONLY || 'recruiter-auth-tes
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 
 import { readFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import jwt from 'jsonwebtoken';
@@ -350,8 +349,14 @@ console.log('\n5. /api/recruiter/me');
   ok('…and the response clears the cookie (recruiter_token=; HttpOnly; Path=/api/recruiter; Max-Age=0; SameSite=Strict)',
     /^recruiter_token=; HttpOnly; Path=\/api\/recruiter; Max-Age=0; SameSite=Strict$/.test(after.setCookie || ''), after.setCookie);
   await call(A.admin.setActive, req(`/api/admin/recruiters/${id}`, { method: 'PATCH', body: { action: 'enable' }, ...asAdmin() }), ctx(id));
+  // Phase 6 part 2 (D1): disabling AND re-enabling bump tokenVersion — a re-enabled account never
+  // revives a token issued before; a fresh login does work.
   const reEnabled = track(await meVia(A, token));
-  ok('re-enabled → the same token works again (state is read per request)', reEnabled.status === 200);
+  ok('re-enabled → the OLD token stays refused (401 UNAUTHORIZED, cookie cleared): re-enabling never revives a session',
+    reEnabled.status === 401 && eq(reEnabled.body, { code: 'UNAUTHORIZED' }) && /recruiter_token=; .*Max-Age=0/.test(reEnabled.setCookie || ''));
+  const relogin = await loginVia(A, { username: 'ali.r', password: VALID.password });
+  const freshToken = cookieOf(relogin.setCookie);
+  ok('…a fresh login after re-enabling works (new token, /me 200)', relogin.status === 200 && freshToken && freshToken !== token && (await meVia(A, freshToken)).status === 200);
   ok('/me reads only the recruiter table (no audit write, no other model)', (() => {
     const before = A.db._log.length;
     return meVia(A, token).then(() => A.db._log.slice(before).every((l) => l.model === 'recruiter' && l.op === 'findUnique'));
@@ -425,7 +430,11 @@ console.log('\n7. Cross-isolation (admin / affiliate / recruiter)');
 
   // recruiter token on an affiliate-protected handler
   let affiliateCalled = 0;
-  const affHandler = withAffiliateAuth(async () => { affiliateCalled++; return Response.json({ ok: true }); });
+  // Phase 6 part 2: withAffiliateAuth reads the account per request — a minimal account table
+  // (aff-1 active, tokenVersion 0) is injected; recruiter / admin tokens are refused before any read.
+  const affAccountReads = [];
+  const affDb = { affiliate: { async findUnique({ where }) { affAccountReads.push(where?.id); return where?.id === 'aff-1' ? { isActive: true, tokenVersion: 0 } : null; } } };
+  const affHandler = withAffiliateAuth(async () => { affiliateCalled++; return Response.json({ ok: true }); }, { db: affDb });
   const viaAffCookie = await affHandler(req('/api/affiliate/x', { cookie: `affiliate_token=${rTok}` }));
   const viaBearer = await affHandler(req('/api/affiliate/x', { bearer: rTok }));
   const viaOwnCookie = await affHandler(req('/api/affiliate/x', { cookie: `${RECRUITER_COOKIE}=${rTok}` }));
@@ -434,6 +443,7 @@ console.log('\n7. Cross-isolation (admin / affiliate / recruiter)');
     viaAffCookie.status === 401 && viaBearer.status === 401 && viaOwnCookie.status === 401 && adminOnAff.status === 401 && affiliateCalled === 0);
   const realAff = await affHandler(req('/api/affiliate/x', { bearer: affiliateToken() }));
   ok('control: a real affiliate token still passes withAffiliateAuth', realAff.status === 200 && affiliateCalled === 1);
+  ok('…and the recruiter / admin tokens were refused BEFORE any account read (only the real affiliate token was looked up)', JSON.stringify(affAccountReads) === '["aff-1"]');
 
   // admin / affiliate tokens on the recruiter routes
   const adminOnMe = track(await meVia(A, adminToken()));
@@ -522,12 +532,17 @@ console.log('\n9. Static wiring and model isolation');
   try { void probe.affiliate.findMany; } catch { threw = true; }
   ok('the fake db refuses access to any other model (so every flow above used recruiter / recruiterAuditLog only)', threw);
 
-  let diff = 'unavailable';
+  // Phase 6 part 2 (documented allowance, docs/recruiter-system.md §8): withAffiliateAuth (per-request
+  // session check) and rateLimit.js (the additive rateLimitStoreKey export) differ from the commit Part 2
+  // started from by EXACTLY their pinned diff; withAdminAuth, withAuth, authService and the Edge middleware are unchanged.
+  const { checkUnchangedExceptPart2, PART2_BASE } = await import('./lib/phase6Part2Allowance.mjs');
+  let p2;
   try {
-    diff = execFileSync('git', ['diff', '--stat', 'HEAD', '--', 'src/lib/middleware/withAdminAuth.js', 'src/lib/middleware/withAffiliateAuth.js',
-      'src/lib/middleware/withAuth.js', 'src/lib/services/authService.js', 'src/middleware.jsx', 'src/lib/rateLimit.js'], { cwd: ROOT, encoding: 'utf8' }).trim();
-  } catch (e) { diff = `git error ${e.status}`; }
-  ok('existing auth middlewares, authService, the Edge middleware and rateLimit are unchanged versus HEAD (git diff empty)', diff === '', diff);
+    p2 = checkUnchangedExceptPart2(PART2_BASE, ['src/lib/middleware/withAdminAuth.js', 'src/lib/middleware/withAffiliateAuth.js',
+      'src/lib/middleware/withAuth.js', 'src/lib/services/authService.js', 'src/middleware.jsx', 'src/lib/rateLimit.js']);
+  } catch (e) { p2 = { ok: false, error: `git error ${e.status}` }; }
+  ok('withAdminAuth, withAuth, authService and the Edge middleware are unchanged; withAffiliateAuth and rateLimit differ ONLY by the exact pinned Phase 6 part 2 diff',
+    p2.ok && p2.allowed.every((f) => ['src/lib/middleware/withAffiliateAuth.js', 'src/lib/rateLimit.js'].includes(f)), JSON.stringify(p2));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

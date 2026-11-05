@@ -15,7 +15,7 @@
  */
 
 import prisma from './prisma.js';
-import { rateLimit as defaultRateLimit } from './rateLimit.js';
+import { trustedRateLimit as defaultRateLimit } from './trustedProxy.js'; // Phase 6 part 2: trusted client IP only
 import { redeemActivationCode } from './services/affiliateActivationService.js';
 
 export const ACTIVATION_RATE = Object.freeze({ ip: { max: 10, windowMs: 60_000 }, code: { max: 5, windowMs: 15 * 60_000 } });

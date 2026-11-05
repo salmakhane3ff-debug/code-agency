@@ -7,6 +7,7 @@ import { withAffiliateAuth }              from '@/lib/middleware/withAffiliateAu
 import prisma                             from '@/lib/prisma';
 import {
   getAffiliateById,
+  affiliateSessionToken,
   updateAffiliateBank,
   updateAffiliateProfile,
   loginAffiliate as _loginAffiliate,
@@ -17,6 +18,13 @@ import {
   computeMemberCommissionPct,
 } from '@/lib/services/affiliateSystemService';
 import { comparePassword } from '@/lib/services/authService';
+import { trustedRateLimit } from '@/lib/trustedProxy';
+
+// Phase 6 part 2: the existing affiliate password policy (6 characters, as the dashboard
+// already requires), now enforced by the server too.
+const PASSWORD_MIN = 6;
+const PASSWORD_MAX = 128;
+const AFFILIATE_COOKIE_MAX_AGE = 7 * 24 * 60 * 60;
 import { getIdentityStatus } from '@/lib/services/identityService';
 import { getDepositSummary } from '@/lib/services/depositService';
 
@@ -65,6 +73,12 @@ async function putHandler(req, _ctx, decoded) {
 
       // If changing password, verify current password first
       if (newPassword) {
+        if (trustedRateLimit(req, `affiliate-password:${decoded.affiliateId}`, { max: 5, windowMs: 15 * 60_000 })) {
+          return Response.json({ error: 'Trop de tentatives. Réessayez plus tard.' }, { status: 429 });
+        }
+        if (typeof newPassword !== 'string' || newPassword.length < PASSWORD_MIN || newPassword.length > PASSWORD_MAX) {
+          return Response.json({ error: `Le mot de passe doit contenir entre ${PASSWORD_MIN} et ${PASSWORD_MAX} caractères` }, { status: 400 });
+        }
         if (!currentPassword) {
           return Response.json({ error: 'Mot de passe actuel requis' }, { status: 400 });
         }
@@ -83,7 +97,15 @@ async function putHandler(req, _ctx, decoded) {
         phone: phone || undefined,
         password: newPassword || undefined,
       });
-      return Response.json({ affiliate });
+      if (!newPassword) return Response.json({ affiliate });
+      // Phase 6 part 2: the password change revoked every session (tokenVersion +1); the
+      // caller keeps working with a fresh token for the new version (cookie + body, the
+      // dashboard stores the body token like the login does).
+      const fresh = await prisma.affiliate.findUnique({ where: { id: decoded.affiliateId }, select: { id: true, username: true, tokenVersion: true } });
+      const token = affiliateSessionToken(fresh);
+      const res = Response.json({ affiliate, token });
+      res.headers.set('Set-Cookie', `affiliate_token=${token}; HttpOnly; Path=/api/affiliate; Max-Age=${AFFILIATE_COOKIE_MAX_AGE}; SameSite=Strict${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
+      return res;
     }
 
     // ── Bank update (default) ──────────────────────────────────────────────

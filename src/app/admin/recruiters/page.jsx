@@ -3,9 +3,12 @@
  * /admin/recruiters — manage Affiliate Recruiter accounts (Phase 2). Admin only (the
  * API refuses anyone else). List, create, enable / disable. The password typed here is
  * sent once to POST /api/admin/recruiters and then cleared; it is never shown or logged.
+ * Phase 6 part 2: "Réinitialiser le mot de passe" (POST /api/admin/recruiters/<id>/password)
+ * closes every session of the recruiter and never changes its active / disabled state; the
+ * new password is never echoed back and is cleared after the request.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Eye, EyeOff, Loader2, Plus, RefreshCw, UserCog } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Loader2, Plus, RefreshCw, UserCog } from "lucide-react";
 
 const API = "/api/admin/recruiters";
 
@@ -196,6 +199,99 @@ function ConfirmDialog({ target, onCancel, onDone }) {
   );
 }
 
+const RESET_MIN = 8;
+const RESET_MAX = 128;
+
+function ResetPasswordDialog({ target, onCancel }) {
+  const [pwd, setPwd] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [fieldError, setFieldError] = useState({});
+  const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape" && !busy) onCancel(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onCancel]);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (busy) return;
+    setError(""); setDone(false);
+    const fe = {};
+    if (pwd.length < RESET_MIN || pwd.length > RESET_MAX) fe.new = FIELD_ERRORS.INVALID_PASSWORD;
+    else if (confirm !== pwd) fe.confirm = "Les deux mots de passe ne correspondent pas.";
+    setFieldError(fe);
+    if (Object.keys(fe).length) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`${API}/${encodeURIComponent(target.id)}/password`, {
+        method: "POST", credentials: "include", cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newPassword: pwd }),
+      });
+      const body = await readBody(res);
+      if (res.ok) {
+        setPwd(""); setConfirm(""); setShow(false); setDone(true);
+      } else {
+        if (body?.errors?.newPassword === "INVALID_PASSWORD") setFieldError({ new: FIELD_ERRORS.INVALID_PASSWORD });
+        setError(typeof body?.error === "string" && body.error ? body.error : errorText(res, body));
+      }
+    } catch {
+      setError(GENERIC_ERROR);
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="rc-reset-title" data-reset-dialog>
+      <button type="button" className="absolute inset-0 bg-gray-900/40" aria-label="Fermer" onClick={() => !busy && onCancel()} />
+      <form onSubmit={submit} noValidate className="relative w-full max-w-md bg-white rounded-2xl shadow-xl p-5 space-y-4 min-w-0">
+        <h3 id="rc-reset-title" className="text-base font-bold text-gray-900 break-words">
+          Réinitialiser le mot de passe de « {target.username} »
+        </h3>
+        <p className="text-sm text-gray-600">
+          Toutes les sessions de ce recruteur seront fermées. Son statut (actif/désactivé) ne change pas.
+          Transmettez le nouveau mot de passe directement au recruteur.
+        </p>
+        <Field id="rc-reset-new" label="Nouveau mot de passe" hint={`${RESET_MIN} à ${RESET_MAX} caractères.`} error={fieldError.new}>
+          <div className="flex items-stretch gap-2 min-w-0">
+            <input id="rc-reset-new" type={show ? "text" : "password"} autoComplete="new-password" maxLength={RESET_MAX}
+              value={pwd} onChange={(e) => { setPwd(e.target.value); setDone(false); }} className={inputCls(!!fieldError.new)} data-reset-new />
+            <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "Masquer" : "Afficher"}
+              className="shrink-0 rounded-xl border border-gray-300 px-3 text-gray-600 hover:bg-gray-50">
+              {show ? <EyeOff className="w-4 h-4" aria-hidden="true" /> : <Eye className="w-4 h-4" aria-hidden="true" />}
+            </button>
+          </div>
+        </Field>
+        <Field id="rc-reset-confirm" label="Confirmer le mot de passe" error={fieldError.confirm}>
+          <input id="rc-reset-confirm" type={show ? "text" : "password"} autoComplete="new-password" maxLength={RESET_MAX}
+            value={confirm} onChange={(e) => { setConfirm(e.target.value); setDone(false); }} className={inputCls(!!fieldError.confirm)} data-reset-confirm />
+        </Field>
+        {error && <p role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2" data-reset-error>{error}</p>}
+        {done && (
+          <p role="status" className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2" data-reset-success>
+            Mot de passe réinitialisé. Toutes les sessions du recruteur ont été fermées.
+          </p>
+        )}
+        <div className="flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={onCancel} disabled={busy} className="rounded-xl border border-gray-300 px-4 py-2 text-sm font-semibold disabled:opacity-60">
+            {done ? "Fermer" : "Annuler"}
+          </button>
+          <button type="submit" disabled={busy} data-reset-submit
+            className="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">
+            {busy && <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />}
+            Réinitialiser
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function StatusBadge({ active }) {
   return (
     <span className={`shrink-0 text-[11px] font-bold rounded-full px-2 py-0.5 border ${active ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-red-50 text-red-700 border-red-200"}`}
@@ -205,7 +301,7 @@ function StatusBadge({ active }) {
   );
 }
 
-function RecruiterCard({ r, onToggle }) {
+function RecruiterCard({ r, onToggle, onReset }) {
   return (
     <li className="bg-white rounded-2xl border border-gray-200 p-4 min-w-0" data-recruiter-row={r.id}>
       <div className="flex items-start justify-between gap-3 min-w-0">
@@ -216,10 +312,17 @@ function RecruiterCard({ r, onToggle }) {
           </div>
           <p className="text-xs text-gray-500 truncate" dir="ltr">@{r.username}{r.phone ? ` · ${r.phone}` : ""}</p>
         </div>
-        <button type="button" onClick={() => onToggle(r)} data-toggle-recruiter
-          className={`shrink-0 rounded-xl px-3 py-1.5 text-xs font-semibold border ${r.isActive ? "border-red-300 text-red-700 hover:bg-red-50" : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"}`}>
-          {r.isActive ? "Désactiver" : "Réactiver"}
-        </button>
+        <div className="shrink-0 flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={() => onReset(r)} data-reset-password
+            className="inline-flex items-center gap-1 rounded-xl px-3 py-1.5 text-xs font-semibold border border-gray-300 text-gray-700 hover:bg-gray-50">
+            <KeyRound className="w-3.5 h-3.5" aria-hidden="true" />
+            Réinitialiser le mot de passe
+          </button>
+          <button type="button" onClick={() => onToggle(r)} data-toggle-recruiter
+            className={`rounded-xl px-3 py-1.5 text-xs font-semibold border ${r.isActive ? "border-red-300 text-red-700 hover:bg-red-50" : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"}`}>
+            {r.isActive ? "Désactiver" : "Réactiver"}
+          </button>
+        </div>
       </div>
       <dl className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-xs min-w-0">
         <div className="flex gap-1 min-w-0"><dt className="text-gray-500 shrink-0">Créé le :</dt><dd className="text-gray-800 truncate">{fmtDate(r.createdAt)}</dd></div>
@@ -240,6 +343,7 @@ export default function AdminRecruitersPage() {
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(false);
   const [target, setTarget] = useState(null);
+  const [resetTarget, setResetTarget] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true); setLoadError("");
@@ -259,6 +363,7 @@ export default function AdminRecruitersPage() {
 
   const replace = (rec) => { if (rec?.id) setList((l) => (l ?? []).map((x) => (x.id === rec.id ? rec : x))); };
   const closeDialog = useCallback(() => setTarget(null), []);
+  const closeReset = useCallback(() => setResetTarget(null), []);
   const activeCount = (list ?? []).filter((r) => r.isActive).length;
 
   return (
@@ -288,12 +393,13 @@ export default function AdminRecruitersPage() {
         {list && list.length === 0 && <p className="text-sm text-gray-500" data-empty>Aucun recruteur pour le moment.</p>}
         {list && list.length > 0 && (
           <ul className="space-y-2 min-w-0">
-            {list.map((r) => <RecruiterCard key={r.id} r={r} onToggle={setTarget} />)}
+            {list.map((r) => <RecruiterCard key={r.id} r={r} onToggle={setTarget} onReset={setResetTarget} />)}
           </ul>
         )}
       </section>
 
       {target && <ConfirmDialog target={target} onCancel={closeDialog} onDone={(rec) => { replace(rec); setTarget(null); }} />}
+      {resetTarget && <ResetPasswordDialog key={resetTarget.id} target={resetTarget} onCancel={closeReset} />}
     </div>
   );
 }

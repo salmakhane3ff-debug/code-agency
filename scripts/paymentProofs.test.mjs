@@ -88,7 +88,9 @@ function wire(db, storage, { clock = () => T0, rateLimit = () => null } = {}) {
   const f = affiliatePaymentProofHandlers({ db, storage, now: () => clock(), rateLimit });
   return {
     admin: Object.fromEntries(Object.entries(a).map(([k, h]) => [k, withAdminAuth(h)])),
-    aff: Object.fromEntries(Object.entries(f).map(([k, h]) => [k, withAffiliateAuth(h)])),
+    // Phase 6 part 2: the REAL withAffiliateAuth reads the account (active + tokenVersion) per
+    // request — the same fake db is injected.
+    aff: Object.fromEntries(Object.entries(f).map(([k, h]) => [k, withAffiliateAuth(h, { db })])),
     rawAff: f,
   };
 }
@@ -180,10 +182,16 @@ console.log('\n2. One global feed: identical for every active affiliate, paginat
   const bad = await w.aff.list(req('/api/affiliate/payment-proofs?cursor=not!valid', { bearer: affToken('a1') }), ctx({}));
   const forged = await w.aff.list(req(`/api/affiliate/payment-proofs?cursor=${Buffer.from('123.zz').toString('base64url')}`, { bearer: affToken('a1') }), ctx({}));
   ok('invalid / forged cursor → 400 INVALID_INPUT', bad.status === 400 && (await bodyOf(bad)).code === 'INVALID_INPUT' && forged.status === 400);
+  // Phase 6 part 2 (D4): the auth layer itself refuses an inactive or missing account (401);
+  // the handler's own guard (403) is still proven with the middleware bypassed (rawAff).
   const inactive = await w.aff.list(req('/api/affiliate/payment-proofs', { bearer: affToken('off') }), ctx({}));
-  ok('inactive affiliate → 403 AFFILIATE_INACTIVE', inactive.status === 403 && (await bodyOf(inactive)).code === 'AFFILIATE_INACTIVE');
+  ok('inactive affiliate → 401 at the auth layer', inactive.status === 401);
+  const inactiveRaw = await w.rawAff.list(req('/api/affiliate/payment-proofs'), ctx({}), { affiliateId: 'off', type: 'affiliate' });
+  ok('inactive affiliate, handler alone → 403 AFFILIATE_INACTIVE', inactiveRaw.status === 403 && (await bodyOf(inactiveRaw)).code === 'AFFILIATE_INACTIVE');
   const unknown = await w.aff.list(req('/api/affiliate/payment-proofs', { bearer: affToken('ghost') }), ctx({}));
-  ok('unknown affiliate id (deleted account, valid token) → 403', unknown.status === 403);
+  ok('unknown affiliate id (deleted account, valid token) → 401 at the auth layer', unknown.status === 401);
+  const unknownRaw = await w.rawAff.list(req('/api/affiliate/payment-proofs'), ctx({}), { affiliateId: 'ghost', type: 'affiliate' });
+  ok('unknown affiliate id, handler alone → 403', unknownRaw.status === 403);
   ok('the rate limiter is consulted on every feed request', limiterCalls.length >= r1.pages.length * 3 && limiterCalls.every((k) => k === 'payment_proofs_feed'));
   const limited = wire(db, makeProofMemStorage(), { rateLimit: () => Response.json({ error: 'Too many' }, { status: 429 }) });
   const lr = await limited.aff.list(req('/api/affiliate/payment-proofs', { bearer: affToken('a1') }), ctx({}));
@@ -583,7 +591,9 @@ console.log('\n7. Security: admin-only changes, active affiliates only, nothing 
   const wi = wire(inactiveDb, storage);
   inactiveDb._tables.paymentProof.push({ ...visible });
   const ii = await wi.aff.image(req(`/api/affiliate/payment-proofs/${visible.publicToken}/image`, { bearer: affToken('off') }), ctx({ token: visible.publicToken }));
-  ok('inactive affiliate cannot fetch a receipt either (403)', ii.status === 403);
+  ok('inactive affiliate cannot fetch a receipt either (401 at the auth layer)', ii.status === 401);
+  const iiRaw = await wi.rawAff.image(req(`/api/affiliate/payment-proofs/${visible.publicToken}/image`), ctx({ token: visible.publicToken }), { affiliateId: 'off', type: 'affiliate' });
+  ok('inactive affiliate, handler alone → 403 for a receipt too', iiRaw.status === 403);
   // invalid uploads
   const filesBefore = storage.files.size, rowsBefore = db._tables.paymentProof.length;
   const up = async (file, i) => w.admin.create(req('/api/admin/payment-proofs', { method: 'POST', cookie: `auth_token=${adminToken}`, body: multipart(input(50 + i), file) }), ctx({}));
@@ -634,7 +644,13 @@ console.log('\n8. Isolation: only payment_proofs / payment_proof_events (+ the i
   ok('the whole flow touches only paymentProof, paymentProofEvent, affiliate and transactions',
     [...models].every((m) => ['paymentProof', 'paymentProofEvent', 'affiliate', '$transaction'].includes(m)), [...models].join(','));
   const affOps = db._log.filter((l) => l.model === 'affiliate');
-  ok('affiliate is only READ, by id, for isActive (never written, no other field)', affOps.length >= 2 && affOps.every((l) => l.op === 'findUnique' && JSON.stringify(l.select) === '["isActive"]'));
+  // Phase 6 part 2: the auth layer reads exactly isActive + tokenVersion; the handlers still read
+  // only isActive. Both are findUnique by id; nothing else is ever selected or written.
+  const affSelects = affOps.map((l) => JSON.stringify(l.select));
+  ok('affiliate is only READ, by id: the handlers select only isActive, the auth layer only isActive + tokenVersion (never written, no other field)',
+    affOps.length >= 4 && affOps.every((l) => l.op === 'findUnique')
+    && affSelects.every((x) => x === '["isActive"]' || x === '["isActive","tokenVersion"]')
+    && affSelects.includes('["isActive"]') && affSelects.includes('["isActive","tokenVersion"]'), affSelects.join(' '));
   ok('the published proof reached the global feed', feed.total === 1 && feed.proofs[0].name === 'Client 1');
   const strip = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/.*$/gm, '');
   const code = ['../src/lib/services/paymentProofService.js', '../src/lib/services/paymentProofPublisher.js', '../src/lib/paymentProofRouteHandlers.js', '../src/lib/paymentProofs.js', './payment-proofs-publisher.mjs']

@@ -15,7 +15,7 @@
  */
 
 import prisma from './prisma.js';
-import { rateLimit as defaultRateLimit } from './rateLimit.js';
+import { trustedClientIp, trustedRateLimit as defaultRateLimit } from './trustedProxy.js'; // Phase 6 part 2: trusted client IP only
 import {
   adminApproveRecovery, adminGetRecovery, adminListRecoveries, adminRejectRecovery, requestActivationRecovery,
 } from './services/affiliateActivationRecoveryService.js';
@@ -33,14 +33,8 @@ const ADMIN_ERRORS = Object.freeze({
 });
 const actorOf = (user) => (user?.userId ? String(user.userId) : user?.email ? String(user.email) : user?.id ? String(user.id) : null);
 
-/** Client IP for the audit (same derivation as the rate limiter: first trusted header). */
-function requestIpOf(req) {
-  const h = (n) => req.headers?.get?.(n)?.trim() || '';
-  const cf = h('cf-connecting-ip');
-  if (cf) return cf;
-  const xff = h('x-forwarded-for').split(',').map((s) => s.trim()).filter(Boolean);
-  return xff.length ? xff[xff.length - 1] : h('x-real-ip') || null;
-}
+/** Client IP for the audit: only an IP vouched for by the configured trusted proxy, else null. */
+const requestIpOf = (req) => trustedClientIp(req);
 
 export function activationRecoveryHandlers(deps = {}) {
   const { db = prisma, now = () => new Date(), rateLimit = defaultRateLimit } = deps;

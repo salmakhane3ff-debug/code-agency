@@ -1303,6 +1303,9 @@ export default function AffiliateDashboard() {
       ]);
 
       if (meRes.status === 401) {
+        // A newer token was stored meanwhile (e.g. the password change in this tab): use it.
+        const stored = localStorage.getItem("affiliateToken");
+        if (stored && stored !== tok) { setToken(stored); return; }
         localStorage.removeItem("affiliateToken");
         router.replace("/affiliate/login");
         return;
@@ -3072,6 +3075,8 @@ export default function AffiliateDashboard() {
                   });
                   const json = await res.json();
                   if (!res.ok) { alert(json.error || "Erreur"); return; }
+                  // The change revoked every other session; keep THIS one with its fresh token.
+                  if (typeof json.token === "string" && json.token) { localStorage.setItem("affiliateToken", json.token); setToken(json.token); }
                   e.target.reset();
                   alert("Mot de passe changé ✓");
                 } catch { alert("Erreur réseau"); }

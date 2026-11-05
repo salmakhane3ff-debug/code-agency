@@ -176,7 +176,7 @@ export async function adminApproveRecovery(id, { db = prisma, actorId, note = nu
     const anyCode = await tx.affiliateActivationCode.findFirst({ where: { affiliateId: r.affiliateId }, select: { id: true } });
     if (!anyCode) throw fail('NOT_ELIGIBLE');
     // 1. Old credentials invalidated: an unusable password, and no active code left.
-    await tx.affiliate.update({ where: { id: r.affiliateId }, data: { password: newHash }, select: { id: true } });
+    await tx.affiliate.update({ where: { id: r.affiliateId }, data: { password: newHash, tokenVersion: { increment: 1 } }, select: { id: true } });
     await tx.affiliateActivationCode.updateMany({
       where: { affiliateId: r.affiliateId, usedAt: null, invalidatedAt: null },
       data: { invalidatedAt: now, invalidatedReason: 'ADMIN_RECOVERY' },

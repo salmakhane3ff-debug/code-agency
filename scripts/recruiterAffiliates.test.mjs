@@ -592,12 +592,16 @@ console.log('\n12. Error hygiene');
 // ── 13. existing systems unchanged ───────────────────────────────────────────
 console.log('\n13. The admin affiliate creation and the affiliate auth flow are unchanged');
 {
-  let diff = 'unavailable';
+  // Phase 6 part 2 (documented allowance, docs/recruiter-system.md §8): only the exact pinned Part 2
+  // diffs (affiliate login / me / admin affiliates / withAffiliateAuth / affiliateSystemService).
+  const { checkUnchangedExceptPart2 } = await import('./lib/phase6Part2Allowance.mjs');
+  let p2;
   try {
-    diff = execFileSync('git', ['diff', '63abd2d42577570cad31082901f18b8544a0b38f', '--', 'src/lib/services/affiliateSystemService.js', 'src/app/api/admin/affiliates/route.js', 'src/app/api/affiliate',
-      'src/lib/middleware/withAffiliateAuth.js', 'src/lib/middleware/withAdminAuth.js', 'src/lib/services/identityService.js', 'src/lib/services/affiliateService.js', 'src/lib/controllers/affiliateController.js', 'src/app/api/affiliate/route.js'], { cwd: ROOT, encoding: 'utf8' }).trim();
-  } catch (e) { diff = `git error ${e.status}`; }
-  ok('affiliateSystemService, the admin / affiliate routes, the auth middlewares, identity, the old affiliate controller are unchanged versus 63abd2d (git diff empty)', diff === '', diff.slice(0, 300));
+    p2 = checkUnchangedExceptPart2('63abd2d42577570cad31082901f18b8544a0b38f', ['src/lib/services/affiliateSystemService.js', 'src/app/api/admin/affiliates/route.js', 'src/app/api/affiliate',
+      'src/lib/middleware/withAffiliateAuth.js', 'src/lib/middleware/withAdminAuth.js', 'src/lib/services/identityService.js', 'src/lib/services/affiliateService.js', 'src/lib/controllers/affiliateController.js', 'src/app/api/affiliate/route.js']);
+  } catch (e) { p2 = { ok: false, error: `git error ${e.status}` }; }
+  ok('withAdminAuth, identity, the old affiliate service / controller and /api/affiliate/route.js are unchanged versus 63abd2d; affiliateSystemService, admin affiliates, the affiliate auth / me routes and withAffiliateAuth differ ONLY by the exact pinned Phase 6 part 2 diff',
+    p2.ok && p2.allowed.every((f) => ['src/lib/services/affiliateSystemService.js', 'src/app/api/admin/affiliates/route.js', 'src/app/api/affiliate/auth/route.js', 'src/app/api/affiliate/me/route.js', 'src/lib/middleware/withAffiliateAuth.js'].includes(f)), JSON.stringify(p2));
   // prisma/: the ONLY change since 63abd2d is the documented Phase 5 extension (docs/recruiter-system.md §6):
   // schema.prisma (AffiliatePayout owner + Recruiter bank fields) and the new migration 20261106.
   const gitOut = (args) => { try { return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim(); } catch (e) { return `git error ${e.status}`; } };
@@ -605,9 +609,9 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
     ...gitOut(['diff', '--name-only', '63abd2d42577570cad31082901f18b8544a0b38f', '--', 'prisma']).split('\n'),
     ...gitOut(['ls-files', '--others', '--exclude-standard', '--', 'prisma']).split('\n'),
   ].filter(Boolean))].sort();
-  ok('prisma/ changed since 63abd2d ONLY by the Phase 5 files (schema.prisma + migration 20261106) and the Phase 6 part 1 migrations 20261107 (activation codes) + 20261108 (admin activation recovery)',
+  ok('prisma/ changed since 63abd2d ONLY by the Phase 5 files (schema.prisma + migration 20261106), the Phase 6 part 1 migrations 20261107 (activation codes) + 20261108 (admin activation recovery) and the Phase 6 part 2 migration 20261109 (session version)',
     eq(prismaFiles, ['prisma/migrations/20261106_recruiter_rewards_withdrawals/migration.sql', 'prisma/migrations/20261107_affiliate_activation_codes/migration.sql',
-      'prisma/migrations/20261108_affiliate_activation_recovery/migration.sql', 'prisma/schema.prisma']), prismaFiles.join(','));
+      'prisma/migrations/20261108_affiliate_activation_recovery/migration.sql', 'prisma/migrations/20261109_account_token_version/migration.sql', 'prisma/schema.prisma']), prismaFiles.join(','));
   const schemaDiff = gitOut(['diff', '63abd2d42577570cad31082901f18b8544a0b38f', '--', 'prisma/schema.prisma']).split('\n')
     .filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l)).map((l) => l[0] + l.slice(1).replace(/\s+/g, ' ').trim());
   const removedLines = schemaDiff.filter((l) => l.startsWith('-')).sort();
@@ -627,7 +631,9 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
     '+activationCode AffiliateActivationCode? @relation(fields: [activationCodeId], references: [id], onDelete: Restrict)',
     '+@@index([status, requestedAt])', '+@@index([affiliateId, requestedAt])', '+@@map("affiliate_activation_recoveries")', '+}', '+', '+',
     '+activationRecoveries AffiliateActivationRecovery[]'];
-  const p6 = [...P6_MODEL, ...P6R_MODEL];
+  // Phase 6 part 2 — session version (documented, §8): Affiliate.tokenVersion and Recruiter.tokenVersion.
+  const P62_FIELDS = ['+tokenVersion Int @default(0)', '+tokenVersion Int @default(0)'];
+  const p6 = [...P6_MODEL, ...P6R_MODEL, ...P62_FIELDS];
   const addedAll = schemaDiff.filter((l) => l.startsWith('+') && !l.startsWith('+//'));
   const addedCode = [];
   for (const l of addedAll) { const i = p6.indexOf(l); if (i >= 0) p6.splice(i, 1); else addedCode.push(l); }
@@ -638,7 +644,11 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
     && eq(addedCode, ['+@@index([recruiterId])', '+accountName String?', '+affiliate Affiliate? @relation(fields: [affiliateId], references: [id], onDelete: Restrict) // = the existing FK (unchanged)',
       '+affiliateId String?', '+bankName String?', '+createdAt DateTime @default(now())', '+id String @id @default(uuid())', '+payouts AffiliatePayout[]',
       '+recruiter Recruiter? @relation(fields: [recruiterId], references: [id], onDelete: Restrict)', '+recruiterId String?', '+rib String?', '+status String @default("pending")'].sort())
-    && schemaDiff.filter((l) => l.startsWith('+//')).length === 4 + 6 + 6, JSON.stringify(schemaDiff));
+    // comment lines: Phase 5 (4) + Phase 6 part 1 (6 + 6) + Phase 6 part 2 (2 on Affiliate.tokenVersion, 1 on Recruiter.tokenVersion)
+    && schemaDiff.filter((l) => l.startsWith('+//')).length === 4 + 6 + 6 + 3
+    && schemaDiff.includes('+// Session version (Phase 6 part 2): every token carries it; bumped on disable / enable /')
+    && schemaDiff.includes('+// password change / admin reset, so older tokens are rejected (a token without it = 0).')
+    && schemaDiff.includes('+// Session version (Phase 6 part 2): bumped on disable / enable / password change / reset.'), JSON.stringify(schemaDiff));
   const asys = read('src/lib/services/affiliateSystemService.js');
   const adminCreate = asys.slice(asys.indexOf('export async function adminCreateAffiliate'), asys.indexOf('export async function adminUpdateAffiliate'));
   ok('adminCreateAffiliate keeps its original body (inactive, rate default, parent check, cache invalidation, no recruiter link)',

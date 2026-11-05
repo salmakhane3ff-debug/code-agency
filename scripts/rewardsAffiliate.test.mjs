@@ -62,10 +62,22 @@ function api(db, extra = {}) {
   // The real limiter is per-IP and in-memory: every test request shares one
   // "IP", so it is replaced by a no-op here and exercised on its own below.
   const h = affiliateRewardsHandlers({ db, now: () => NOW, rateLimit: () => null, ...extra });
-  const wrap = Object.fromEntries(Object.entries(h).map(([k, fn]) => [k, withAffiliateAuth(fn)]));
+  // Phase 6 part 2: withAffiliateAuth now reads the account (active + tokenVersion) on every
+  // request — the same fake db is injected so the REAL middleware runs against these rows.
+  const wrap = Object.fromEntries(Object.entries(h).map(([k, fn]) => [k, withAffiliateAuth(fn, { db })]));
   return async (name, { token, method = "GET", path = "/api/affiliate/rewards", body, raw, params = {} } = {}) => {
     const headers = { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) };
     const res = await wrap[name](new Request(`http://x${path}`, { method, headers, ...(raw !== undefined ? { body: raw } : body !== undefined ? { body: JSON.stringify(body) } : {}) }), { params: Promise.resolve(params) });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  };
+}
+// The handlers WITHOUT the middleware (decoded token passed directly): proves the handler's own
+// guards still hold even if the auth layer were bypassed (defence in depth, Phase 6 part 2).
+function directApi(db) {
+  const h = affiliateRewardsHandlers({ db, now: () => NOW, rateLimit: () => null });
+  return async (name, { affiliateId, method = "GET", path = "/api/affiliate/rewards", body } = {}) => {
+    const req = new Request(`http://x${path}`, { method, headers: { "content-type": "application/json" }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    const res = await h[name](req, { params: Promise.resolve({}) }, { affiliateId, username: String(affiliateId).toLowerCase(), type: "affiliate" });
     return { status: res.status, body: await res.json().catch(() => ({})) };
   };
 }
@@ -115,8 +127,12 @@ console.log("\n2. Overview");
   const oo = (await api(off)("overview", { token: tokenFor("A") })).body;
   ok("rewards disabled → enabled:false, every gift REWARDS_DISABLED", oo.enabled === false && oo.gifts.every((g) => g.reason === "REWARDS_DISABLED"));
   // Policy (review fix): Rewards endpoints serve ACTIVE accounts only.
+  // Phase 6 part 2 (D4): the auth layer itself now refuses an inactive account (401, no data,
+  // handler never reached); the handler's own 403 AFFILIATE_INACTIVE guard is still checked directly.
   const inactive = await api(off)("overview", { token: tokenFor("OFF") });
-  ok("inactive affiliate → 403 AFFILIATE_INACTIVE (no data)", inactive.status === 403 && inactive.body.code === "AFFILIATE_INACTIVE" && !inactive.body.gifts);
+  ok("inactive affiliate → 401 at the auth layer (no data)", inactive.status === 401 && !inactive.body.gifts && !inactive.body.balance);
+  const inactiveDirect = await directApi(off)("overview", { affiliateId: "OFF" });
+  ok("inactive affiliate, handler alone → 403 AFFILIATE_INACTIVE (no data)", inactiveDirect.status === 403 && inactiveDirect.body.code === "AFFILIATE_INACTIVE" && !inactiveDirect.body.gifts);
 }
 
 // ── 3. Request: ownership, validation, eligibility ───────────────────────────
@@ -146,7 +162,8 @@ console.log("\n3. Gift request");
     const res = await call("requestRedemption", { token: tokenFor("A"), method: "POST", body: { giftId: gift, clientRequestId: rid(), ...recipient } });
     ok(`${gift} → ${status} ${code}`, res.status === status && res.body.code === code);
   }
-  ok("inactive affiliate → 403", (await call("requestRedemption", { token: tokenFor("OFF"), method: "POST", body: { giftId: "g", clientRequestId: rid(), ...recipient } })).status === 403);
+  ok("inactive affiliate → 401 at the auth layer", (await call("requestRedemption", { token: tokenFor("OFF"), method: "POST", body: { giftId: "g", clientRequestId: rid(), ...recipient } })).status === 401);
+  ok("inactive affiliate, handler alone → 403", (await directApi(db)("requestRedemption", { affiliateId: "OFF", method: "POST", body: { giftId: "g", clientRequestId: rid(), ...recipient } })).status === 403);
 
   const poor = await funded(20);
   const pr = await api(poor)("requestRedemption", { token: tokenFor("A"), method: "POST", body: { giftId: "g", clientRequestId: rid(), ...recipient } });

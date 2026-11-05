@@ -287,3 +287,109 @@ Service: `src/lib/services/affiliateActivationRecoveryService.js`; migration `20
   affiliate's known phone) before approving.
 - The recorded IP comes from proxy headers and can be spoofed if the origin is reachable directly.
 - The admin-to-affiliate hand-over is manual, so the new code is again a bearer secret, now held by the admin.
+
+## 8. Phase 6 part 2 — account & session security
+
+Decisions D1–D7 (approved). D3 (admin sessions) is out of scope. D5 (per-account login throttling) is
+implemented in memory, because production runs **one** Next.js web instance (confirmed by the owner).
+
+### Session revocation — `tokenVersion` (D1, D2)
+
+- **Migration `20261109_account_token_version`:** `affiliates."tokenVersion"` and `recruiters."tokenVersion"`
+  (`INTEGER NOT NULL DEFAULT 0`, CHECK `>= 0`). Additive; no table rewrite; no row updated.
+- **Tokens:** every affiliate or recruiter token now carries `tv`. A token issued before this change has no `tv`
+  and counts as **0**, so nobody is logged out by the deployment; it becomes invalid at the first bump.
+- **The version is bumped (+1) on:**
+  - disable **and** enable (a re-enabled account never revives an older token);
+  - a self-service password change;
+  - an admin password reset;
+  - a password set through an activation code or an admin recovery.
+- **Checked on every request:**
+  - **Recruiter:** `requireActiveRecruiter`, already per request; the version is now compared too.
+  - **Affiliate:** `withAffiliateAuth` now reads the account on every request (one primary-key read). It must
+    exist, be **active**, and have the same version, otherwise `401`. A database error answers `503`.
+  - **Behaviour change:** a disabled affiliate loses API access immediately, instead of after up to 7 days.
+
+### Passwords (D4, D7)
+
+- **Recruiter self-service:** `PUT /api/recruiter/password { currentPassword, newPassword, newPasswordConfirm }`.
+  - The current password is verified, and the policy is 8–128 characters (as at creation).
+  - The write is conditional on the verified hash, so concurrent changes cannot overwrite each other.
+  - Every older session is revoked; the caller gets a fresh cookie. Audit: `RECRUITER_PASSWORD_CHANGED`.
+- **Admin reset of a recruiter:** `POST /api/admin/recruiters/<id>/password { newPassword }`.
+  - Revokes every session and **never changes `isActive`**. Audit: `RECRUITER_PASSWORD_RESET`, without the password.
+- **Affiliate self-service** (`PUT /api/affiliate/me`, type `profile`):
+  - the current password is verified (unchanged);
+  - the server now enforces the existing 6–128 policy, with a rate limit on the trusted IP;
+  - every older session is revoked, and the response carries a fresh `token`, which the dashboard stores, plus a
+    fresh cookie.
+- **Admin edit of an affiliate** (`PUT /api/admin/affiliates`):
+  - a password reset (6–128) or a **real** activation change bumps the version;
+  - it is audited in `recruiter_audit_log` (`AFFILIATE_PASSWORD_RESET`, `AFFILIATE_ENABLED` / `AFFILIATE_DISABLED`,
+    ADMIN actor, no password);
+  - re-saving the same activation state changes nothing, and a password reset never changes `isActive` by itself.
+- **Affiliate login:** the password is checked **before** the activation state ("Compte inactif" is only said to
+  someone who knows the password), and an unknown identifier runs a dummy bcrypt comparison, so there is no
+  existence or state enumeration.
+- **Never in responses or logs:** no password, hash or reset token.
+
+### Trusted proxy and client IP (D6)
+
+`src/lib/trustedProxy.js` is applied **only** to:
+
+- recruiter login and password change;
+- affiliate login and password change;
+- activation-code redemption and recovery requests.
+
+Every other limiter of the app still uses `src/lib/rateLimit.js`, which is unchanged.
+
+| `TRUSTED_PROXY_MODE` | Trusted client IP |
+|---|---|
+| `cloudflare` | `cf-connecting-ip`, **only** if the request carries `x-trusted-proxy-secret` equal to `TRUSTED_PROXY_SECRET` (≥ 32 characters, timing-safe compare). Without a valid secret, nothing is trusted. |
+| `proxy` | The **last** `x-forwarded-for` hop (Nginx must append it). If `TRUSTED_PROXY_SECRET` is set, the secret header is required too (recommended if the origin is reachable directly). |
+| unset / anything else | Nothing is trusted (fail safe). |
+
+**When no trusted IP exists, these limiters use ONE shared bucket per route** (`untrusted`): the limits stay
+strict but are shared by all clients.
+
+**Required deployment configuration** (not applied here; production settings are unchanged):
+
+- **Behind Cloudflare → Nginx → app:**
+  - set `TRUSTED_PROXY_MODE=cloudflare` and a random `TRUSTED_PROXY_SECRET` (≥ 32 characters) in the app
+    environment;
+  - in Nginx: `proxy_set_header X-Trusted-Proxy-Secret "<secret>";`;
+  - restrict the origin to Cloudflare IP ranges.
+- **Behind Nginx only:**
+  - set `TRUSTED_PROXY_MODE=proxy` (plus the secret if the app port is reachable without Nginx);
+  - in Nginx: `proxy_set_header X-Forwarded-For $remote_addr;` (overwrite, do not append the client's value) and
+    the secret header.
+- **Without this configuration:** after deployment, all affiliate and recruiter logins share one IP bucket
+  (affiliate login 10 per minute in total). **Configure it before deploying.**
+
+### Per-account login throttling (D5)
+
+Affiliate login (`loginAffiliate`) and recruiter login (`loginRecruiter`) reuse `src/lib/loginThrottle.js` (the
+same module as the admin login).
+
+- **Limit:** **5 failed attempts per account per 15-minute fixed window**; it then answers `429` with a generic
+  message.
+  - affiliate: `{ error: 'Trop de tentatives. Réessayez plus tard.', code: 'RATE_LIMITED' }`;
+  - recruiter: `{ code: 'RATE_LIMITED' }`.
+- **No permanent lockout:** the window simply expires.
+- **Keys:**
+  - affiliate: the matched account (so its username and its phone share **one** counter), else the normalized
+    identifier;
+  - recruiter: the normalized username.
+  - An unknown identifier locks exactly like a real account, so a lock reveals nothing.
+- **Concurrency:** each attempt is checked **and counted in one synchronous step, before the password comparison**.
+  Concurrent attempts in the process can never all pass the check: at most 5 per window are evaluated.
+- **Reset:** a correct password clears the counter, including for an inactive or disabled account, whose answer
+  stays "inactive" / `RECRUITER_DISABLED`.
+- **Independence:** the per-IP limiters of the routes (trusted proxy, D6) are separate and still apply.
+- **Limitation:** the counters live in the web process. They are correct for the current single-instance
+  deployment, are reset by a restart, and would NOT be shared if several web instances were ever run; that
+  would need a database-backed counter.
+
+### Open items
+
+- **D3:** admin sessions (`users`) are not versioned. The Edge middleware cannot read the database.
