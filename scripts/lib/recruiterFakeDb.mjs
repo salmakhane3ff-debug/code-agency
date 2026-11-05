@@ -26,6 +26,25 @@
  *                       delivered filter + `findUnique`, `identityVerification.findUnique`, the second
  *                       recruiter row-lock statement (bank columns), `recruiter.findMany` where.
  *
+ *   Phase 6 part 1 (with phase 3+): `affiliateActivationCode` (CHECKs of the migration, unique
+ *                       selector, ONE active code per affiliate → P2002, the life-cycle guard:
+ *                       only usedAt / invalidatedAt(+reason) set once and failedAttempts growing;
+ *                       no delete), the per-affiliate advisory lock
+ *                       `SELECT pg_advisory_xact_lock(hashtext(?))` (held until the transaction
+ *                       ends), the recruiter row lock `SELECT "isActive" … FOR NO KEY UPDATE`, and
+ *                       the relation filter `affiliate: { activationCodes: { some, none } }`.
+ *                       `{ allowPasswordUpdate: true }` additionally allows `affiliate.update`
+ *                       with data = { password } ONLY (the activation redemption); every other
+ *                       affiliate update still throws.
+ *   Phase 6 recovery ({ recovery: true }, implies phase 5): `affiliateActivationRecovery`
+ *                       (CHECKs of 20261108, ONE PENDING request per affiliate → P2002, the
+ *                       guard: only PENDING → APPROVED | REJECTED once with the review columns;
+ *                       no delete), `affiliateActivationCode.findFirst`, the ADMIN_RECOVERY
+ *                       reason, `OR` / `AND` / `NOT` inside activation-code filters,
+ *                       `recruiterAffiliateLink` select `{ recruiter: { select } }`,
+ *                       `recruiterAuditLog.findMany` select / take, and admin reads of
+ *                       affiliates (phone / isActive / createdAt).
+ *
  * Mirrors the migration's guarantees: unique username / phone (P2002 with meta.target),
  * the recruiters CHECKs (username format, name length, bcrypt-only passwordHash,
  * inactive ⇒ disabledAt + disabledBy), the audit-log CHECKs (actor type, action format),
@@ -113,12 +132,14 @@ function matchScalar(v, cond) {
   return true;
 }
 
-export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In = false, phase4: phase4In = false, phase5 = false, failOnce = {}, hooks = {} } = {}) {
+export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In = false, phase4: phase4In = false, phase5: phase5In = false, recovery = false, allowPasswordUpdate = false, failOnce = {}, hooks = {} } = {}) {
+  const phase5 = phase5In || recovery;
   const phase4 = phase4In || phase5;
   const phase3 = phase3In || phase4;
   const T = {
     recruiter: [], recruiterAuditLog: [], affiliate: [], recruiterAffiliateLink: [], affiliateOrder: [], identityVerification: [],
-    recruiterSettingsVersion: [], recruiterRewardLedger: [], affiliatePayout: [],
+    recruiterSettingsVersion: [], recruiterRewardLedger: [], affiliatePayout: [], affiliateActivationCode: [],
+    affiliateActivationRecovery: [],
   };
   const payoutCalls = [];
   let seq = 0;
@@ -233,9 +254,10 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
       undoPush(() => { T.recruiterAuditLog.splice(T.recruiterAuditLog.indexOf(row), 1); });
       return clone(row);
     },
-    async findMany({ where = {}, orderBy } = {}) {
+    async findMany({ where = {}, orderBy, take, select } = {}) {
       await before('recruiterAuditLog', 'findMany', {});
-      return sortRows(rows('recruiterAuditLog').filter((r) => auditMatch(r, where)), orderBy || [{ seq: 'asc' }]).map(clone);
+      const list = sortRows(rows('recruiterAuditLog').filter((r) => auditMatch(r, where)), orderBy || [{ seq: 'asc' }]);
+      return (Number.isInteger(take) ? list.slice(0, take) : list).map((r) => pick(r, select));
     },
     async findFirst({ where = {}, orderBy, select } = {}) {
       await before('recruiterAuditLog', 'findFirst', { where });
@@ -251,6 +273,23 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
   const affMatch = (r, where) => Object.entries(where || {}).every(([k, v]) => {
     if (k === 'OR') return Array.isArray(v) && v.some((w) => affMatch(r, w));
     if (k === 'AND') return (Array.isArray(v) ? v : [v]).every((w) => affMatch(r, w));
+    if (k === 'activationCodes') {
+      // to-many relation filter { some, none, every } over this affiliate's activation codes
+      const mine = rows('affiliateActivationCode').filter((c) => c.affiliateId === r.id);
+      for (const [op, w] of Object.entries(v || {})) {
+        if (op === 'some') { if (!mine.some((c) => genericMatchAc(c, w))) return false; }
+        else if (op === 'none') { if (mine.some((c) => genericMatchAc(c, w))) return false; }
+        else if (op === 'every') { if (!mine.every((c) => genericMatchAc(c, w))) return false; }
+        else throw new Error(`fake where: unsupported relation operator ${op}`);
+      }
+      return true;
+    }
+    return matchScalar(r[k], v);
+  });
+  const genericMatchAc = (r, where) => Object.entries(where || {}).every(([k, v]) => {
+    if (k === 'OR') return Array.isArray(v) && v.some((w) => genericMatchAc(r, w));
+    if (k === 'AND') return (Array.isArray(v) ? v : [v]).every((w) => genericMatchAc(r, w));
+    if (k === 'NOT') return !(Array.isArray(v) ? v : [v]).some((w) => genericMatchAc(r, w));
     return matchScalar(r[k], v);
   });
   const affiliate = {
@@ -286,14 +325,30 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
   for (const op of ['update', 'updateMany', 'upsert', 'delete', 'deleteMany', 'createMany', 'findMany', 'count', 'groupBy']) {
     affiliate[op] = async () => { throw new Error(`fake db: affiliate.${op} is not allowed in recruiter code`); };
   }
+  if (allowPasswordUpdate) {
+    // The activation redemption: the password ONLY (never isActive or anything else).
+    affiliate.update = async ({ where, data, select } = {}) => {
+      await before('affiliate', 'update', { where, data });
+      const k = Object.keys(where || {});
+      if (k.length !== 1 || k[0] !== 'id') throw new Error(`fake affiliate.update: unsupported where ${JSON.stringify(where)}`);
+      if (!data || Object.keys(data).join() !== 'password' || typeof data.password !== 'string') throw new Error(`fake affiliate.update: only { password } may change (got ${JSON.stringify(Object.keys(data || {}))})`);
+      const r = rows('affiliate').find((x) => x.id === where.id);
+      if (!r) throw Object.assign(new Error('Record to update not found.'), { code: 'P2025' });
+      const prev = clone(r);
+      r.password = data.password;
+      r.updatedAt = new Date();
+      undoPush(() => { Object.assign(r, prev); });
+      return pick(r, select);
+    };
+  }
   if (phase4) {
     // Phase 4: names of a page of nodes (id IN …), never a sensitive column.
-    const AFF_READ = new Set(['id', 'username', 'name']);
+    const AFF_READ = new Set(recovery ? ['id', 'username', 'name', 'phone', 'isActive', 'createdAt'] : ['id', 'username', 'name']);
     affiliate.findMany = async ({ where, select } = {}) => {
       await before('affiliate', 'findMany', { where });
       const keys = Object.keys(where || {});
       if (keys.length !== 1 || keys[0] !== 'id' || !Array.isArray(where.id?.in)) throw new Error(`fake affiliate.findMany: unsupported where ${JSON.stringify(where)}`);
-      if (!select || !Object.keys(select).every((k) => AFF_READ.has(k))) throw new Error(`fake affiliate.findMany: select must be a subset of id/username/name (got ${JSON.stringify(select)})`);
+      if (!select || !Object.keys(select).every((k) => AFF_READ.has(k))) throw new Error(`fake affiliate.findMany: select must be a subset of ${[...AFF_READ].join('/')} (got ${JSON.stringify(select)})`);
       const wanted = new Set(where.id.in);
       return rows('affiliate').filter((r) => wanted.has(r.id)).map((r) => pick(r, select));
     };
@@ -312,7 +367,12 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
     for (const [k, v] of Object.entries(select)) {
       if (!v) continue;
       if (k === 'affiliate') out.affiliate = pick(T.affiliate.find((x) => x.id === l.affiliateId), v === true ? undefined : v.select);
-      else out[k] = clone(l[k]);
+      else if (k === 'recruiter') {
+        // never the password hash, even with select: true
+        const rec = T.recruiter.find((x) => x.id === l.recruiterId);
+        if (v === true || !v?.select || Object.keys(v.select).includes('passwordHash')) throw new Error('fake recruiterAffiliateLink: recruiter must be read with an explicit select (no passwordHash)');
+        out.recruiter = pick(rec, v.select);
+      } else out[k] = clone(l[k]);
     }
     return out;
   };
@@ -407,6 +467,151 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
   };
   for (const op of ['findFirst', 'findUnique', 'count', 'groupBy', 'aggregate', 'create', 'createMany', 'update', 'updateMany', 'upsert', 'delete', 'deleteMany']) {
     identityVerification[op] = async () => { throw new Error(`fake db: identityVerification.${op} is not allowed in recruiter code`); };
+  }
+
+  // ── Phase 6 part 1: affiliate_activation_codes ────────────────────────────────
+  const HEX64 = /^[0-9a-f]{64}$/;
+  const SELECTOR_RE = /^[A-Za-z0-9_-]{16}$/;
+  const AC_REASONS = ['REGENERATED', 'TOO_MANY_ATTEMPTS', 'CREDENTIALS_CHANGED', 'ADMIN_RECOVERY'];
+  const AC_MUTABLE = new Set(['usedAt', 'invalidatedAt', 'invalidatedReason', 'failedAttempts']);
+  const t = (d) => (d == null ? null : new Date(d).getTime());
+  function checkActivationCode(c) {
+    const ok = SELECTOR_RE.test(String(c.selector)) && HEX64.test(String(c.verifierHash)) && HEX64.test(String(c.passwordFingerprint))
+      && ['RECRUITER', 'ADMIN'].includes(c.createdByType) && typeof c.createdById === 'string' && c.createdById.length > 0
+      && t(c.expiresAt) > t(c.createdAt) && t(c.expiresAt) <= t(c.createdAt) + 24 * 3600 * 1000
+      && Number.isInteger(c.failedAttempts) && c.failedAttempts >= 0 && c.failedAttempts <= 5
+      && !(c.usedAt != null && c.invalidatedAt != null)
+      && ((c.invalidatedAt == null) === (c.invalidatedReason == null))
+      && (c.invalidatedReason == null || AC_REASONS.includes(c.invalidatedReason));
+    if (!ok) throw checkErr('affiliate_activation_codes_check');
+  }
+  const isActiveCode = (c) => c.usedAt == null && c.invalidatedAt == null;
+  const affiliateActivationCode = {
+    async create({ data, select } = {}) {
+      await before('affiliateActivationCode', 'create', { data });
+      const now = new Date();
+      const c = { id: randomUUID(), createdAt: now, failedAttempts: 0, usedAt: null, invalidatedAt: null, invalidatedReason: null, ...clone(data) };
+      checkActivationCode(c);
+      if (T.affiliateActivationCode.some((x) => x.selector === c.selector)) throw p2002('selector');
+      // partial unique index: one ACTIVE code per affiliate (PostgreSQL would wait on an
+      // uncommitted conflicting row; the service holds the advisory lock, so that never happens)
+      if (T.affiliateActivationCode.some((x) => x.affiliateId === c.affiliateId && isActiveCode(x))) throw p2002('affiliateId');
+      if (!T.affiliate.some((x) => x.id === c.affiliateId && visible(x))) throw fkErr('affiliateId');
+      T.affiliateActivationCode.push(c);
+      markWritten(c);
+      undoPush(() => { T.affiliateActivationCode.splice(T.affiliateActivationCode.indexOf(c), 1); });
+      return pick(c, select);
+    },
+    async findUnique({ where, select } = {}) {
+      await before('affiliateActivationCode', 'findUnique', { where });
+      const k = Object.keys(where || {});
+      if (k.length !== 1 || !['id', 'selector'].includes(k[0])) throw new Error(`fake affiliateActivationCode.findUnique: unsupported where ${JSON.stringify(where)}`);
+      return pick(rows('affiliateActivationCode').find((x) => x[k[0]] === where[k[0]]), select);
+    },
+    async findFirst({ where, orderBy, select } = {}) {
+      await before('affiliateActivationCode', 'findFirst', { where });
+      return pick(sortRows(rows('affiliateActivationCode').filter((r) => genericMatchAc(r, where)), orderBy)[0], select);
+    },
+    async findMany({ where, orderBy, take, select } = {}) {
+      await before('affiliateActivationCode', 'findMany', { where });
+      return takeRowsAc(sortRows(rows('affiliateActivationCode').filter((r) => genericMatchAc(r, where)), orderBy), take).map((r) => pick(r, select));
+    },
+    async updateMany({ where, data } = {}) {
+      await before('affiliateActivationCode', 'updateMany', { where, data });
+      const dk = Object.keys(data || {});
+      if (!dk.length) throw new Error('fake affiliateActivationCode.updateMany: empty data');
+      let count = 0;
+      for (const r of rows('affiliateActivationCode').filter((x) => genericMatchAc(x, where))) {
+        // the life-cycle guard trigger (BEFORE UPDATE): immutable columns, forwards only
+        if (dk.some((k) => !AC_MUTABLE.has(k))) throw triggerErr('affiliate_activation_codes: only the life-cycle columns may change, forwards only');
+        const next = { ...r, ...clone(data) };
+        if (next.failedAttempts < r.failedAttempts
+          || (r.usedAt != null && t(next.usedAt) !== t(r.usedAt))
+          || (r.invalidatedAt != null && (t(next.invalidatedAt) !== t(r.invalidatedAt) || next.invalidatedReason !== r.invalidatedReason))) {
+          throw triggerErr('affiliate_activation_codes: only the life-cycle columns may change, forwards only');
+        }
+        checkActivationCode(next);
+        if (isActiveCode(next) && !isActiveCode(r) && T.affiliateActivationCode.some((x) => x !== r && x.affiliateId === r.affiliateId && isActiveCode(x))) throw p2002('affiliateId');
+        const prev = clone(r);
+        Object.assign(r, clone(data));
+        undoPush(() => { Object.keys(r).forEach((k) => delete r[k]); Object.assign(r, prev); });
+        count += 1;
+      }
+      return { count };
+    },
+  };
+  const takeRowsAc = (list, take) => (Number.isInteger(take) ? list.slice(0, take) : list);
+  for (const op of ['update', 'upsert', 'delete', 'deleteMany', 'createMany']) {
+    affiliateActivationCode[op] = async () => { throw triggerErr(`affiliate_activation_codes: ${op.toUpperCase()} refused`); };
+  }
+
+  // ── Phase 6 recovery: affiliate_activation_recoveries ─────────────────────────
+  const RV_STATUS = ['PENDING', 'APPROVED', 'REJECTED'];
+  const RV_REVIEW = new Set(['status', 'reviewedBy', 'reviewedAt', 'reviewNote', 'activationCodeId']);
+  function checkRecovery(r) {
+    const msg = typeof r.message === 'string' ? r.message.trim() : '';
+    const reviewed = typeof r.reviewedBy === 'string' && r.reviewedBy.length > 0 && r.reviewedAt != null;
+    const ok = RV_STATUS.includes(r.status)
+      && msg.length >= 1 && msg.length <= 500
+      && (r.contactPhone == null || /^\+?[0-9]{8,15}$/.test(String(r.contactPhone)))
+      && (r.requestIp == null || String(r.requestIp).length <= 64)
+      && (r.reviewNote == null || String(r.reviewNote).length <= 300)
+      && (r.status !== 'PENDING' || (r.reviewedBy == null && r.reviewedAt == null && r.activationCodeId == null))
+      && (r.status !== 'APPROVED' || (reviewed && r.activationCodeId != null))
+      && (r.status !== 'REJECTED' || (reviewed && r.activationCodeId == null));
+    if (!ok) throw checkErr('affiliate_activation_recoveries_check');
+  }
+  const affiliateActivationRecovery = {
+    async create({ data, select } = {}) {
+      await before('affiliateActivationRecovery', 'create', { data });
+      const r = {
+        id: randomUUID(), status: 'PENDING', contactPhone: null, requestIp: null, requestedAt: new Date(),
+        reviewedBy: null, reviewedAt: null, reviewNote: null, activationCodeId: null, ...clone(data),
+      };
+      checkRecovery(r);
+      // partial unique index: one PENDING request per affiliate (committed or not)
+      if (r.status === 'PENDING' && T.affiliateActivationRecovery.some((x) => x.affiliateId === r.affiliateId && x.status === 'PENDING')) throw p2002('affiliateId');
+      if (!T.affiliate.some((x) => x.id === r.affiliateId && visible(x))) throw fkErr('affiliateId');
+      if (r.activationCodeId != null && !T.affiliateActivationCode.some((x) => x.id === r.activationCodeId)) throw fkErr('activationCodeId');
+      T.affiliateActivationRecovery.push(r);
+      markWritten(r);
+      undoPush(() => { T.affiliateActivationRecovery.splice(T.affiliateActivationRecovery.indexOf(r), 1); });
+      return pick(r, select);
+    },
+    async findUnique({ where, select } = {}) {
+      await before('affiliateActivationRecovery', 'findUnique', { where });
+      const k = Object.keys(where || {});
+      if (k.length !== 1 || k[0] !== 'id') throw new Error(`fake affiliateActivationRecovery.findUnique: unsupported where ${JSON.stringify(where)}`);
+      return pick(rows('affiliateActivationRecovery').find((x) => x.id === where.id), select);
+    },
+    async findMany({ where, orderBy, take, select } = {}) {
+      await before('affiliateActivationRecovery', 'findMany', { where });
+      const list = sortRows(rows('affiliateActivationRecovery').filter((r) => genericMatchAc(r, where)), orderBy);
+      return (Number.isInteger(take) ? list.slice(0, take) : list).map((r) => pick(r, select));
+    },
+    async updateMany({ where, data } = {}) {
+      await before('affiliateActivationRecovery', 'updateMany', { where, data });
+      const dk = Object.keys(data || {});
+      if (!dk.length) throw new Error('fake affiliateActivationRecovery.updateMany: empty data');
+      let count = 0;
+      for (const r of rows('affiliateActivationRecovery').filter((x) => genericMatchAc(x, where))) {
+        // the guard trigger (BEFORE UPDATE): review a PENDING request once, request fields immutable
+        const next = { ...r, ...clone(data) };
+        if (dk.some((k) => !RV_REVIEW.has(k)) || r.status !== 'PENDING' || !['APPROVED', 'REJECTED'].includes(next.status)) {
+          throw triggerErr('affiliate_activation_recoveries: only a PENDING request can be reviewed, once');
+        }
+        checkRecovery(next);
+        if (next.activationCodeId != null && !T.affiliateActivationCode.some((x) => x.id === next.activationCodeId)) throw fkErr('activationCodeId');
+        const prev = clone(r);
+        Object.assign(r, clone(data));
+        undoPush(() => { Object.keys(r).forEach((k) => delete r[k]); Object.assign(r, prev); });
+        count += 1;
+      }
+      return { count };
+    },
+  };
+  for (const op of ['update', 'upsert', 'delete', 'deleteMany', 'createMany']) {
+    affiliateActivationRecovery[op] = async () => { throw triggerErr(`affiliate_activation_recoveries: ${op.toUpperCase()} refused`); };
   }
 
   // ── Phase 5 models (rewards, settings versions, withdrawals) ──────────────────
@@ -685,6 +890,13 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
       const r = rows('recruiter').find((x) => x.id === id); // re-read after the wait (latest committed row)
       return r ? [{ isActive: r.isActive, canCreateAffiliates: r.canCreateAffiliates }] : [];
     }
+    if (/^SELECT "isActive" FROM "recruiters" WHERE "id" = \$\? FOR NO KEY UPDATE$/.test(norm)) {
+      const id = values[0];
+      if (!ctx()) throw new Error('fake $queryRaw: FOR NO KEY UPDATE outside a transaction (the lock would be released at once)');
+      await lockRecruiterRow(id);
+      const r = rows('recruiter').find((x) => x.id === id);
+      return r ? [{ isActive: r.isActive }] : [];
+    }
     if (phase5 && /^SELECT "isActive", "bankName", "rib", "accountName" FROM "recruiters" WHERE "id" = \$\? FOR NO KEY UPDATE$/.test(norm)) {
       const id = values[0];
       if (!ctx()) throw new Error('fake $queryRaw: FOR NO KEY UPDATE outside a transaction (the lock would be released at once)');
@@ -702,7 +914,12 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
     const sql = Array.isArray(strings) ? strings.join('?') : String(strings);
     const norm = sql.replace(/\s+/g, ' ').trim();
     log.push({ model: '$executeRaw', op: 'execute', sql });
-    if (norm === "SELECT pg_advisory_xact_lock(hashtext('recruiter_settings_versions'))" && values.length === 0) {
+    if (norm === 'SELECT pg_advisory_xact_lock(hashtext(?))' && values.length === 1 && typeof values[0] === 'string') {
+      if (!ctx()) throw new Error('fake $executeRaw: advisory xact lock outside a transaction');
+      await lockRecruiterRow(`__advisory__:${values[0]}`);
+      return 1;
+    }
+    if (phase5 && norm === "SELECT pg_advisory_xact_lock(hashtext('recruiter_settings_versions'))" && values.length === 0) {
       if (!ctx()) throw new Error('fake $executeRaw: advisory xact lock outside a transaction');
       await lockRecruiterRow('__recruiter_settings_versions__');
       return 1;
@@ -743,7 +960,18 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
     order(data) { const o = { id: randomUUID(), status: 'pending', isFake: false, total: 0, clientName: null, clientPhone: null, createdAt: new Date(), ...clone(data) }; T.affiliateOrder.push(o); return clone(o); },
     identity(data) { const r = { id: randomUUID(), status: 'PENDING', cinFrontFile: 'secret/front.jpg', cinBackFile: 'secret/back.jpg', ...clone(data) }; T.identityVerification.push(r); return clone(r); },
     settings(data) { const r = { createdBy: 'admin-seed', createdAt: new Date(), ...clone(data) }; T.recruiterSettingsVersion.push(r); return clone(r); },
+    activationCode(data) {
+      const now = new Date();
+      const c = { id: randomUUID(), createdAt: now, expiresAt: new Date(now.getTime() + 24 * 3600 * 1000), failedAttempts: 0, usedAt: null, invalidatedAt: null, invalidatedReason: null, createdByType: 'RECRUITER', ...clone(data) };
+      T.affiliateActivationCode.push(c);
+      return clone(c);
+    },
     payout(data) { const p = { id: randomUUID(), affiliateId: null, recruiterId: null, status: 'pending', createdAt: new Date(), ...clone(data) }; T.affiliatePayout.push(p); return clone(p); },
+    recovery(data) {
+      const r = { id: randomUUID(), status: 'PENDING', message: 'seeded request', contactPhone: null, requestIp: null, requestedAt: new Date(), reviewedBy: null, reviewedAt: null, reviewNote: null, activationCodeId: null, ...clone(data) };
+      T.affiliateActivationRecovery.push(r);
+      return clone(r);
+    },
     ledger(data) { const r = { id: randomUUID(), seq: BigInt(++seq), affiliateId: null, reason: null, actorId: null, settingsVersion: null, actorType: 'SYSTEM', createdAt: new Date(), ...clone(data) }; T.recruiterRewardLedger.push(r); return clone(r); },
     recruiter(data) {
       const now = new Date();
@@ -759,9 +987,10 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
 
   const base = {
     recruiter, recruiterAuditLog, $transaction,
-    ...(phase3 ? { affiliate, recruiterAffiliateLink, $queryRaw } : {}),
+    ...(phase3 ? { affiliate, recruiterAffiliateLink, $queryRaw, affiliateActivationCode, $executeRaw } : {}),
     ...(phase4 ? { affiliateOrder, identityVerification } : {}),
-    ...(phase5 ? { recruiterSettingsVersion, recruiterRewardLedger, affiliatePayout, $executeRaw } : {}),
+    ...(phase5 ? { recruiterSettingsVersion, recruiterRewardLedger, affiliatePayout } : {}),
+    ...(recovery ? { affiliateActivationRecovery } : {}),
     _queryCount: () => log.filter((l) => l.model !== '$transaction').length,
     _tables: T, _log: log, _state: state, _seed: seed, _openTx: openTx, _locks: locks, _payoutCalls: payoutCalls,
   };

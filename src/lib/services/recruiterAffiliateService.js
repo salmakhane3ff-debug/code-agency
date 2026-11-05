@@ -12,6 +12,10 @@
  *     username, bcrypt password, INACTIVE account (only an admin activates it), the
  *     database defaults for every other column. Stricter input validation (format,
  *     lengths, optional phone) and no admin-only field (rate, objectives, activation).
+ *   • Phase 6 (activation code): the recruiter NEVER chooses the password. The affiliate is
+ *     created with an unusable random password and a one-time activation code is issued in
+ *     the same transaction (affiliateActivationService); it is returned ONCE, and the
+ *     affiliate sets their own password with it. A `password` in the body is refused.
  *   • Parent: none (root) or an affiliate already linked to THIS recruiter, checked on the
  *     server inside the transaction (never trusted from the client), with its whole
  *     ancestry verified to be acyclic and inside the same network.
@@ -24,7 +28,7 @@
 
 import { randomUUID } from 'node:crypto';
 import prisma from '../prisma.js';
-import { hashPassword } from './authService.js';
+import { issueActivationCode, unusablePasswordHash } from './affiliateActivationService.js';
 
 export const RECRUITER_AFFILIATE_LIMITS = Object.freeze({
   PASSWORD_MIN: 8, PASSWORD_MAX: 128, NAME_MIN: 2, NAME_MAX: 80, LIST_MAX: 50, QUERY_MAX: 40, ANCESTRY_MAX: 10000,
@@ -35,7 +39,7 @@ const USERNAME_RE = /^(?=[a-z0-9._-]*[a-z])[a-z0-9][a-z0-9._-]{2,29}$/;
 const PHONE_RE = /^\+?[0-9]{8,15}$/;
 const ID_RE = /^[A-Za-z0-9_-]{1,100}$/;
 const REQUEST_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const ALLOWED_FIELDS = new Set(['username', 'name', 'password', 'phone', 'parentId', 'requestId']);
+const ALLOWED_FIELDS = new Set(['username', 'name', 'phone', 'parentId', 'requestId']);
 
 const fail = (code, extra = {}) => Object.assign(new Error(code), { code, ...extra });
 const isUnique = (e, field) => e?.code === 'P2002' && JSON.stringify(e?.meta?.target ?? '').includes(field);
@@ -50,8 +54,6 @@ export function validateRecruiterAffiliateInput(input) {
   if (!USERNAME_RE.test(username)) fields.username = 'INVALID_USERNAME';
   const name = typeof input.name === 'string' ? input.name.replace(/\s+/g, ' ').trim() : '';
   if (name.length < RECRUITER_AFFILIATE_LIMITS.NAME_MIN || name.length > RECRUITER_AFFILIATE_LIMITS.NAME_MAX || /[<>]/.test(name)) fields.name = 'INVALID_NAME';
-  const password = typeof input.password === 'string' ? input.password : '';
-  if (password.length < RECRUITER_AFFILIATE_LIMITS.PASSWORD_MIN || password.length > RECRUITER_AFFILIATE_LIMITS.PASSWORD_MAX) fields.password = 'INVALID_PASSWORD';
   let phone = null;
   if (input.phone !== undefined && input.phone !== null && !(typeof input.phone === 'string' && input.phone.trim() === '')) {
     phone = typeof input.phone === 'string' ? input.phone.replace(/[\s.-]/g, '') : '';
@@ -65,7 +67,7 @@ export function validateRecruiterAffiliateInput(input) {
   const requestId = typeof input.requestId === 'string' ? input.requestId.toLowerCase() : '';
   if (!REQUEST_ID_RE.test(requestId)) fields.requestId = 'INVALID_REQUEST_ID';
   if (Object.keys(fields).length) return { fields };
-  return { value: { username, name, password, phone, parentId, requestId } };
+  return { value: { username, name, phone, parentId, requestId } };
 }
 
 /** The ids of every affiliate linked to this recruiter (their network). */
@@ -121,7 +123,7 @@ async function assertAncestryInNetwork(tx, recruiterId, parentId) {
 
 /**
  * Recruiter: create an affiliate (inactive) in their own network.
- * → { row, networkIds, replayed } ; throws UNAUTHORIZED / RECRUITER_DISABLED / FORBIDDEN /
+ * → { row, networkIds, replayed, activation: { code, expiresAt } | null (replay) } ; throws UNAUTHORIZED / RECRUITER_DISABLED / FORBIDDEN /
  * INVALID_INPUT (with fields) / PARENT_NOT_IN_NETWORK / USERNAME_TAKEN / PHONE_TAKEN /
  * IDEMPOTENCY_CONFLICT.
  */
@@ -129,7 +131,9 @@ export async function recruiterCreateAffiliate(recruiterId, input, { db = prisma
   if (typeof recruiterId !== 'string' || !ID_RE.test(recruiterId)) throw fail('UNAUTHORIZED');
   const { value: v, fields } = validateRecruiterAffiliateInput(input);
   if (fields) throw fail('INVALID_INPUT', { fields });
-  const passwordHash = await hashPassword(v.password); // outside the transaction (slow)
+  // An unusable random password (nobody knows it): the affiliate sets their own with the
+  // activation code. Hashed outside the transaction (slow).
+  const passwordHash = await unusablePasswordHash();
   const id = newId();
   if (typeof id !== 'string' || !ID_RE.test(id) || id === v.parentId) throw fail('SERVER_ERROR');
 
@@ -153,7 +157,8 @@ export async function recruiterCreateAffiliate(recruiterId, input, { db = prisma
         if (!found || link?.recruiterId !== recruiterId || found.username !== v.username || found.name !== v.name
           || (found.phone ?? null) !== v.phone || (found.parentId ?? null) !== v.parentId) throw fail('IDEMPOTENCY_CONFLICT');
         const { phone: _phone, ...row } = found; // the phone is compared, never returned
-        return { row, networkIds: await networkIdSet(tx, recruiterId, [row.parentId]), replayed: true };
+        // The code was returned once with the first response; only its hash exists now.
+        return { row, networkIds: await networkIdSet(tx, recruiterId, [row.parentId]), replayed: true, activation: null };
       }
 
       // 3. Parent: none, or a member of THIS recruiter's network (whole ancestry checked).
@@ -171,14 +176,18 @@ export async function recruiterCreateAffiliate(recruiterId, input, { db = prisma
       });
       if (row.id !== id || row.isActive !== false) throw fail('SERVER_ERROR');
       await tx.recruiterAffiliateLink.create({ data: { affiliateId: id, recruiterId, createdBy: recruiterId } });
+      const activation = await issueActivationCode(tx, { affiliateId: id, passwordHash, createdByType: 'RECRUITER', createdById: recruiterId, now });
       await tx.recruiterAuditLog.create({
         data: {
           recruiterId, actorType: 'RECRUITER', actorId: recruiterId, action: 'AFFILIATE_CREATED', entityType: 'affiliate', entityId: id,
-          details: { requestId: v.requestId, username: v.username, parentId: v.parentId }, createdAt: now,
+          details: { requestId: v.requestId, username: v.username, parentId: v.parentId, activationCodeId: activation.id }, createdAt: now,
         },
       });
       const { isActive: _ignored, ...plain } = row;
-      return { row: plain, networkIds: await networkIdSet(tx, recruiterId, [plain.parentId]), replayed: false };
+      return {
+        row: plain, networkIds: await networkIdSet(tx, recruiterId, [plain.parentId]), replayed: false,
+        activation: { code: activation.code, expiresAt: activation.expiresAt },
+      };
     });
   } catch (e) {
     if (isUnique(e, 'username')) throw fail('USERNAME_TAKEN');

@@ -5,19 +5,25 @@
  *
  *   • GET  /api/recruiter/me          → session check (401 / 403 → login page)
  *   • GET  /api/recruiter/affiliates  → parent selector: the recruiter's own network only
- *   • POST /api/recruiter/affiliates  → { username, name, password, phone?, parentId?, requestId }
+ *   • POST /api/recruiter/affiliates  → { username, name, phone?, parentId?, requestId }
  * The server is the authority (validation, network ownership, idempotency); the client
  * checks are hints only. Only error CODES are read and shown with fixed Arabic texts.
  * The new account is inactive until an admin activates it.
+ *
+ * Phase 6 (activation code): the recruiter does NOT choose the affiliate's password. The
+ * creation response carries a one-time activation code, shown ONCE here (React state only,
+ * never stored); the affiliate chooses their own password with it on /affiliate/activate.
+ * A replayed creation has no code any more: the recruiter can issue a new one.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, CheckCircle2, Eye, EyeOff, Search, UserPlus } from "lucide-react";
-import { toRecruiterError } from "@/lib/recruiterVisibility";
+import { ArrowRight, CheckCircle2, KeyRound, Search, UserPlus } from "lucide-react";
+import { toRecruiterActivationCodeView, toRecruiterError } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel, recruiterFieldErrorLabel } from "../../errorLabels";
+import ActivationCodeCard, { requestNewActivationCode } from "../ActivationCodeCard";
 
-const EMPTY = { name: "", username: "", password: "", phone: "" };
+const EMPTY = { name: "", username: "", phone: "" };
 const USERNAME_RE = /^(?=[a-z0-9._-]*[a-z])[a-z0-9][a-z0-9._-]{2,29}$/;
 const PHONE_RE = /^\+?[0-9]{8,15}$/;
 
@@ -36,7 +42,6 @@ function localFieldErrors(f) {
   if (!USERNAME_RE.test(f.username.trim().toLowerCase())) out.username = "INVALID_USERNAME";
   const name = f.name.replace(/\s+/g, " ").trim();
   if (name.length < 2 || name.length > 80 || /[<>]/.test(name)) out.name = "INVALID_NAME";
-  if (f.password.length < 8 || f.password.length > 128) out.password = "INVALID_PASSWORD";
   const phone = f.phone.replace(/[\s.-]/g, "");
   if (phone && !PHONE_RE.test(phone)) out.phone = "INVALID_PHONE";
   return out;
@@ -61,7 +66,6 @@ export default function RecruiterNewAffiliatePage() {
   const [ready, setReady] = useState(false);
   const [notice, setNotice] = useState("");
   const [form, setForm] = useState(EMPTY);
-  const [showPwd, setShowPwd] = useState(false);
   const [parentId, setParentId] = useState(""); // "" = root
   const [parentLabel, setParentLabel] = useState(null);
   const [query, setQuery] = useState("");
@@ -70,6 +74,7 @@ export default function RecruiterNewAffiliatePage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState(null);
+  const [regen, setRegen] = useState({ busy: false, error: "" });
   const requestIdRef = useRef(null);
   const aliveRef = useRef(true);
 
@@ -152,7 +157,6 @@ export default function RecruiterNewAffiliatePage() {
     const payload = {
       name: form.name.replace(/\s+/g, " ").trim(),
       username: form.username.trim().toLowerCase(),
-      password: form.password,
       requestId: requestIdRef.current,
       ...(form.phone.trim() ? { phone: form.phone.trim() } : {}),
       ...(parentId ? { parentId } : {}),
@@ -167,14 +171,19 @@ export default function RecruiterNewAffiliatePage() {
       const body = await res.json().catch(() => null);
       if (res.ok && body?.affiliate) {
         const a = body.affiliate;
+        const activation = toRecruiterActivationCodeView(body.activation);
         setCreated({
+          id: typeof a.id === "string" ? a.id : null,
           username: typeof a.username === "string" ? a.username : payload.username,
           name: typeof a.name === "string" ? a.name : payload.name,
           parent: a.parentId ? (parentLabel ?? null) : null,
+          // The one-time code: only in this state, shown once. Replay → no code.
+          activation: activation.code ? activation : null,
+          replayed: body.replayed === true,
         });
+        setRegen({ busy: false, error: "" });
         requestIdRef.current = null;
         setForm(EMPTY);
-        setShowPwd(false);
         return;
       }
       const err = toRecruiterError(body);
@@ -202,8 +211,23 @@ export default function RecruiterNewAffiliatePage() {
     return recruiterFieldErrorLabel(field, c);
   };
 
+  // Replay (the first response was lost): the code cannot be shown again → issue a new one.
+  const regenerate = async () => {
+    if (!created?.id || regen.busy) return;
+    setRegen({ busy: true, error: "" });
+    try {
+      const r = await requestNewActivationCode(created.id);
+      if (r.ok) { setCreated((c) => (c ? { ...c, activation: r.activation } : c)); setRegen({ busy: false, error: "" }); return; }
+      if (r.status === 401 || (r.status === 403 && r.code === "RECRUITER_DISABLED")) { toLogin(r.status === 403 ? r.code : "UNAUTHORIZED"); return; }
+      setRegen({ busy: false, error: recruiterErrorLabel(r.code) });
+    } catch {
+      setRegen({ busy: false, error: recruiterErrorLabel(null) });
+    }
+  };
+
   const again = () => {
-    setCreated(null);
+    setCreated(null); // also drops the one-time code from memory
+    setRegen({ busy: false, error: "" });
     setForm(EMPTY);
     setFieldErrors({});
     setError("");
@@ -257,6 +281,19 @@ export default function RecruiterNewAffiliatePage() {
                 <dd className="font-semibold truncate min-w-0" data-created-parent>{created.parent ?? "حساب رئيسي (بدون أب)"}</dd>
               </div>
             </dl>
+            {created.activation ? (
+              <ActivationCodeCard activation={created.activation} />
+            ) : (
+              <div className="rounded-2xl border border-slate-300 bg-slate-50 p-4 space-y-2" data-activation-missing>
+                <p className="text-sm text-slate-700">تم إنشاء الحساب سابقاً، والرمز لم يعد قابلاً للعرض.</p>
+                <button type="button" onClick={regenerate} disabled={regen.busy || !created.id} data-regenerate-code
+                  className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
+                  <KeyRound className="w-4 h-4" aria-hidden="true" />
+                  {regen.busy ? "جارٍ الإنشاء…" : "إنشاء رمز تفعيل جديد"}
+                </button>
+                {regen.error && <p role="alert" className="text-xs text-red-700" data-regenerate-error>{regen.error}</p>}
+              </div>
+            )}
             <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2" data-inactive-note>
               الحساب غير مفعّل حالياً: سيتم تفعيله من طرف الإدارة بعد التحقق من البطاقة الوطنية.
             </p>
@@ -276,6 +313,7 @@ export default function RecruiterNewAffiliatePage() {
           <form onSubmit={submit} noValidate className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4" data-create-affiliate-form>
             <p className="text-sm text-slate-600">
               الحساب الجديد يُنشأ <strong>غير مفعّل</strong>، ويتم تفعيله من طرف الإدارة بعد التحقق.
+              بعد الإنشاء ستحصل على <strong>رمز تفعيل</strong> ترسله للأفلييت ليختار كلمة السر الخاصة به.
             </p>
 
             <Field id="aff-name" field="name" label="الاسم الكامل" error={fieldError("name")}>
@@ -290,19 +328,6 @@ export default function RecruiterNewAffiliatePage() {
                 value={form.username} maxLength={30} disabled={busy}
                 aria-invalid={!!fieldErrors.username} aria-describedby={fieldErrors.username ? "aff-username-err" : undefined}
                 onChange={(e) => edit({ username: e.target.value })} className={`${inputCls(!!fieldErrors.username)} text-left`} data-input="username" />
-            </Field>
-
-            <Field id="aff-password" field="password" label="كلمة السر" error={fieldError("password")} hint="من 8 إلى 128 حرفاً.">
-              <div className="relative">
-                <input id="aff-password" name="new-password" type={showPwd ? "text" : "password"} autoComplete="new-password" dir="ltr"
-                  value={form.password} maxLength={128} disabled={busy}
-                  aria-invalid={!!fieldErrors.password} aria-describedby={fieldErrors.password ? "aff-password-err" : undefined}
-                  onChange={(e) => edit({ password: e.target.value })} className={`${inputCls(!!fieldErrors.password)} pl-11 text-left`} data-input="password" />
-                <button type="button" onClick={() => setShowPwd((v) => !v)} aria-label={showPwd ? "إخفاء كلمة السر" : "إظهار كلمة السر"}
-                  className="absolute inset-y-0 left-0 px-3 text-slate-500 hover:text-slate-800" data-toggle-password>
-                  {showPwd ? <EyeOff className="w-4 h-4" aria-hidden="true" /> : <Eye className="w-4 h-4" aria-hidden="true" />}
-                </button>
-              </div>
             </Field>
 
             <Field id="aff-phone" field="phone" label="رقم الهاتف (اختياري)" error={fieldError("phone")}>

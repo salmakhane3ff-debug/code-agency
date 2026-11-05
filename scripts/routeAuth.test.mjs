@@ -46,6 +46,15 @@ const INTENTIONALLY_PUBLIC_WRITES = new Set([
   // logout (only clears that cookie; audits when its own token is valid).
   "POST /api/recruiter/auth",
   "DELETE /api/recruiter/auth",
+  // Affiliate activation code (Phase 6 part 1): the affiliate has no session yet — they set
+  // their OWN password with the one-time code their recruiter shared. Rate-limited (IP +
+  // code selector + 5 attempts per code in the DB); never creates a session and never
+  // activates the account (admin approval unchanged).
+  "POST /api/affiliate-activation",
+  // Admin activation recovery request (Phase 6 part 1): public by design — the affiliate has no
+  // session; ALWAYS 202 { ok:true } (no enumeration); rate-limited by IP and identifier; it only
+  // records a PENDING request that an admin (withAdminAuth) must review — it changes no account.
+  "POST /api/affiliate-activation/recovery",
 
   // Customer checkout & order creation. createOrder() ignores client prices and
   // resolves every financial value from the database.
@@ -321,7 +330,7 @@ console.log("9) counts:");
   console.log(`     writes=${writes.length}  protected=${writes.length - publicWrites.length}  public=${publicWrites.length}`);
   ok("public writes == allowlist + temporary exceptions",
      publicWrites.length === INTENTIONALLY_PUBLIC_WRITES.size + TEMPORARY_PUBLIC_SECURITY_EXCEPTIONS.size);
-  ok("intentionally-public list is exactly 35", INTENTIONALLY_PUBLIC_WRITES.size === 35);
+  ok("intentionally-public list is exactly 37", INTENTIONALLY_PUBLIC_WRITES.size === 37);
 }
 
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);

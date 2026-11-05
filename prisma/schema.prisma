@@ -331,6 +331,8 @@ model Affiliate {
   // Affiliate Recruiter System (additive back-relations — no DB column).
   recruiterLink        RecruiterAffiliateLink?
   recruiterRewards     RecruiterRewardLedger[]
+  activationCodes      AffiliateActivationCode[]
+  activationRecoveries AffiliateActivationRecovery[]
 
   @@index([username])
   @@index([isActive])
@@ -2007,4 +2009,57 @@ model RecruiterSettingsVersion {
   createdAt         DateTime @default(now())
 
   @@map("recruiter_settings_versions")
+}
+
+/// One-time activation code of an affiliate created by a recruiter (Phase 6, part 1): the
+/// affiliate chooses their OWN password with it. Only a SHA-256 hash of the secret part is
+/// stored; the plaintext is shown once to the recruiter. Single use, 24 h, 5 failed
+/// attempts, at most one active code per affiliate (partial unique index); a new code
+/// invalidates the previous one. Redeeming it never activates the account (admin approval
+/// stays the only activation). Rows are never deleted; their history is kept (DB triggers).
+model AffiliateActivationCode {
+  id                  String    @id @default(uuid())
+  affiliateId         String
+  selector            String    @unique
+  verifierHash        String
+  passwordFingerprint String
+  createdByType       String // RECRUITER | ADMIN
+  createdById         String
+  createdAt           DateTime  @default(now())
+  expiresAt           DateTime
+  failedAttempts      Int       @default(0)
+  usedAt              DateTime?
+  invalidatedAt       DateTime?
+  invalidatedReason   String? // REGENERATED | TOO_MANY_ATTEMPTS | CREDENTIALS_CHANGED | ADMIN_RECOVERY
+  affiliate           Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+  recoveries          AffiliateActivationRecovery[]
+
+  @@index([affiliateId, createdAt])
+  @@map("affiliate_activation_codes")
+}
+
+/// Admin activation RECOVERY request (Phase 6, part 1): an affiliate reports that their
+/// activation code was used before them. An admin reviews it; approval replaces the password
+/// with an unusable one, invalidates the active code and issues a fresh ADMIN code shown once
+/// to that admin (never to the recruiter). Only for INACTIVE affiliates of the code flow; the
+/// admin approval (isActive) stays the only activation. One PENDING request per affiliate;
+/// rows are never deleted and move PENDING → APPROVED | REJECTED once (DB triggers).
+model AffiliateActivationRecovery {
+  id               String                   @id @default(uuid())
+  affiliateId      String
+  status           String                   @default("PENDING") // PENDING | APPROVED | REJECTED
+  message          String
+  contactPhone     String?
+  requestIp        String?
+  requestedAt      DateTime                 @default(now())
+  reviewedBy       String?
+  reviewedAt       DateTime?
+  reviewNote       String?
+  activationCodeId String?
+  affiliate        Affiliate                @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+  activationCode   AffiliateActivationCode? @relation(fields: [activationCodeId], references: [id], onDelete: Restrict)
+
+  @@index([status, requestedAt])
+  @@index([affiliateId, requestedAt])
+  @@map("affiliate_activation_recoveries")
 }

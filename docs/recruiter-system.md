@@ -181,3 +181,109 @@ In them, "withdraw / payout / balance / earning" may appear, but:
 - `affiliateId` is never written to a payout row.
 
 Every other recruiter file keeps the Phase 1 rule unchanged.
+
+## 7. Phase 6 part 1 — affiliate activation codes
+
+The recruiter no longer chooses an affiliate's password. Service: `src/lib/services/affiliateActivationService.js`.
+
+- **Creation** (`POST /api/recruiter/affiliates`): the body has no `password` (sending one → `INVALID_INPUT`).
+  - The affiliate is created inactive with an **unusable random password** (a bcrypt hash of 32 random bytes that
+    nobody knows).
+  - A one-time activation code is issued in the same transaction as the affiliate, its link and the audit row.
+  - The code is returned **once**, in the 201 response. An idempotent replay returns `activation: null`.
+- **Code:** `<selector>.<verifier>`.
+  - selector = 12 random bytes (16 base64url characters, a non-secret lookup key);
+  - verifier = 32 random bytes (**256 bits**);
+  - only `selector` and `SHA-256(verifier)` are stored (`affiliate_activation_codes`), never the code;
+  - the code is never written to logs, audit details, errors or later responses.
+- **Rules:**
+  - valid 24 h, single use, 5 failed attempts (then invalidated), at most one active code per affiliate
+    (partial unique index);
+  - a new code invalidates the previous one;
+  - rows are never deleted, and only the life-cycle columns may change, forwards only (trigger).
+- **Redemption** (`POST /api/affiliate-activation { code, password, passwordConfirm }`, public page `/affiliate/activate`):
+  - **Password:** 8–128 characters with a letter and a digit, hashed with the existing bcrypt `hashPassword`.
+  - **Locking:** an advisory lock per affiliate, plus a conditional single-use write; concurrent redemptions give
+    exactly one success.
+  - **One answer for every code problem:** unknown, wrong, expired, used, invalidated or stale codes all get
+    `INVALID_OR_EXPIRED_CODE`, so there is no enumeration.
+  - **Rate limits:** by IP, and by code selector.
+  - **No activation:** it **never activates the account and creates no session**. The existing admin approval
+    (`isActive`) and the identity rules are unchanged; login stays refused until the admin activates the
+    affiliate.
+- **No password reset through this flow:** each code stores a fingerprint (SHA-256) of the password hash it was
+  issued for. A code is stale as soon as the password changed in any other way. A new code
+  (`POST /api/recruiter/affiliates/<id>/activation-code`, own affiliates only) can be issued only while the
+  credentials were never set. A recruiter therefore cannot reset an affiliate's password after the affiliate
+  (or an admin) set it.
+- **Pending list:** `GET /api/recruiter/affiliates/activation` lists the recruiter's affiliates whose credentials
+  are pending (code state only).
+
+**Security limitation (by design, not hidden).** The activation code is a **bearer secret that the recruiter
+sees** and shares manually (WhatsApp or another channel):
+
+- This flow guarantees that the recruiter never **chooses or learns** the password the affiliate sets.
+- It **cannot prove that the intended affiliate redeemed the code first**: a malicious recruiter could redeem it
+  before handing it over, and would then know that password.
+- The affiliate would notice, because the code would already be used, and could ask for help; recovery needs an
+  admin action (not part of this phase).
+- Mitigations in place: the code is shown once and expires after 24 h; the redemption is audited
+  (`AFFILIATE_CREDENTIALS_SET`); the account stays inactive until the admin approves it.
+- Closing this gap needs a channel the recruiter does not control (SMS/OTP to the affiliate's phone, or an admin
+  hand-over). That was not approved for this phase.
+
+Existing accounts are unchanged:
+
+- no password is reset;
+- admin-created affiliates and their flow are untouched;
+- affiliates created by recruiters BEFORE this phase keep their passwords and have no code, so no code can be
+  issued for them.
+
+### Admin activation recovery (Phase 6 part 1)
+
+This is for an affiliate whose activation code was used before them (the bearer-code limitation above).
+Service: `src/lib/services/affiliateActivationRecoveryService.js`; migration `20261108_affiliate_activation_recovery`.
+
+1. **The affiliate reports it** on `/affiliate/activate/recovery`, through the public
+   `POST /api/affiliate-activation/recovery { identifier, message, contactPhone? }`.
+   - The answer is **always `202 { ok: true }`** for a well-formed request: whether the account exists, is
+     eligible or already has a request is never revealed.
+   - Rate-limited by IP and by identifier.
+   - A request is recorded only for an **inactive** affiliate created through the activation-code flow.
+   - There is one PENDING request per affiliate (partial unique index); duplicates are absorbed.
+2. **The admin reviews it** on `/admin/activation-recovery` (`withAdminAuth`).
+   - The list and detail show the affiliate, its recruiter, its identity status, its code history (**states
+     only — never a code, selector or hash**) and the audit trail.
+3. **Approval** (`POST /api/admin/activation-recovery/<id> { action: 'approve', note? }`), in one transaction under
+   the activation advisory lock:
+   - The affiliate must still be **inactive**; an active account is never reset through this workflow
+     (`AFFILIATE_ACTIVE`).
+   - Its password is replaced by an unusable random one, so whoever redeemed the hijacked code is locked out.
+   - Every active code is invalidated (`ADMIN_RECOVERY`), and a fresh **ADMIN** code is issued (hash only, 24 h,
+     single use, 5 attempts).
+   - The request becomes APPROVED through a conditional write, so concurrent approvals give exactly one.
+   - The new code is returned **once, to that admin only**, who hands it to the affiliate directly.
+   - **Rejection** closes the request and changes nothing else.
+4. **The affiliate sets a password** on the existing `/affiliate/activate` page.
+   - The account stays inactive until the existing admin approval; the identity rules are unchanged.
+
+**Recruiters can never see or intercept a recovery code:**
+
+- No recruiter endpoint returns a code.
+- An ADMIN code in the history blocks recruiter regeneration (`ACTIVATION_NOT_AVAILABLE`) and removes the
+  affiliate from the recruiter's pending list.
+- The recovery audit rows carry no `recruiterId`.
+
+**Audit** (`recruiter_audit_log`, entity = the affiliate):
+
+- `ACTIVATION_RECOVERY_REQUESTED` (SYSTEM / PUBLIC_FORM);
+- `ACTIVATION_RECOVERY_APPROVED` / `_REJECTED` (ADMIN, with the note);
+- the request row itself keeps the message, the contact phone, the reported request IP, `requestedAt`,
+  `reviewedBy`, `reviewedAt`, the review note and the issued code's id.
+
+**Limitations:**
+
+- The public requester cannot be authenticated: the admin must verify the person (for example by calling the
+  affiliate's known phone) before approving.
+- The recorded IP comes from proxy headers and can be spoofed if the origin is reachable directly.
+- The admin-to-affiliate hand-over is manual, so the new code is again a bearer secret, now held by the admin.

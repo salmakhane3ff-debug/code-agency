@@ -332,7 +332,18 @@ console.log('\n3. Prisma schema (vs pre-recruiter base ef79c6b)');
   const NEW_MODELS = ['Recruiter', 'RecruiterAffiliateLink', 'RecruiterRewardLedger', 'RecruiterAuditLog', 'RecruiterSettingsVersion'].map((m) => `model ${m}`);
   const added = [...N.keys()].filter((k) => !H.has(k));
   const removed = [...H.keys()].filter((k) => !N.has(k));
-  ok('exactly the 5 recruiter models were added; no model / enum removed', eq(added.sort(), [...NEW_MODELS].sort()) && removed.length === 0, `added=${added} removed=${removed}`);
+  // Phase 6 part 1 (documented in docs/recruiter-system.md): + model AffiliateActivationCode (migration 20261107)
+  // and + model AffiliateActivationRecovery (admin activation recovery, migration 20261108).
+  const P6_MODELS = ['model AffiliateActivationCode', 'model AffiliateActivationRecovery'];
+  ok('exactly the 5 recruiter models (+ the Phase 6 AffiliateActivationCode and AffiliateActivationRecovery) were added; no model / enum removed', eq(added.sort(), [...NEW_MODELS, ...P6_MODELS].sort()) && removed.length === 0, `added=${added} removed=${removed}`);
+  ok('Phase 6 recovery: AffiliateActivationRecovery stores no code (only the FK activationCodeId), FKs RESTRICT, mapped to affiliate_activation_recoveries; the code model only gains its back-relation + the ADMIN_RECOVERY comment',
+    /activationCodeId\s+String\?/.test(N.get('model AffiliateActivationRecovery')) && !/\b(code|plain|secret|password|selector|verifierHash)\s+String/i.test(N.get('model AffiliateActivationRecovery'))
+    && (N.get('model AffiliateActivationRecovery').match(/onDelete: Restrict/g) || []).length === 2 && /@@map\("affiliate_activation_recoveries"\)/.test(N.get('model AffiliateActivationRecovery'))
+    && /recoveries\s+AffiliateActivationRecovery\[\]/.test(N.get('model AffiliateActivationCode')) && /ADMIN_RECOVERY/.test(N.get('model AffiliateActivationCode')));
+  ok('Phase 6: AffiliateActivationCode stores a hash + selector only (no code / plaintext column), FK RESTRICT, mapped to affiliate_activation_codes',
+    /verifierHash\s+String\b/.test(N.get('model AffiliateActivationCode')) && /selector\s+String\s+@unique/.test(N.get('model AffiliateActivationCode'))
+    && !/\b(code|plain|secret|password)\s+String/i.test(N.get('model AffiliateActivationCode')) && /onDelete: Restrict/.test(N.get('model AffiliateActivationCode'))
+    && /@@map\("affiliate_activation_codes"\)/.test(N.get('model AffiliateActivationCode')));
   const changed = [...H.keys()].filter((k) => N.has(k) && N.get(k) !== H.get(k));
   ok('the only changed existing blocks are model Affiliate and (Phase 5, documented) model AffiliatePayout — AffiliateOrder, IdentityVerification, UgcVideoSubmission untouched',
     eq(changed.sort(), ['model Affiliate', 'model AffiliatePayout']), changed.join(','));
@@ -359,8 +370,10 @@ console.log('\n3. Prisma schema (vs pre-recruiter base ef79c6b)');
   const hl = H.get('model Affiliate').split('\n'), nl = N.get('model Affiliate').split('\n');
   const extra = nl.filter((l) => !hl.includes(l));
   const missing = hl.filter((l) => !nl.includes(l));
-  ok('Affiliate gained only the 2 back-relation fields (+ their comment); no line removed or altered',
-    missing.length === 0 && extra.length === 3
+  ok('Affiliate gained only the 2 back-relation fields (+ their comment) and the Phase 6 activationCodes / activationRecoveries back-relations; no line removed or altered',
+    missing.length === 0 && extra.length === 5
+    && extra.includes('  activationCodes      AffiliateActivationCode[]')
+    && extra.includes('  activationRecoveries AffiliateActivationRecovery[]')
     && extra.some((l) => /^\s+recruiterLink\s+RecruiterAffiliateLink\?\s*$/.test(l))
     && extra.some((l) => /^\s+recruiterRewards\s+RecruiterRewardLedger\[\]\s*$/.test(l))
     && extra.some((l) => /^\s+\/\/ Affiliate Recruiter System/.test(l)), JSON.stringify({ extra, missing }));

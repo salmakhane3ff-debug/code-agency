@@ -47,11 +47,11 @@ const view = (reward, s = ON, reversal = null) => V.toRecruiterQualificationView
 // ── 0. the removal is real ────────────────────────────────────────────────────
 console.log('\n0. Removed features are gone (exports and code)');
 {
-  ok('exports are exactly the 19 projections / allowlists (Phase 3 adds RECRUITER_FIELD_ERROR_CODES and toRecruiterNetworkAffiliateView; Phase 4 adds toRecruiterNetworkNodeView, toRecruiterNetworkPathView and toRecruiterNetworkStatsView; Phase 5 adds RECRUITER_WITHDRAWAL_STATUS, toRecruiterWithdrawalView, toRecruiterRewardHistoryView, toRecruiterBankView and toRecruiterWalletView; the recruiter profile view lives in recruiterProfileView.js; no rewardReleaseDay, isRewardReleased, RELEASE_BASE_DAYS, RELEASE_JITTER_DAYS)',
-    eq(Object.keys(V).sort(), ['RECRUITER_ERROR_CODES', 'RECRUITER_FIELD_ERROR_CODES', 'RECRUITER_REWARD_STATUS', 'RECRUITER_VISIBLE_AUDIT_ACTIONS', 'RECRUITER_WITHDRAWAL_STATUS', 'toRecruiterAuditView',
+  ok('exports are exactly the 21 projections / allowlists (Phase 3 adds RECRUITER_FIELD_ERROR_CODES and toRecruiterNetworkAffiliateView; Phase 4 adds toRecruiterNetworkNodeView, toRecruiterNetworkPathView and toRecruiterNetworkStatsView; Phase 5 adds RECRUITER_WITHDRAWAL_STATUS, toRecruiterWithdrawalView, toRecruiterRewardHistoryView, toRecruiterBankView and toRecruiterWalletView; Phase 6 part 1 adds toRecruiterActivationCodeView and toRecruiterPendingActivationView; the recruiter profile view lives in recruiterProfileView.js; no rewardReleaseDay, isRewardReleased, RELEASE_BASE_DAYS, RELEASE_JITTER_DAYS)',
+    eq(Object.keys(V).sort(), ['RECRUITER_ERROR_CODES', 'RECRUITER_FIELD_ERROR_CODES', 'RECRUITER_REWARD_STATUS', 'RECRUITER_VISIBLE_AUDIT_ACTIONS', 'RECRUITER_WITHDRAWAL_STATUS', 'toRecruiterActivationCodeView', 'toRecruiterAuditView',
       'toRecruiterBankView', 'toRecruiterError',
       'toRecruiterNetworkAffiliateView', 'toRecruiterNetworkNodeView', 'toRecruiterNetworkPathView', 'toRecruiterNetworkStatsView',
-      'toRecruiterQualificationView', 'toRecruiterRewardHistoryView', 'toRecruiterRewardTotals', 'toRecruiterRewardView', 'toRecruiterSettingsView',
+      'toRecruiterPendingActivationView', 'toRecruiterQualificationView', 'toRecruiterRewardHistoryView', 'toRecruiterRewardTotals', 'toRecruiterRewardView', 'toRecruiterSettingsView',
       'toRecruiterWalletView', 'toRecruiterWithdrawalView']), Object.keys(V).sort().join(','));
   ok('no exported name of either module mentions release / jitter / delay / hmac / UGC / video',
     [...Object.keys(V), ...Object.keys(R)].every((k) => !REMOVED.test(k)));
@@ -215,9 +215,9 @@ console.log('\n6. Errors — code only, never the message');
   ok('unknown / internal codes → { code: "SERVER_ERROR" }', eq(outs[0], { code: 'SERVER_ERROR' }) && eq(outs[1], { code: 'SERVER_ERROR' }));
   ok('allowlisted codes pass but NEVER the message, details, stack or extra keys', eq(outs[2], { code: 'INVALID_INPUT' }) && eq(outs[3], { code: 'FORBIDDEN' }) && eq(outs[4], { code: 'RATE_LIMITED' }));
   ok('every error output is exactly { code } (incl. plain Error, null, undefined, string, number)', outs.every((o) => eq(keys(o), ['code'])) && eq(outs[5], { code: 'SERVER_ERROR' }) && eq(outs[8], { code: 'SERVER_ERROR' }));
-  ok('error allowlist is exactly these 13 codes (Phase 2 adds INVALID_CREDENTIALS for the login, Phase 3 IDEMPOTENCY_CONFLICT, Phase 5 INSUFFICIENT_BALANCE and INCOMPLETE_BANK_INFO), frozen',
+  ok('error allowlist is exactly these 14 codes (Phase 2 adds INVALID_CREDENTIALS for the login, Phase 3 IDEMPOTENCY_CONFLICT, Phase 5 INSUFFICIENT_BALANCE and INCOMPLETE_BANK_INFO, Phase 6 ACTIVATION_NOT_AVAILABLE), frozen',
     eq([...V.RECRUITER_ERROR_CODES], ['UNAUTHORIZED', 'RECRUITER_DISABLED', 'FORBIDDEN', 'NOT_FOUND', 'INVALID_INPUT', 'USERNAME_TAKEN', 'PHONE_TAKEN', 'PARENT_NOT_IN_NETWORK', 'RATE_LIMITED', 'INVALID_CREDENTIALS', 'IDEMPOTENCY_CONFLICT',
-      'INSUFFICIENT_BALANCE', 'INCOMPLETE_BANK_INFO']) && Object.isFrozen(V.RECRUITER_ERROR_CODES));
+      'INSUFFICIENT_BALANCE', 'INCOMPLETE_BANK_INFO', 'ACTIVATION_NOT_AVAILABLE']) && Object.isFrozen(V.RECRUITER_ERROR_CODES));
   ok('no internal gate / unmet reason is a recruiter error code',
     ['REWARDS_DISABLED', 'NO_AMOUNT', 'NOT_LINKED', 'AFFILIATE_NOT_FOUND', 'NOT_ENOUGH_SALES', 'CIN_NOT_APPROVED', 'INVALID_COUNT', 'INVALID_AMOUNT'].every((c) => !V.RECRUITER_ERROR_CODES.includes(c) && eq(E({ code: c }), { code: 'SERVER_ERROR' })));
 }
@@ -369,6 +369,30 @@ console.log('\n7e. Wallet projection is idempotent');
   ok('an already-projected settings view with bad values is still sanitised (no negative amount, threshold back to the default)',
     forged.rewardsEnabled === false && forged.rewardAmountCents === 0 && forged.requiredDeliveredOrders === 10, JSON.stringify(forged));
   ok('an unknown withdrawal status (raw or projected) is still PENDING (reserved)', V.toRecruiterWithdrawalView({ status: 'processing' }).status === 'PENDING' && V.toRecruiterWithdrawalView({ status: 'PAID ' }).status === 'PENDING');
+}
+
+// ── 7f. Phase 6 part 1: activation-code projections ───────────────────────────
+console.log('\n7f. Activation-code projections (the code once; pending list: state only)');
+{
+  const GOOD = 'AbCdEfGhIjKlMnOp.' + 'q'.repeat(43);
+  const a1 = V.toRecruiterActivationCodeView({ code: GOOD, expiresAt: new Date('2026-11-06T09:00:00Z'), verifierHash: 'f'.repeat(64), selector: 'x', id: 'id1', password: '$2a$12$h' });
+  ok('activation view: exactly { code, expiresAt }, the code as given, ISO expiry; never the hash / selector / id / password',
+    eq(keys(a1), ['code', 'expiresAt']) && a1.code === GOOD && a1.expiresAt === '2026-11-06T09:00:00.000Z' && !/verifierHash|selector|password|\$2a/.test(JSON.stringify(a1)));
+  const bad = ['short.code', GOOD + 'x', 'AbCdEfGhIjKlMnO!.' + 'q'.repeat(43), GOOD.replace('.', ':'), 42, null, undefined, ['x'], { code: GOOD }];
+  ok('a malformed code (wrong lengths / characters / separator / type) → code null AND expiresAt null',
+    bad.every((c) => eq(V.toRecruiterActivationCodeView({ code: c, expiresAt: new Date() }), { code: null, expiresAt: null })) && eq(V.toRecruiterActivationCodeView(null), { code: null, expiresAt: null }));
+  const evilA = JSON.parse('{"__proto__":{"polluted":"yes"},"code":"' + GOOD + '","expiresAt":"not a date"}');
+  ok('hostile input: prototype pollution ignored, invalid date → null', eq(V.toRecruiterActivationCodeView(evilA), { code: GOOD, expiresAt: null }) && !('polluted' in {}));
+  const p1 = V.toRecruiterPendingActivationView({ affiliate: { id: 'a1', username: 'u1', name: 'N1', createdAt: '2026-11-05T09:00:00Z', password: '$2a$12$x', phone: '0612', isActive: true }, state: 'EXPIRED', expiresAt: '2026-11-06T09:00:00Z', code: GOOD, verifierHash: 'f'.repeat(64) });
+  ok('pending view: exactly { affiliate: { id, username, name, createdAt }, state, expiresAt } — never a code / hash / password / phone',
+    eq(keys(p1), ['affiliate', 'expiresAt', 'state']) && eq(keys(p1.affiliate), ['createdAt', 'id', 'name', 'username']) && p1.state === 'EXPIRED'
+    && !JSON.stringify(p1).includes(GOOD) && !/password|phone|verifierHash|\$2a|isActive/.test(JSON.stringify(p1)));
+  ok('pending state allowlist: ACTIVE / EXPIRED / INVALIDATED kept; anything else (USED, lower case, objects) → null',
+    ['ACTIVE', 'EXPIRED', 'INVALIDATED'].every((st) => V.toRecruiterPendingActivationView({ state: st }).state === st)
+    && ['USED', 'active', '', null, 42, { s: 'ACTIVE' }].every((st) => V.toRecruiterPendingActivationView({ state: st }).state === null));
+  ok('pending view of hostile / empty input: nulls only, no throw', eq(V.toRecruiterPendingActivationView(null), { affiliate: { id: null, username: null, name: null, createdAt: null }, state: null, expiresAt: null })
+    && eq(V.toRecruiterPendingActivationView({ affiliate: { id: 7, username: ['x'], name: {}, createdAt: 'nope' } }).affiliate, { id: null, username: null, name: null, createdAt: null }));
+  ok('ACTIVATION_NOT_AVAILABLE passes the error projection as { code } only', eq(V.toRecruiterError({ code: 'ACTIVATION_NOT_AVAILABLE', message: 'secret', fields: { x: 1 } }), { code: 'ACTIVATION_NOT_AVAILABLE' }));
 }
 
 // ── 8. static checks ──────────────────────────────────────────────────────────

@@ -3,7 +3,8 @@
  * /recruiter — recruiter dashboard (Phase 2: account information + menu skeleton;
  * Phase 3: "إضافة أفلييت جديد" links to /recruiter/affiliates/new; Phase 4: the network
  * tree /recruiter/network and its statistics / order tracking /recruiter/network/stats;
- * Phase 5: "مكافآتي" links to the recruiter's rewards page /recruiter/wallet).
+ * Phase 5: "مكافآتي" links to the recruiter's rewards page /recruiter/wallet;
+ * Phase 6: "تفعيل الحسابات" links to /recruiter/affiliates/activation).
  * Arabic, RTL. Data comes ONLY from GET /api/recruiter/me (toRecruiterProfileView);
  * 401 / 403 → back to the login page. The other sections arrive in later phases and
  * are shown disabled ("قريباً").
@@ -13,7 +14,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Home, Users, UserPlus, GitBranch, ShieldCheck, PackageCheck, Gift, History, LogOut, Menu, X, UserCog, BarChart3,
-  Wallet,
+  Wallet, KeyRound,
 } from "lucide-react";
 import { toRecruiterError } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel } from "./errorLabels";
@@ -192,6 +193,17 @@ export default function RecruiterDashboardPage() {
               </Link>
             </section>
           )}
+
+          <section data-activation-cta>
+            <Link href="/recruiter/affiliates/activation" data-activation-link
+              className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex items-start gap-3 hover:border-emerald-300 min-w-0">
+              <KeyRound className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" aria-hidden="true" />
+              <span className="min-w-0">
+                <span className="block text-base font-bold">تفعيل الحسابات</span>
+                <span className="block text-sm text-slate-500 mt-0.5">الأفلييت الذين لم يختاروا كلمة السر بعد، وإنشاء رمز تفعيل جديد.</span>
+              </span>
+            </Link>
+          </section>
 
           <section className="grid grid-cols-1 sm:grid-cols-2 gap-4" data-network-cta>
             <Link href="/recruiter/network" data-network-link

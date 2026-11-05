@@ -86,8 +86,11 @@ const cookieOf = (rec) => `recruiter_token=${recruiterToken(rec.id, rec.username
 const post = (E, rec, body, extra = {}) => call(E.create, req('/api/recruiter/affiliates', { method: 'POST', body, cookie: cookieOf(rec), ...extra }));
 const get = (E, rec, q) => call(E.list, req(`/api/recruiter/affiliates${q !== undefined ? `?q=${encodeURIComponent(q)}` : ''}`, { cookie: cookieOf(rec) }));
 let uniq = 0;
-const mk = (over = {}) => ({ username: `aff${++uniq}x`, name: `Affilié ${uniq}`, password: 'Secret123', requestId: randomUUID(), ...over });
-const counts = (db) => ({ aff: db._tables.affiliate.length, links: db._tables.recruiterAffiliateLink.length, audit: db._tables.recruiterAuditLog.length });
+// Phase 6 part 1: the recruiter never sends a password (the affiliate sets it with the activation code).
+const mk = (over = {}) => ({ username: `aff${++uniq}x`, name: `Affilié ${uniq}`, requestId: randomUUID(), ...over });
+const counts = (db) => ({ aff: db._tables.affiliate.length, links: db._tables.recruiterAffiliateLink.length, audit: db._tables.recruiterAuditLog.length, codes: db._tables.affiliateActivationCode.length });
+const plus1 = (b) => ({ aff: b.aff + 1, links: b.links + 1, audit: b.audit + 1, codes: b.codes + 1 });
+const CODE_RE = /^[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{43}$/;
 const errorBodyOk = (b) => b && typeof b === 'object' && (eq(keys(b), ['code']) || eq(keys(b), ['code', 'fields'])) && !('message' in b) && !('error' in b);
 const allErrorBodies = [];
 const track = (r) => { if (r.status >= 400) allErrorBodies.push(r); return r; };
@@ -101,13 +104,21 @@ console.log('\n1. Creation: a root affiliate, a child and a grandchild');
   const body = mk({ username: '  Amina.B ', name: '  Amina   Benali ', phone: '06 12-34.56.78' });
   const r = await post(E, E.A, body);
   const row = E.db._tables.affiliate[0];
-  ok('root creation → 201, no-store, { affiliate, replayed:false }', r.status === 201 && r.body.replayed === false && eq(keys(r.body), ['affiliate', 'replayed']) && /no-store/.test(r.cache || ''), r.text);
+  ok('root creation → 201, no-store, { affiliate, replayed:false, activation }', r.status === 201 && r.body.replayed === false && eq(keys(r.body), ['activation', 'affiliate', 'replayed']) && /no-store/.test(r.cache || ''), r.text);
+  ok('the activation is exactly { code, expiresAt }: a selector.verifier code, expiring 24 h after the creation',
+    eq(keys(r.body.activation), ['code', 'expiresAt']) && CODE_RE.test(r.body.activation.code) && r.body.activation.expiresAt === new Date(T0.getTime() + 24 * 3600 * 1000).toISOString(), JSON.stringify(r.body.activation));
   ok('the view is exactly id, username, name, parentId, createdAt (no password / hash / phone / isActive / amount)',
     eq(keys(r.body.affiliate), VIEW_KEYS) && r.body.affiliate.parentId === null && r.body.affiliate.username === 'amina.b' && r.body.affiliate.name === 'Amina Benali'
     && r.body.affiliate.id === row.id && !/password|\$2[aby]\$|0612345678|isActive|commission|balance/i.test(r.text), r.text);
   ok('the stored row is INACTIVE, lower-cased username, collapsed name, normalised phone, root',
     row.isActive === false && row.username === 'amina.b' && row.name === 'Amina Benali' && row.phone === '0612345678' && row.parentId === null);
-  ok('the password is stored as a bcrypt hash of the given password (never the plaintext)', /^\$2[aby]\$12\$/.test(row.password) && bcrypt.compareSync('Secret123', row.password) && row.password !== 'Secret123');
+  ok('the password is an UNUSABLE random bcrypt hash (cost 12): it matches neither the old recruiter-chosen value, nor empty, nor the activation code',
+    /^\$2[aby]\$12\$.{53}$/.test(row.password) && !bcrypt.compareSync('Secret123', row.password) && !bcrypt.compareSync('', row.password) && !bcrypt.compareSync(r.body.activation.code, row.password));
+  const codeRow = E.db._tables.affiliateActivationCode[0];
+  ok('one activation-code row for this affiliate: hash only (never the code), created by recruiter A, active, 0 attempts',
+    E.db._tables.affiliateActivationCode.length === 1 && codeRow.affiliateId === row.id && codeRow.createdByType === 'RECRUITER' && codeRow.createdById === E.A.id
+    && codeRow.usedAt === null && codeRow.invalidatedAt === null && codeRow.failedAttempts === 0 && /^[0-9a-f]{64}$/.test(codeRow.verifierHash)
+    && codeRow.selector === r.body.activation.code.split('.')[0] && !JSON.stringify(E.db._tables.affiliateActivationCode).includes(r.body.activation.code.split('.')[1]));
   ok('the create data holds ONLY id, name, username, password, phone, isActive (database defaults for every other column; no admin-only field)',
     eq(keys(createData), ['id', 'isActive', 'name', 'password', 'phone', 'username']) && createData.isActive === false, JSON.stringify(keys(createData)));
   const link = E.db._tables.recruiterAffiliateLink[0];
@@ -115,8 +126,9 @@ console.log('\n1. Creation: a root affiliate, a child and a grandchild');
   const aud = E.db._tables.recruiterAuditLog;
   ok('one AFFILIATE_CREATED audit row (recruiter actor, entity = the affiliate, details requestId / username / parentId null, the clock time)',
     aud.length === 1 && aud[0].action === 'AFFILIATE_CREATED' && aud[0].actorType === 'RECRUITER' && aud[0].actorId === E.A.id && aud[0].recruiterId === E.A.id
-    && aud[0].entityType === 'affiliate' && aud[0].entityId === row.id && eq(aud[0].details, { requestId: body.requestId, username: 'amina.b', parentId: null })
+    && aud[0].entityType === 'affiliate' && aud[0].entityId === row.id && eq(aud[0].details, { requestId: body.requestId, username: 'amina.b', parentId: null, activationCodeId: codeRow.id })
     && new Date(aud[0].createdAt).getTime() === T0.getTime(), JSON.stringify(aud[0], (k, v) => (typeof v === 'bigint' ? String(v) : v)));
+  ok('the audit row never contains the activation code (only the code row id)', !JSON.stringify(aud, (k, v) => (typeof v === 'bigint' ? String(v) : v)).includes(r.body.activation.code.split('.')[1]));
   ok('the audit row is visible to recruiter A only (toRecruiterAuditView)', eq(V.toRecruiterAuditView(aud[0], E.A.id), { action: 'AFFILIATE_CREATED', entityId: row.id, createdAt: T0.toISOString() }) && V.toRecruiterAuditView(aud[0], E.B.id) === null);
   ok('a root creation invalidates no team cache', E.invalidated.length === 0);
   ok('one transaction per creation, the recruiter row lock first',
@@ -128,7 +140,7 @@ console.log('\n1. Creation: a root affiliate, a child and a grandchild');
   ok('the parent\'s team cache is invalidated with the parent id', eq(E.invalidated, [row.id]));
   const g = await post(E, E.A, mk({ username: 'grand.child', parentId: childRow.id }));
   ok('grandchild under the child → 201, parentId = the child', g.status === 201 && g.body.affiliate.parentId === childRow.id && eq(E.invalidated, [row.id, childRow.id]), g.text);
-  ok('3 affiliates, 3 links (all recruiter A), 3 audit rows', eq(counts(E.db), { aff: 3, links: 3, audit: 3 }) && E.db._tables.recruiterAffiliateLink.every((l) => l.recruiterId === E.A.id));
+  ok('3 affiliates, 3 links (all recruiter A), 3 audit rows, 3 activation codes', eq(counts(E.db), { aff: 3, links: 3, audit: 3, codes: 3 }) && E.db._tables.recruiterAffiliateLink.every((l) => l.recruiterId === E.A.id));
 
   const E2 = setup({ invalidateTeam: () => { throw new Error('cache down'); } });
   const p = await post(E2, E2.A, mk());
@@ -190,8 +202,10 @@ console.log('\n3. An existing affiliate can never be assigned to a recruiter');
     /const id = newId\(\);/.test(svc) && /tx\.affiliate\.create\(\{\s*data: \{ id, /.test(svc)
     && /tx\.recruiterAffiliateLink\.create\(\{ data: \{ affiliateId: id, recruiterId, createdBy: recruiterId \} \}\)/.test(svc)
     && (svc.match(/recruiterAffiliateLink\.create\(/g) || []).length === 1 && /row\.id !== id \|\| row\.isActive !== false/.test(svc));
-  ok('service: the strict body allowlist is exactly username, name, password, phone, parentId, requestId',
-    /const ALLOWED_FIELDS = new Set\(\['username', 'name', 'password', 'phone', 'parentId', 'requestId'\]\);/.test(svc));
+  ok('service: the strict body allowlist is exactly username, name, phone, parentId, requestId (Phase 6: NO password)',
+    /const ALLOWED_FIELDS = new Set\(\['username', 'name', 'phone', 'parentId', 'requestId'\]\);/.test(svc));
+  ok('service: the new affiliate gets an unusable random password and its activation code in the SAME transaction',
+    /const passwordHash = await unusablePasswordHash\(\);/.test(svc) && /password: passwordHash/.test(svc) && /await issueActivationCode\(tx, \{ affiliateId: id, passwordHash, createdByType: 'RECRUITER', createdById: recruiterId, now \}\)/.test(svc) && !/v\.password|hashPassword/.test(svc));
 }
 
 // ── 4. the parent never changes after creation ───────────────────────────────
@@ -290,6 +304,7 @@ console.log('\n6. Duplicates and concurrency');
   const r1 = await post(E, E.A, body);
   const r2 = await post(E, E.A, body);
   ok('the same requestId twice → 201 then 200 replayed:true with the identical view', r1.status === 201 && r2.status === 200 && r2.body.replayed === true && eq(r2.body.affiliate, r1.body.affiliate), r2.text);
+  ok('the replay NEVER returns an activation code again (activation: null) — only its hash exists', r2.body.activation === null && CODE_RE.test(r1.body.activation?.code || '') && !r2.text.includes(r1.body.activation.code.split('.')[1]));
   ok('only 1 affiliate, 1 link, 1 audit row for that request; the team cache invalidated once', E.db._tables.affiliate.filter((x) => x.username === 'dup.kid').length === 1
     && E.db._tables.recruiterAffiliateLink.filter((l) => l.affiliateId === r1.body.affiliate.id).length === 1
     && E.db._tables.recruiterAuditLog.filter((a) => a.entityId === r1.body.affiliate.id).length === 1 && E.invalidated.filter((x) => x === par.body.affiliate.id).length === 1);
@@ -305,12 +320,13 @@ console.log('\n6. Duplicates and concurrency');
   const replays = res.filter((r) => r.status === 200 && r.body.replayed === true);
   ok('10 concurrent POSTs with the same requestId → exactly 1 created (201) and 9 replays of the same id',
     created.length === 1 && replays.length === 9 && replays.every((r) => r.body.affiliate.id === created[0].body.affiliate.id), res.map((r) => r.status).join(','));
-  ok('… and exactly +1 affiliate, +1 link, +1 audit row', eq(counts(E.db), { aff: before.aff + 1, links: before.links + 1, audit: before.audit + 1 }));
+  ok('… and exactly +1 affiliate, +1 link, +1 audit row, +1 activation code', eq(counts(E.db), plus1(before)));
+  ok('only the created response carries the code; the 9 replays carry activation: null', CODE_RE.test(created[0]?.body?.activation?.code || '') && replays.every((x) => x.body.activation === null));
 
   const b2 = counts(E.db);
   const res2 = await Promise.all(Array.from({ length: 5 }, () => post(E, E.A, mk({ username: 'conc.user' }))));
   ok('5 concurrent POSTs, different requestIds, the same username → 1 created, 4 × 409 USERNAME_TAKEN',
-    res2.filter((r) => r.status === 201).length === 1 && res2.filter((r) => r.status === 409 && eq(r.body, { code: 'USERNAME_TAKEN' })).length === 4 && eq(counts(E.db), { aff: b2.aff + 1, links: b2.links + 1, audit: b2.audit + 1 }), res2.map((r) => r.status).join(','));
+    res2.filter((r) => r.status === 201).length === 1 && res2.filter((r) => r.status === 409 && eq(r.body, { code: 'USERNAME_TAKEN' })).length === 4 && eq(counts(E.db), plus1(b2)), res2.map((r) => r.status).join(','));
   const res3 = await Promise.all([post(E, E.A, mk({ username: 'conc.cross' })), post(E, E.B, mk({ username: 'conc.cross' }))]);
   ok('two recruiters concurrently, the same username → one 201, one 409 USERNAME_TAKEN', eq(res3.map((r) => r.status).sort(), [201, 409]) && E.db._tables.affiliate.filter((x) => x.username === 'conc.cross').length === 1);
   const res4 = await Promise.all([post(E, E.A, mk({ phone: '0699000001' })), post(E, E.B, mk({ phone: '0699000001' }))]);
@@ -341,6 +357,7 @@ console.log('\n7. A failed transaction leaves no partial affiliate, link or audi
     ['the affiliate insert (P2002 username — unique backstop)', { 'affiliate.create': Object.assign(new Error('Unique constraint failed'), { code: 'P2002', meta: { target: ['username'] } }) }, 409, 'USERNAME_TAKEN'],
     ['the affiliate insert (P2002 phone — unique backstop)', { 'affiliate.create': Object.assign(new Error('Unique constraint failed'), { code: 'P2002', meta: { target: ['phone'] } }) }, 409, 'PHONE_TAKEN'],
     ['the link insert (P2002 on the link primary key)', { 'recruiterAffiliateLink.create': Object.assign(new Error('Unique constraint failed'), { code: 'P2002', meta: { target: ['affiliateId'] } }) }, 500, 'SERVER_ERROR'],
+    ['the activation-code insert (Phase 6)', { 'affiliateActivationCode.create': new Error('code insert failed (injected)') }, 500, 'SERVER_ERROR'],
   ];
   for (const [label, failOnce, status, code] of cases) {
     const E = setup({ failOnce });
@@ -351,9 +368,9 @@ console.log('\n7. A failed transaction leaves no partial affiliate, link or audi
     const afterFail = counts(E.db);
     const cleanState = E.db._locks.size === 0 && E.db._openTx.size === 0;
     const retry = await post(E, E.A, mk({ username: 'atom.retry', parentId: par.id }));
-    ok(`failure at ${label} → ${status} ${code}; no affiliate, link or audit row; the lock is released (a retry succeeds)`,
+    ok(`failure at ${label} → ${status} ${code}; no affiliate, link, audit or activation-code row; the lock is released (a retry succeeds)`,
       r.status === status && eq(r.body, { code }) && eq(afterFail, before) && cleanState && E.invalidated.length === 1
-        && retry.status === 201 && eq(counts(E.db), { aff: before.aff + 1, links: before.links + 1, audit: before.audit + 1 }),
+        && retry.status === 201 && eq(counts(E.db), plus1(before)),
       `${r.status} ${r.text} / after ${JSON.stringify(afterFail)} vs ${JSON.stringify(before)} / retry ${retry.status}`);
   }
   // A trigger refusal (the database backstop) also rolls back the affiliate row.
@@ -430,9 +447,8 @@ console.log('\n9. Validation (exact field codes) and rate limit');
   ok('name: 2 and 80 valid; 1 and 81 invalid; < > refused; spaces collapsed',
     !!okv({ name: 'Ab' }) && !!okv({ name: 'A'.repeat(80) }) && eq(vf({ name: 'A' }), { name: 'INVALID_NAME' }) && eq(vf({ name: 'A'.repeat(81) }), { name: 'INVALID_NAME' })
     && eq(vf({ name: '<b>Ali' }), { name: 'INVALID_NAME' }) && eq(vf({ name: '   ' }), { name: 'INVALID_NAME' }) && okv({ name: '  Ali   Ben  ' }).name === 'Ali Ben');
-  ok('password: 8 and 128 valid; 7 and 129 invalid; non-string invalid; never trimmed',
-    !!okv({ password: '12345678' }) && !!okv({ password: 'x'.repeat(128) }) && eq(vf({ password: '1234567' }), { password: 'INVALID_PASSWORD' }) && eq(vf({ password: 'x'.repeat(129) }), { password: 'INVALID_PASSWORD' })
-    && eq(vf({ password: 12345678 }), { password: 'INVALID_PASSWORD' }) && okv({ password: ' secret12 ' }).password === ' secret12 ');
+  ok('password (Phase 6): ANY password in the body is refused as an unknown field (the recruiter can never choose it); the value has no password key',
+    ['12345678', 'x'.repeat(128), '', 12345678, null].every((pw) => eq(vf({ password: pw }), { body: 'UNKNOWN_FIELD' })) && !('password' in okv({})));
   ok('phone: optional (absent / null / blank → null); 8 and 15 digits valid; 7 and 16 invalid; + allowed; separators stripped; non-string invalid',
     okv({}).phone === null && okv({ phone: null }).phone === null && okv({ phone: '  ' }).phone === null && !!okv({ phone: '12345678' }) && !!okv({ phone: '1'.repeat(15) })
     && eq(vf({ phone: '1234567' }), { phone: 'INVALID_PHONE' }) && eq(vf({ phone: '1'.repeat(16) }), { phone: 'INVALID_PHONE' }) && okv({ phone: '+212 6.12-34-56-78' }).phone === '+212612345678'
@@ -445,15 +461,18 @@ console.log('\n9. Validation (exact field codes) and rate limit');
     && [undefined, '', 'not-a-uuid', '0a1b2c3d4e5f4a1b8c2d3e4f5a6b7c8d', 42].every((q) => eq(vf({ requestId: q }), { requestId: 'INVALID_REQUEST_ID' })));
   ok('body: not an object (null / array / string / number) → fields.body UNKNOWN_FIELD only',
     [null, undefined, [], 'x', 42].every((b) => eq(S.validateRecruiterAffiliateInput(b), { fields: { body: 'UNKNOWN_FIELD' } })));
-  ok('several invalid fields at once → every code at once', eq(S.validateRecruiterAffiliateInput({ username: 'x', name: '', password: '1', phone: 'p', parentId: '!', extra: 1 }).fields,
-    { body: 'UNKNOWN_FIELD', username: 'INVALID_USERNAME', name: 'INVALID_NAME', password: 'INVALID_PASSWORD', phone: 'INVALID_PHONE', parentId: 'INVALID_PARENT', requestId: 'INVALID_REQUEST_ID' }));
+  ok('several invalid fields at once → every code at once (a password is just an unknown field now)', eq(S.validateRecruiterAffiliateInput({ username: 'x', name: '', password: '1', phone: 'p', parentId: '!', extra: 1 }).fields,
+    { body: 'UNKNOWN_FIELD', username: 'INVALID_USERNAME', name: 'INVALID_NAME', phone: 'INVALID_PHONE', parentId: 'INVALID_PARENT', requestId: 'INVALID_REQUEST_ID' }));
   ok('every code the validator can produce is in the visibility allowlist for its field',
     [S.validateRecruiterAffiliateInput({ username: 'x', name: '', password: '1', phone: 'p', parentId: '!', extra: 1 }).fields].every((f) => Object.entries(f).every(([k, c]) => V.RECRUITER_FIELD_ERROR_CODES[k]?.includes(c))));
 
   const E = setup();
   const before = counts(E.db);
   const multi = track(await post(E, E.A, { username: 'x', name: 'A', password: '1', requestId: 'nope' }));
-  ok('through the handler: 400 { code: INVALID_INPUT, fields } with exactly the failing fields', multi.status === 400 && eq(multi.body, { code: 'INVALID_INPUT', fields: { username: 'INVALID_USERNAME', name: 'INVALID_NAME', password: 'INVALID_PASSWORD', requestId: 'INVALID_REQUEST_ID' } }), multi.text);
+  ok('through the handler: 400 { code: INVALID_INPUT, fields } with exactly the failing fields', multi.status === 400 && eq(multi.body, { code: 'INVALID_INPUT', fields: { username: 'INVALID_USERNAME', name: 'INVALID_NAME', requestId: 'INVALID_REQUEST_ID', body: 'UNKNOWN_FIELD' } }), multi.text);
+  const withPw = track(await post(E, E.A, { ...mk({ username: 'pw.chosen' }), password: 'Secret123' }));
+  ok('a VALID creation body + a recruiter-chosen password → 400 INVALID_INPUT fields.body UNKNOWN_FIELD; nothing created (the old behaviour is gone)',
+    withPw.status === 400 && eq(withPw.body, { code: 'INVALID_INPUT', fields: { body: 'UNKNOWN_FIELD' } }) && !E.db._tables.affiliate.some((x) => x.username === 'pw.chosen'), withPw.text);
   const malformed = track(await call(E.create, req('/api/recruiter/affiliates', { method: 'POST', raw: '{"username":', cookie: cookieOf(E.A) })));
   const empty = track(await call(E.create, req('/api/recruiter/affiliates', { method: 'POST', raw: '', cookie: cookieOf(E.A) })));
   const arr = track(await post(E, E.A, [mk()]));
@@ -586,18 +605,40 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
     ...gitOut(['diff', '--name-only', '63abd2d42577570cad31082901f18b8544a0b38f', '--', 'prisma']).split('\n'),
     ...gitOut(['ls-files', '--others', '--exclude-standard', '--', 'prisma']).split('\n'),
   ].filter(Boolean))].sort();
-  ok('prisma/ changed since 63abd2d ONLY by the Phase 5 files: schema.prisma + migrations/20261106_recruiter_rewards_withdrawals/migration.sql',
-    eq(prismaFiles, ['prisma/migrations/20261106_recruiter_rewards_withdrawals/migration.sql', 'prisma/schema.prisma']), prismaFiles.join(','));
+  ok('prisma/ changed since 63abd2d ONLY by the Phase 5 files (schema.prisma + migration 20261106) and the Phase 6 part 1 migrations 20261107 (activation codes) + 20261108 (admin activation recovery)',
+    eq(prismaFiles, ['prisma/migrations/20261106_recruiter_rewards_withdrawals/migration.sql', 'prisma/migrations/20261107_affiliate_activation_codes/migration.sql',
+      'prisma/migrations/20261108_affiliate_activation_recovery/migration.sql', 'prisma/schema.prisma']), prismaFiles.join(','));
   const schemaDiff = gitOut(['diff', '63abd2d42577570cad31082901f18b8544a0b38f', '--', 'prisma/schema.prisma']).split('\n')
     .filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l)).map((l) => l[0] + l.slice(1).replace(/\s+/g, ' ').trim());
   const removedLines = schemaDiff.filter((l) => l.startsWith('-')).sort();
-  const addedCode = schemaDiff.filter((l) => l.startsWith('+') && !l.startsWith('+//')).sort();
+  // Phase 6 part 1 (documented): the AffiliateActivationCode model block (+ its /// doc comment) and the
+  // Affiliate back-relation line. Everything else must be exactly the Phase 5 lines below.
+  const P6_MODEL = ['+model AffiliateActivationCode {', '+id String @id @default(uuid())', '+affiliateId String', '+selector String @unique', '+verifierHash String',
+    '+passwordFingerprint String', '+createdByType String // RECRUITER | ADMIN', '+createdById String', '+createdAt DateTime @default(now())', '+expiresAt DateTime',
+    '+failedAttempts Int @default(0)', '+usedAt DateTime?', '+invalidatedAt DateTime?', '+invalidatedReason String? // REGENERATED | TOO_MANY_ATTEMPTS | CREDENTIALS_CHANGED | ADMIN_RECOVERY',
+    '+affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Restrict)', '+recoveries AffiliateActivationRecovery[]',
+    '+@@index([affiliateId, createdAt])', '+@@map("affiliate_activation_codes")', '+}', '+', '+',
+    '+activationCodes AffiliateActivationCode[]'];
+  // Phase 6 part 1 — admin activation recovery (documented): the AffiliateActivationRecovery model block
+  // (+ its /// doc comment) and the Affiliate.activationRecoveries back-relation line.
+  const P6R_MODEL = ['+model AffiliateActivationRecovery {', '+id String @id @default(uuid())', '+affiliateId String', '+status String @default("PENDING") // PENDING | APPROVED | REJECTED',
+    '+message String', '+contactPhone String?', '+requestIp String?', '+requestedAt DateTime @default(now())', '+reviewedBy String?', '+reviewedAt DateTime?', '+reviewNote String?',
+    '+activationCodeId String?', '+affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Restrict)',
+    '+activationCode AffiliateActivationCode? @relation(fields: [activationCodeId], references: [id], onDelete: Restrict)',
+    '+@@index([status, requestedAt])', '+@@index([affiliateId, requestedAt])', '+@@map("affiliate_activation_recoveries")', '+}', '+', '+',
+    '+activationRecoveries AffiliateActivationRecovery[]'];
+  const p6 = [...P6_MODEL, ...P6R_MODEL];
+  const addedAll = schemaDiff.filter((l) => l.startsWith('+') && !l.startsWith('+//'));
+  const addedCode = [];
+  for (const l of addedAll) { const i = p6.indexOf(l); if (i >= 0) p6.splice(i, 1); else addedCode.push(l); }
+  addedCode.sort();
+  ok('Phase 6 part 1: the schema adds exactly the AffiliateActivationCode + AffiliateActivationRecovery models and the Affiliate.activationCodes / activationRecoveries back-relations (every expected line present)', p6.length === 0, JSON.stringify(p6));
   ok('schema.prisma diff since 63abd2d = exactly the documented AffiliatePayout / Recruiter lines (re-aligned base lines, affiliateId?, the affiliate FK kept, recruiterId + relation + index, bank fields, payouts back-relation)',
     eq(removedLines, ['-affiliate Affiliate @relation(fields: [affiliateId], references: [id])', '-affiliateId String', '-createdAt DateTime @default(now())', '-id String @id @default(uuid())', '-status String @default("pending")'].sort())
     && eq(addedCode, ['+@@index([recruiterId])', '+accountName String?', '+affiliate Affiliate? @relation(fields: [affiliateId], references: [id], onDelete: Restrict) // = the existing FK (unchanged)',
       '+affiliateId String?', '+bankName String?', '+createdAt DateTime @default(now())', '+id String @id @default(uuid())', '+payouts AffiliatePayout[]',
       '+recruiter Recruiter? @relation(fields: [recruiterId], references: [id], onDelete: Restrict)', '+recruiterId String?', '+rib String?', '+status String @default("pending")'].sort())
-    && schemaDiff.filter((l) => l.startsWith('+//')).length === 4, JSON.stringify(schemaDiff));
+    && schemaDiff.filter((l) => l.startsWith('+//')).length === 4 + 6 + 6, JSON.stringify(schemaDiff));
   const asys = read('src/lib/services/affiliateSystemService.js');
   const adminCreate = asys.slice(asys.indexOf('export async function adminCreateAffiliate'), asys.indexOf('export async function adminUpdateAffiliate'));
   ok('adminCreateAffiliate keeps its original body (inactive, rate default, parent check, cache invalidation, no recruiter link)',

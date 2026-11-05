@@ -82,7 +82,7 @@ export function toRecruiterAuditView(entry, recruiterId) {
 export const RECRUITER_ERROR_CODES = Object.freeze([
   'UNAUTHORIZED', 'RECRUITER_DISABLED', 'FORBIDDEN', 'NOT_FOUND', 'INVALID_INPUT', 'USERNAME_TAKEN',
   'PHONE_TAKEN', 'PARENT_NOT_IN_NETWORK', 'RATE_LIMITED', 'INVALID_CREDENTIALS', 'IDEMPOTENCY_CONFLICT',
-  'INSUFFICIENT_BALANCE', 'INCOMPLETE_BANK_INFO',
+  'INSUFFICIENT_BALANCE', 'INCOMPLETE_BANK_INFO', 'ACTIVATION_NOT_AVAILABLE',
 ]);
 
 /** Per-field validation codes of the affiliate-creation form (Phase 3): field → allowed codes. */
@@ -264,5 +264,27 @@ export function toRecruiterWalletView(w) {
     rewards: (Array.isArray(w?.rewards) ? w.rewards : []).map(toRecruiterRewardHistoryView),
     withdrawals: (Array.isArray(w?.withdrawals) ? w.withdrawals : []).map(toRecruiterWithdrawalView),
     bank: toRecruiterBankView(w?.bank),
+  };
+}
+
+// ── Phase 6 part 1: affiliate activation codes ────────────────────────────────
+const ACTIVATION_CODE_RE = /^[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{43}$/;
+/**
+ * The one-time activation code, returned to the recruiter ONLY in the response that created
+ * it (creation or regeneration) — it is never stored in clear and never shown again.
+ */
+export function toRecruiterActivationCodeView(a) {
+  const code = typeof a?.code === 'string' && ACTIVATION_CODE_RE.test(a.code) ? a.code : null;
+  return { code, expiresAt: code ? iso(a?.expiresAt) : null };
+}
+
+/** An affiliate of the recruiter whose credentials are still pending (state only, never a code). */
+export function toRecruiterPendingActivationView(row) {
+  const a = row?.affiliate;
+  const state = row?.state === 'ACTIVE' || row?.state === 'EXPIRED' || row?.state === 'INVALIDATED' ? row.state : null;
+  return {
+    affiliate: { id: str(a?.id), username: str(a?.username), name: str(a?.name), createdAt: iso(a?.createdAt) },
+    state,
+    expiresAt: iso(row?.expiresAt),
   };
 }

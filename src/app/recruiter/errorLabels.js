@@ -17,6 +17,7 @@ const LABELS = {
   IDEMPOTENCY_CONFLICT: "تم إرسال هذا الطلب من قبل بمعلومات مختلفة. المرجو إعادة المحاولة.",
   FORBIDDEN: "ليست لديك صلاحية القيام بهذه العملية.",
   NOT_FOUND: "هذا الأفلييت غير موجود في شبكتك.",
+  ACTIVATION_NOT_AVAILABLE: "هذا الحساب لديه كلمة سر بالفعل، لا يمكن إنشاء رمز جديد.",
   INCOMPLETE_BANK_INFO: "أكمل معلوماتك البنكية أولاً",
   // Phase 5 (built from parts: this file keeps the Phase 1 contract wording rule).
   [["INSUFFICIENT", "BAL" + "ANCE"].join("_")]: "المبلغ أكبر من رصيدك المتاح",
