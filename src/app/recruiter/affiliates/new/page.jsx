@@ -3,7 +3,8 @@
  * /recruiter/affiliates/new — a recruiter creates an affiliate in THEIR OWN network
  * (Affiliate Recruiter System, Phase 3). Arabic, RTL.
  *
- *   • GET  /api/recruiter/me          → session check (401 / 403 → login page)
+ *   • GET  /api/recruiter/me          → session check (401 / 403 RECRUITER_DISABLED → login page;
+ *                                       Phase 7 Stage C: 5xx / 429 / network → error + retry)
  *   • GET  /api/recruiter/affiliates  → parent selector: the recruiter's own network only
  *   • POST /api/recruiter/affiliates  → { username, name, phone?, parentId?, requestId }
  * The server is the authority (validation, network ownership, idempotency); the client
@@ -24,6 +25,7 @@ import { useRouter } from "next/navigation";
 import { ArrowRight, CheckCircle2, KeyRound, Search, UserPlus } from "lucide-react";
 import { toRecruiterActivationCodeView, toRecruiterError } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel, recruiterFieldErrorLabel } from "../../errorLabels";
+import { authAction } from "../../recruiterUiState";
 import ActivationCodeCard, { requestNewActivationCode } from "../ActivationCodeCard";
 
 const EMPTY = { name: "", username: "", phone: "" };
@@ -79,6 +81,7 @@ export default function RecruiterNewAffiliatePage() {
   const [created, setCreated] = useState(null);
   const [regen, setRegen] = useState({ busy: false, error: "" });
   const [canCreate, setCanCreate] = useState(true); // Phase 6 part 4
+  const [checkError, setCheckError] = useState(null); // Stage C: session check failed (not 401) → retry
   const requestIdRef = useRef(null);
   const aliveRef = useRef(true);
 
@@ -91,28 +94,32 @@ export default function RecruiterNewAffiliatePage() {
     }
   }, [router]);
 
-  // Session check.
+  // Session check: ONLY 401 / 403 RECRUITER_DISABLED → login; any other failure → error + retry.
+  const checkSession = useCallback(async () => {
+    setCheckError(null);
+    try {
+      const res = await fetch("/api/recruiter/me", { credentials: "include", cache: "no-store" });
+      if (!aliveRef.current) return;
+      if (res.ok) {
+        const body = await res.json().catch(() => null);
+        if (!aliveRef.current) return;
+        setCanCreate(body?.permissions?.canCreateAffiliates === true);
+        setReady(true);
+        return;
+      }
+      const { code } = toRecruiterError(await res.json().catch(() => null));
+      const action = authAction(res.status, code);
+      if (action) { toLogin(action === "disabled" ? code : "UNAUTHORIZED"); return; }
+      setCheckError(code);
+    } catch {
+      if (aliveRef.current) setCheckError("SERVER_ERROR");
+    }
+  }, [toLogin]);
   useEffect(() => {
     aliveRef.current = true;
-    (async () => {
-      try {
-        const res = await fetch("/api/recruiter/me", { credentials: "include", cache: "no-store" });
-        if (!aliveRef.current) return;
-        if (res.ok) {
-          const body = await res.json().catch(() => null);
-          if (!aliveRef.current) return;
-          setCanCreate(body?.permissions?.canCreateAffiliates !== false);
-          setReady(true);
-          return;
-        }
-        const { code } = toRecruiterError(await res.json().catch(() => null));
-        toLogin(res.status === 403 ? code : "UNAUTHORIZED");
-      } catch {
-        if (aliveRef.current) setNotice(recruiterErrorLabel(null));
-      }
-    })();
+    checkSession();
     return () => { aliveRef.current = false; };
-  }, [toLogin]);
+  }, [checkSession]);
 
   // Parent selector: the recruiter's own network (debounced search).
   useEffect(() => {
@@ -124,10 +131,10 @@ export default function RecruiterNewAffiliatePage() {
         const q = query.trim().slice(0, 40);
         const res = await fetch(`/api/recruiter/affiliates${q ? `?q=${encodeURIComponent(q)}` : ""}`, { credentials: "include", cache: "no-store" });
         if (!alive) return;
-        if (res.status === 401 || res.status === 403) {
+        if (!res.ok) {
           const { code } = toRecruiterError(await res.json().catch(() => null));
-          toLogin(res.status === 403 ? code : "UNAUTHORIZED");
-          return;
+          const action = authAction(res.status, code);
+          if (action) { toLogin(action === "disabled" ? code : "UNAUTHORIZED"); return; }
         }
         if (!res.ok) { setNetwork({ list: [], truncated: false, loading: false, failed: true }); return; }
         const body = await res.json().catch(() => null);
@@ -229,7 +236,8 @@ export default function RecruiterNewAffiliatePage() {
     try {
       const r = await requestNewActivationCode(created.id);
       if (r.ok) { setCreated((c) => (c ? { ...c, activation: r.activation } : c)); setRegen({ busy: false, error: "" }); return; }
-      if (r.status === 401 || (r.status === 403 && r.code === "RECRUITER_DISABLED")) { toLogin(r.status === 403 ? r.code : "UNAUTHORIZED"); return; }
+      const action = authAction(r.status, r.code);
+      if (action) { toLogin(action === "disabled" ? r.code : "UNAUTHORIZED"); return; }
       setRegen({ busy: false, error: recruiterErrorLabel(r.code) });
     } catch {
       setRegen({ busy: false, error: recruiterErrorLabel(null) });
@@ -255,7 +263,14 @@ export default function RecruiterNewAffiliatePage() {
       <main className="min-h-screen flex items-center justify-center px-4">
         {notice
           ? <p role="alert" className="max-w-sm text-center text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3" data-page-notice>{notice}</p>
-          : <p className="text-sm text-slate-500" aria-live="polite">جارٍ التحميل…</p>}
+          : checkError
+            ? (
+              <div role="alert" className="max-w-sm w-full rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3" data-error>
+                <span className="min-w-0">{recruiterErrorLabel(checkError)}</span>
+                <button type="button" onClick={checkSession} className="shrink-0 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100" data-retry>إعادة المحاولة</button>
+              </div>
+            )
+            : <p className="text-sm text-slate-500" aria-live="polite">جارٍ التحميل…</p>}
       </main>
     );
   }

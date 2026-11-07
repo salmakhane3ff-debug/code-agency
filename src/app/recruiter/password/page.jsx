@@ -8,6 +8,8 @@
  *     never treated as an expired session. Only UNAUTHORIZED / RECRUITER_DISABLED (or a 401
  *     without a code) send the recruiter back to the login page.
  * Client checks are hints only (the server decides). Nothing is stored; server text is never shown.
+ * Phase 7 Stage C: the session check sends to the login page ONLY on 401 (403 RECRUITER_DISABLED with
+ * its notice); 5xx / 429 / network show an error with a retry. A ref guards against double submits.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -15,6 +17,7 @@ import { useRouter } from "next/navigation";
 import { ArrowRight, Eye, EyeOff, Lock } from "lucide-react";
 import { toRecruiterError } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel, recruiterFieldErrorLabel } from "../errorLabels";
+import { authAction } from "../recruiterUiState";
 
 const MIN = 8;
 const MAX = 128;
@@ -40,7 +43,9 @@ export default function RecruiterPasswordPage() {
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [checkError, setCheckError] = useState(null); // session check failed (not 401): retry
   const aliveRef = useRef(true);
+  const busyRef = useRef(false); // synchronous double-submit guard (state updates are async)
 
   const toLogin = useCallback((code) => {
     if (code === "RECRUITER_DISABLED") {
@@ -51,22 +56,26 @@ export default function RecruiterPasswordPage() {
     }
   }, [router]);
 
-  // Session check (same pattern as the other recruiter pages).
+  // Session check (same pattern as the other recruiter pages): ONLY 401 / 403 disabled → login.
+  const checkSession = useCallback(async () => {
+    setCheckError(null);
+    try {
+      const res = await fetch("/api/recruiter/me", { credentials: "include", cache: "no-store" });
+      if (!aliveRef.current) return;
+      if (res.ok) { setReady(true); return; }
+      const { code } = toRecruiterError(await res.json().catch(() => null));
+      const action = authAction(res.status, code);
+      if (action) { toLogin(action === "disabled" ? code : "UNAUTHORIZED"); return; }
+      setCheckError(code);
+    } catch {
+      if (aliveRef.current) setCheckError("SERVER_ERROR");
+    }
+  }, [toLogin]);
   useEffect(() => {
     aliveRef.current = true;
-    (async () => {
-      try {
-        const res = await fetch("/api/recruiter/me", { credentials: "include", cache: "no-store" });
-        if (!aliveRef.current) return;
-        if (res.ok) { setReady(true); return; }
-        const { code } = toRecruiterError(await res.json().catch(() => null));
-        toLogin(res.status === 403 ? code : "UNAUTHORIZED");
-      } catch {
-        if (aliveRef.current) setNotice(recruiterErrorLabel(null));
-      }
-    })();
+    checkSession();
     return () => { aliveRef.current = false; };
-  }, [toLogin]);
+  }, [checkSession]);
 
   const set = (k, v) => {
     setForm((f) => ({ ...f, [k]: v }));
@@ -84,12 +93,13 @@ export default function RecruiterPasswordPage() {
 
   async function submit(e) {
     e.preventDefault();
-    if (busy) return;
+    if (busy || busyRef.current) return;
     setError("");
     setDone(false);
     const local = localErrors(form);
     if (Object.keys(local).length) { setFieldErrors(local); setError(recruiterErrorLabel("INVALID_INPUT")); return; }
     setFieldErrors({});
+    busyRef.current = true;
     setBusy(true);
     try {
       const res = await fetch("/api/recruiter/password", {
@@ -116,6 +126,7 @@ export default function RecruiterPasswordPage() {
     } catch {
       if (aliveRef.current) setError(recruiterErrorLabel(null));
     } finally {
+      busyRef.current = false;
       if (aliveRef.current) setBusy(false);
     }
   }
@@ -125,7 +136,14 @@ export default function RecruiterPasswordPage() {
       <main className="min-h-screen flex items-center justify-center px-4">
         {notice
           ? <p role="alert" className="max-w-sm text-center text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3" data-page-notice>{notice}</p>
-          : <p className="text-sm text-slate-500" aria-live="polite">جارٍ التحميل…</p>}
+          : checkError
+            ? (
+              <div role="alert" className="max-w-sm w-full rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3" data-error>
+                <span className="min-w-0">{recruiterErrorLabel(checkError)}</span>
+                <button type="button" onClick={checkSession} className="shrink-0 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100" data-retry>إعادة المحاولة</button>
+              </div>
+            )
+            : <p className="text-sm text-slate-500" aria-live="polite">جارٍ التحميل…</p>}
       </main>
     );
   }

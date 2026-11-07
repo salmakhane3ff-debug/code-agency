@@ -12,6 +12,14 @@
  * Real and fake orders are always shown apart; a fake order is never a real delivered sale.
  * Phase 6 part 4: when the admin turned off order visibility the server sends `orders: null` —
  * the order counts are then not shown at all (never as zeros) and a short note explains why.
+ * Phase 7 Stage C: every node shows its progress "x / T مبيعات" (only when the delivered count is
+ * visible) and its qualified / reward state badges; levels are absolute (same as the statistics).
+ * Phase 7 Stage E: the tree is the recruiter's network N(R) — every member is reward-eligible; a member
+ * the recruiter did not create directly carries a neutral "مدعو عبر الشبكة" badge (information only);
+ * other recruiters' affiliates are never shown.
+ * Stale answers (root changed) are discarded, a branch / page is never loaded twice at once and
+ * rows are merged by id; a failed "load more" keeps the rows already shown. Creation buttons only
+ * when GET /api/recruiter/me says canCreateAffiliates.
  */
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -19,9 +27,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronLeft, Network, UserPlus } from "lucide-react";
 import { toRecruiterNetworkNodeView, toRecruiterNetworkPathView, toRecruiterNetworkStatsView } from "@/lib/recruiterVisibility";
 import {
-  Breadcrumb, Chip, ErrorBox, FAKE_LABEL, IDENTITY_LABEL, Loading, NetworkHeader, ORDER_KEYS, ORDER_LABEL, OrdersHidden, PageNotice,
-  STATUS_LABEL, fmt, getJson, handleAuth, identityTone,
+  Breadcrumb, Chip, ErrorBox, FAKE_LABEL, IDENTITY_LABEL, Loading, NetworkHeader, NodeBadges, ORDER_KEYS, ORDER_LABEL, OrdersHidden, PageNotice,
+  ProgressBar, STATUS_LABEL, fmt, getJson, handleAuth, identityTone, useRecruiterPerms,
 } from "./networkUi";
+import { createRequestGate, levelLabel, mergeById } from "../recruiterUiState";
 
 const PAGE = 50;
 const nodesUrl = (params) => `/api/recruiter/network/nodes?${new URLSearchParams(params).toString()}`;
@@ -76,15 +85,16 @@ function NodeOrders({ orders }) {
   );
 }
 
-function NodeCard({ node, open, onToggle, unplaced }) {
+function NodeCard({ node, open, onToggle, unplaced, busy }) {
   const hasChildren = node.childrenCount > 0;
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-3 space-y-2 min-w-0" data-node-id={node.id} data-node-level={node.level ?? ""}>
+    <div className="bg-white rounded-xl border border-slate-200 p-3 space-y-2 min-w-0"
+      data-node-id={node.id} data-node-level={node.level ?? ""} data-node-linked={node.linkedToMe ? "1" : "0"}>
       <div className="flex items-start gap-2 min-w-0">
         {hasChildren ? (
-          <button type="button" onClick={onToggle} aria-expanded={open} data-expand
+          <button type="button" onClick={onToggle} aria-expanded={open} data-expand disabled={busy} aria-busy={busy || undefined}
             aria-label={open ? "إخفاء الفروع" : "إظهار الفروع"}
-            className="shrink-0 mt-0.5 rounded-lg p-1 text-slate-600 hover:bg-slate-100">
+            className="shrink-0 mt-0.5 rounded-lg p-1 text-slate-600 hover:bg-slate-100 disabled:opacity-60">
             {open ? <ChevronDown className="w-4 h-4" aria-hidden="true" /> : <ChevronLeft className="w-4 h-4" aria-hidden="true" />}
           </button>
         ) : <span className="shrink-0 w-6" aria-hidden="true" />}
@@ -92,7 +102,7 @@ function NodeCard({ node, open, onToggle, unplaced }) {
           <p className="font-bold text-sm truncate" data-node-name>{node.name || "—"}</p>
           <p className="text-xs text-slate-500 truncate" dir="ltr" data-node-username>{node.username || "—"}</p>
         </div>
-        <Chip tone="slate" data-level-badge>{node.level ? `المستوى ${fmt(node.level)}` : "بدون مستوى"}</Chip>
+        <Chip tone="slate" data-level-badge>{levelLabel(node.level)}</Chip>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <Chip tone={node.status === "ACTIVE" ? "green" : node.status === "INACTIVE" ? "red" : "slate"} data-node-status={node.status ?? ""}>
@@ -107,6 +117,8 @@ function NodeCard({ node, open, onToggle, unplaced }) {
           </span>
         )}
       </div>
+      <NodeBadges node={node} />
+      <ProgressBar progress={node.progress} />
       <NodeOrders orders={node.orders} />
       {hasChildren && !unplaced && (
         <Link href={`/recruiter/network?root=${encodeURIComponent(node.id)}`} data-subnetwork-link
@@ -130,7 +142,7 @@ function Branch({ list, branches, toggle, loadMore, indent, unplaced = false }) 
         const b = branches[n.id];
         return (
           <li key={n.id} className="space-y-2 min-w-0">
-            <NodeCard node={n} open={!!b?.open} onToggle={() => toggle(n.id)} unplaced={unplaced} />
+            <NodeCard node={n} open={!!b?.open} onToggle={() => toggle(n.id)} unplaced={unplaced} busy={!!b?.loading} />
             {b?.open && (
               <div className="min-w-0">
                 {b.nodes.length > 0 && <Branch list={b} branches={branches} toggle={toggle} loadMore={loadMore} indent={indent + 1} />}
@@ -149,57 +161,90 @@ function Branch({ list, branches, toggle, loadMore, indent, unplaced = false }) 
   );
 }
 
+const EMPTY_TOP = { nodes: [], nextCursor: null, total: 0, loading: true, error: null, moreError: null, path: [] };
+
 function NetworkTree() {
   const router = useRouter();
   const root = useSearchParams().get("root") || null;
   const [notice, setNotice] = useState("");
   const [stats, setStats] = useState(null);
   const [statsError, setStatsError] = useState(null);
-  const [top, setTop] = useState({ nodes: [], nextCursor: null, total: 0, loading: true, error: null, path: [] });
+  const [top, setTop] = useState(EMPTY_TOP);
   const [branches, setBranches] = useState({});
-  const [unplaced, setUnplaced] = useState(null); // { nodes, nextCursor, loading, error }
+  const [unplaced, setUnplaced] = useState(null); // { nodes, nextCursor, loading, error, failedCursor }
   const branchesRef = useRef(branches);
   branchesRef.current = branches;
+  const { permsError, retryPerms, canCreate } = useRecruiterPerms(router, setNotice);
+
+  // Phase 7 Stage C: a response of an older root / request is discarded (gates), a branch or page
+  // already in flight is never requested twice (in-flight sets), and pages are merged by id.
+  const topGate = useRef(createRequestGate()).current;
+  const statsGate = useRef(createRequestGate()).current;
+  const unplacedGate = useRef(createRequestGate()).current;
+  const scopeGate = useRef(createRequestGate()).current; // bumped on every root change (branches)
+  const scopeRef = useRef(0);
+  const branchInFlight = useRef(new Set());
+  const topInFlight = useRef(false);
 
   const fail = useCallback((r) => handleAuth(r, router, setNotice), [router]);
 
   const loadTop = useCallback(async (cursor = 0) => {
-    setTop((t) => ({ ...t, loading: true, error: null }));
+    if (cursor && topInFlight.current) return; // one "load more" at a time
+    const token = topGate.begin();
+    topInFlight.current = true;
+    setTop((t) => (cursor ? { ...t, loading: true, moreError: null } : { ...t, loading: true, error: null, moreError: null }));
     const params = { limit: String(PAGE), cursor: String(cursor), ...(root ? { parentId: root } : {}) };
     const r = await getJson(nodesUrl(params));
+    if (!topGate.isCurrent(token)) return; // root changed / newer request: stale answer
+    topInFlight.current = false;
     if (fail(r)) return;
-    if (!r.ok) { setTop((t) => ({ ...t, loading: false, error: r.code })); return; }
+    if (!r.ok) {
+      // a failed "load more" keeps every row already shown
+      setTop((t) => (cursor ? { ...t, loading: false, moreError: r.code } : { ...t, loading: false, error: r.code }));
+      return;
+    }
     const nodes = (r.body?.nodes ?? []).map(toRecruiterNetworkNodeView);
     setTop((t) => ({
-      nodes: cursor ? [...t.nodes, ...nodes] : nodes,
+      nodes: cursor ? mergeById(t.nodes, nodes) : mergeById([], nodes),
       nextCursor: Number.isInteger(r.body?.nextCursor) ? r.body.nextCursor : null,
       total: Number.isInteger(r.body?.total) ? r.body.total : 0,
       path: (r.body?.path ?? []).map(toRecruiterNetworkPathView),
-      loading: false, error: null,
+      loading: false, error: null, moreError: null,
     }));
-  }, [root, fail]);
+  }, [root, fail, topGate]);
 
   const loadStats = useCallback(async () => {
+    const token = statsGate.begin();
     setStatsError(null);
     const r = await getJson(`/api/recruiter/network/stats${root ? `?rootId=${encodeURIComponent(root)}` : ""}`);
+    if (!statsGate.isCurrent(token)) return;
     if (fail(r)) return;
     if (!r.ok) { setStatsError(r.code); return; }
     setStats(toRecruiterNetworkStatsView(r.body?.stats));
-  }, [root, fail]);
+  }, [root, fail, statsGate]);
 
   useEffect(() => {
-    setStats(null); setBranches({}); setUnplaced(null);
-    setTop({ nodes: [], nextCursor: null, total: 0, loading: true, error: null, path: [] });
+    scopeRef.current = scopeGate.begin();
+    branchInFlight.current = new Set();
+    topInFlight.current = false;
+    unplacedGate.invalidate();
+    setStats(null); setStatsError(null); setBranches({}); setUnplaced(null);
+    setTop(EMPTY_TOP);
     loadTop(0);
     loadStats();
-  }, [loadTop, loadStats]);
+  }, [loadTop, loadStats, scopeGate, unplacedGate]);
 
-  /** Load (the next page of) the children of one node. */
+  /** Load (the next page of) the children of one node — never twice at the same time. */
   const loadMore = useCallback(async (id) => {
+    if (branchInFlight.current.has(id)) return;
+    branchInFlight.current.add(id);
+    const scope = scopeRef.current;
     const b = branchesRef.current[id] ?? { open: true, nodes: [], nextCursor: 0 };
     const cursor = b.nextCursor ?? 0;
-    setBranches((all) => ({ ...all, [id]: { ...b, open: true, loading: true, error: null } }));
+    setBranches((all) => ({ ...all, [id]: { ...(all[id] ?? b), open: true, loading: true, error: null } }));
     const r = await getJson(nodesUrl({ parentId: id, limit: String(PAGE), cursor: String(cursor) }));
+    if (!scopeGate.isCurrent(scope)) return; // the root changed meanwhile: this branch is gone
+    branchInFlight.current.delete(id);
     if (fail(r)) return;
     setBranches((all) => {
       const cur = all[id] ?? b;
@@ -207,26 +252,32 @@ function NetworkTree() {
       const nodes = (r.body?.nodes ?? []).map(toRecruiterNetworkNodeView);
       return {
         ...all,
-        [id]: { ...cur, nodes: [...cur.nodes, ...nodes], nextCursor: Number.isInteger(r.body?.nextCursor) ? r.body.nextCursor : null, loading: false, error: null, loaded: true },
+        [id]: { ...cur, nodes: mergeById(cur.nodes, nodes), nextCursor: Number.isInteger(r.body?.nextCursor) ? r.body.nextCursor : null, loading: false, error: null, loaded: true },
       };
     });
-  }, [fail]);
+  }, [fail, scopeGate]);
 
   const toggle = useCallback((id) => {
     const b = branchesRef.current[id];
+    if (branchInFlight.current.has(id)) return; // still loading: ignore rapid clicks
     if (b?.open) { setBranches((all) => ({ ...all, [id]: { ...all[id], open: false } })); return; }
     if (b?.loaded) { setBranches((all) => ({ ...all, [id]: { ...all[id], open: true } })); return; }
     loadMore(id);
   }, [loadMore]);
 
   const loadUnplaced = useCallback(async (cursor = 0) => {
-    setUnplaced((u) => ({ nodes: u?.nodes ?? [], nextCursor: null, loading: true, error: null }));
+    if (cursor && unplacedGate.inFlight) return;
+    const token = unplacedGate.begin();
+    unplacedGate.inFlight = true;
+    setUnplaced((u) => ({ nodes: u?.nodes ?? [], nextCursor: u?.nextCursor ?? null, loading: true, error: null, failedCursor: null }));
     const r = await getJson(nodesUrl({ view: "unplaced", limit: String(PAGE), cursor: String(cursor) }));
+    if (!unplacedGate.isCurrent(token)) return;
+    unplacedGate.inFlight = false;
     if (fail(r)) return;
-    if (!r.ok) { setUnplaced((u) => ({ ...u, loading: false, error: r.code })); return; }
+    if (!r.ok) { setUnplaced((u) => ({ ...u, loading: false, error: r.code, failedCursor: cursor })); return; }
     const nodes = (r.body?.nodes ?? []).map(toRecruiterNetworkNodeView);
-    setUnplaced((u) => ({ nodes: cursor ? [...(u?.nodes ?? []), ...nodes] : nodes, nextCursor: Number.isInteger(r.body?.nextCursor) ? r.body.nextCursor : null, loading: false, error: null }));
-  }, [fail]);
+    setUnplaced((u) => ({ nodes: cursor ? mergeById(u?.nodes, nodes) : mergeById([], nodes), nextCursor: Number.isInteger(r.body?.nextCursor) ? r.body.nextCursor : null, loading: false, error: null, failedCursor: null }));
+  }, [fail, unplacedGate]);
 
   if (notice) return <PageNotice text={notice} />;
 
@@ -253,8 +304,8 @@ function NetworkTree() {
               <div className="space-y-2" data-unplaced-list>
                 {unplaced.nodes.length > 0 && <Branch list={unplaced} branches={{}} toggle={() => {}} loadMore={() => {}} indent={0} unplaced />}
                 {unplaced.loading && <Loading />}
-                {unplaced.error && <ErrorBox code={unplaced.error} onRetry={() => loadUnplaced(0)} />}
-                {!unplaced.loading && unplaced.nextCursor !== null && (
+                {unplaced.error && <ErrorBox code={unplaced.error} onRetry={() => loadUnplaced(unplaced.failedCursor ?? 0)} />}
+                {!unplaced.loading && !unplaced.error && unplaced.nextCursor !== null && (
                   <button type="button" onClick={() => loadUnplaced(unplaced.nextCursor)} data-load-more
                     className="rounded-xl border border-amber-300 bg-white px-3 py-1.5 font-semibold">تحميل المزيد</button>
                 )}
@@ -265,6 +316,7 @@ function NetworkTree() {
 
         <section className="space-y-3 min-w-0" aria-label="شجرة الشبكة" data-tree>
           <h2 className="text-base font-bold">{root ? "الأفلييت تحت هذا الحساب" : "الأفلييت الرئيسيون"}{!top.loading && !top.error && <span className="text-slate-500 font-normal"> ({fmt(top.total)})</span>}</h2>
+          {permsError && <ErrorBox code={permsError} onRetry={retryPerms} />}
           {top.error ? (
             <div className="space-y-3">
               <ErrorBox code={top.error} onRetry={() => loadTop(0)} />
@@ -275,7 +327,7 @@ function NetworkTree() {
           ) : !top.loading && (
             <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-6 text-center space-y-3" data-empty>
               <p className="text-sm text-slate-600">{root ? "لا يوجد أفلييت تحت هذا الحساب." : "لا يوجد أفلييت في شبكتك بعد"}</p>
-              {!root && (
+              {!root && canCreate && (
                 <Link href="/recruiter/affiliates/new" className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 text-white font-bold px-4 py-2 hover:bg-emerald-700" data-empty-create>
                   <UserPlus className="w-4 h-4" aria-hidden="true" />
                   إنشاء أفلييت
@@ -284,7 +336,8 @@ function NetworkTree() {
             </div>
           )}
           {top.loading && <Loading />}
-          {!top.loading && !top.error && top.nextCursor !== null && (
+          {top.moreError && <ErrorBox code={top.moreError} onRetry={() => loadTop(top.nextCursor ?? 0)} />}
+          {!top.loading && !top.error && !top.moreError && top.nextCursor !== null && (
             <button type="button" onClick={() => loadTop(top.nextCursor)} data-load-more
               className="rounded-xl border border-slate-300 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50">تحميل المزيد</button>
           )}

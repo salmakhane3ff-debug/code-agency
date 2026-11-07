@@ -8,7 +8,7 @@ import { RECRUITER_ERROR_CODES, RECRUITER_FIELD_ERROR_CODES } from "@/lib/recrui
 const LABELS = {
   INVALID_CREDENTIALS: "اسم المستخدم أو كلمة السر غير صحيحة",
   RECRUITER_DISABLED: "هذا الحساب معطّل. تواصل مع الإدارة.",
-  RATE_LIMITED: "محاولات كثيرة، حاول بعد دقيقة",
+  RATE_LIMITED: "محاولات كثيرة، حاول لاحقاً.",
   UNAUTHORIZED: "انتهت الجلسة، المرجو تسجيل الدخول من جديد.",
   INVALID_INPUT: "المرجو التحقق من المعلومات المدخلة.",
   USERNAME_TAKEN: "اسم المستخدم هذا مستعمل من قبل، اختر اسماً آخر.",

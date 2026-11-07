@@ -17,6 +17,7 @@ import { useRouter } from "next/navigation";
 import { ArrowRight, KeyRound, RefreshCw } from "lucide-react";
 import { toRecruiterError, toRecruiterPendingActivationView } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel } from "../../errorLabels";
+import { authAction } from "../../recruiterUiState";
 import ActivationCodeCard, { requestNewActivationCode } from "../ActivationCodeCard";
 
 const fmtDate = (iso) => {
@@ -46,7 +47,8 @@ export default function RecruiterActivationPage() {
   const [issued, setIssued] = useState({}); // affiliateId → { code, expiresAt } (memory only)
   const [rowBusy, setRowBusy] = useState("");
   const [rowError, setRowError] = useState({});
-  const [canCreate, setCanCreate] = useState(true); // Phase 6 part 4 (from /api/recruiter/me)
+  const [canCreate, setCanCreate] = useState(false); // Phase 6 part 4 (from /api/recruiter/me; Stage C: hidden until allowed)
+  const [permsUnknown, setPermsUnknown] = useState(false); // Stage C: /me failed (not 401) → note + retry
   const aliveRef = useRef(true);
 
   const toLogin = useCallback((code) => {
@@ -68,11 +70,14 @@ export default function RecruiterActivationPage() {
       const body = await res.json().catch(() => null);
       const meBody = meRes?.ok ? await meRes.json().catch(() => null) : null;
       if (!aliveRef.current) return;
-      if (meBody?.permissions) setCanCreate(meBody.permissions.canCreateAffiliates !== false);
-      if (res.status === 401 || res.status === 403) {
+      // Stage C: creation stays hidden unless /me explicitly allows it (a failed /me hides it too).
+      setCanCreate(meBody?.permissions?.canCreateAffiliates === true);
+      setPermsUnknown(!meBody?.permissions);
+      if (!res.ok) {
+        // ONLY 401 / 403 RECRUITER_DISABLED → login; any other failure → error + retry below.
         const { code } = toRecruiterError(body);
-        toLogin(res.status === 403 ? code : "UNAUTHORIZED");
-        return;
+        const action = authAction(res.status, code);
+        if (action) { toLogin(action === "disabled" ? code : "UNAUTHORIZED"); return; }
       }
       if (!res.ok) { setState({ loading: false, error: recruiterErrorLabel(toRecruiterError(body).code), list: [] }); return; }
       const list = (Array.isArray(body?.pending) ? body.pending : []).map(toRecruiterPendingActivationView).filter((p) => p.affiliate.id);
@@ -99,8 +104,8 @@ export default function RecruiterActivationPage() {
       if (r.ok) {
         setIssued((m) => ({ ...m, [id]: r.activation }));
         setState((s) => ({ ...s, list: s.list.map((p) => (p.affiliate.id === id ? { ...p, state: "ACTIVE", expiresAt: r.activation.expiresAt } : p)) }));
-      } else if (r.status === 401 || (r.status === 403 && r.code === "RECRUITER_DISABLED")) {
-        toLogin(r.status === 403 ? r.code : "UNAUTHORIZED");
+      } else if (authAction(r.status, r.code)) {
+        toLogin(authAction(r.status, r.code) === "disabled" ? r.code : "UNAUTHORIZED");
       } else if (r.code === "FORBIDDEN") {
         setCanCreate(false); // turned off by the admin meanwhile
       } else {
@@ -138,7 +143,13 @@ export default function RecruiterActivationPage() {
           الرمز الجديد يلغي الرمز السابق، ويظهر مرة واحدة فقط.
         </p>
 
-        {!canCreate && (
+        {permsUnknown && !state.loading && !state.error && (
+          <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3" data-perms-error>
+            <span className="min-w-0">تعذّر التحقق من صلاحياتك. {recruiterErrorLabel(null)}</span>
+            <button type="button" onClick={load} className="shrink-0 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100" data-retry>إعادة المحاولة</button>
+          </div>
+        )}
+        {!canCreate && !permsUnknown && (
           <p className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" data-create-disabled>
             إنشاء رموز تفعيل جديدة معطّل لحسابك من طرف الإدارة. يمكن للأفلييت المعني طلب استرجاع التفعيل من الإدارة.
           </p>

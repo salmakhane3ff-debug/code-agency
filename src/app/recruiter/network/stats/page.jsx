@@ -5,20 +5,23 @@
  *
  *   • GET /api/recruiter/network/stats?rootId=            → totals, identity, orders, levels
  *   • GET /api/recruiter/network/nodes?parentId=&limit=1  → breadcrumb of a sub-network
- * `?root=<id>` scopes everything to the sub-network of one of the recruiter's own affiliates
- * (levels are then relative to it: level 1 = its direct affiliates). Fake orders are always
- * reported apart and are never counted as real delivered sales.
+ * `?root=<id>` scopes everything to the sub-network of one of the recruiter's own affiliates.
+ * Phase 7 Stage B/C: levels are ABSOLUTE everywhere (the tree, its breadcrumb and these statistics,
+ * whole network or sub-network): level 1 = a top affiliate of the recruiter's network. Fake orders
+ * are always reported apart and are never counted as real delivered sales. A stale answer (root
+ * changed meanwhile) is discarded; creation buttons only when /api/recruiter/me allows them.
  * Phase 6 part 4: `orders: null` (order visibility turned off by the admin) → the order section
  * and the per-level order columns are not shown (never zeros); a note explains why.
  */
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toRecruiterNetworkPathView, toRecruiterNetworkStatsView } from "@/lib/recruiterVisibility";
 import {
   Breadcrumb, ErrorBox, FAKE_LABEL, IDENTITY_KEYS, IDENTITY_LABEL, Loading, NetworkHeader, ORDER_KEYS, ORDER_LABEL, PageNotice,
-  OrdersHidden, fmt, getJson, handleAuth,
+  OrdersHidden, fmt, getJson, handleAuth, useRecruiterPerms,
 } from "../networkUi";
+import { createRequestGate, levelLabel } from "../../recruiterUiState";
 
 function Card({ label, value, attrs = {}, tone = "slate" }) {
   const tones = { slate: "bg-white border-slate-200", green: "bg-emerald-50 border-emerald-200", violet: "bg-violet-50 border-violet-200", amber: "bg-amber-50 border-amber-200" };
@@ -46,18 +49,22 @@ function NetworkStats() {
   const [stats, setStats] = useState(null);
   const [error, setError] = useState(null);
   const [path, setPath] = useState([]);
+  const gate = useRef(createRequestGate()).current;
+  const { permsError, retryPerms, canCreate } = useRecruiterPerms(router, setNotice);
 
   const load = useCallback(async () => {
-    setError(null); setStats(null);
+    const token = gate.begin();
+    setError(null); setStats(null); setPath([]);
     const [s, p] = await Promise.all([
       getJson(`/api/recruiter/network/stats${root ? `?rootId=${encodeURIComponent(root)}` : ""}`),
       root ? getJson(`/api/recruiter/network/nodes?${new URLSearchParams({ parentId: root, limit: "1" }).toString()}`) : Promise.resolve(null),
     ]);
+    if (!gate.isCurrent(token)) return; // the root changed meanwhile: stale answer
     if (handleAuth(s, router, setNotice) || (p && handleAuth(p, router, setNotice))) return;
     if (!s.ok) { setError(s.code); return; }
     setStats(toRecruiterNetworkStatsView(s.body?.stats));
     setPath(p?.ok ? (p.body?.path ?? []).map(toRecruiterNetworkPathView) : []);
-  }, [root, router]);
+  }, [root, router, gate]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -77,17 +84,18 @@ function NetworkStats() {
           </Link>
         )}
 
+        {permsError && <ErrorBox code={permsError} onRetry={retryPerms} />}
         {error ? <ErrorBox code={error} onRetry={load} /> : !stats ? <Loading /> : t.affiliates === 0 ? (
           <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-6 text-center space-y-3" data-empty>
             <p className="text-sm text-slate-600">{root ? "لا يوجد أفلييت تحت هذا الحساب." : "لا يوجد أفلييت في شبكتك بعد"}</p>
-            {!root && <Link href="/recruiter/affiliates/new" className="inline-block rounded-xl bg-emerald-600 text-white font-bold px-4 py-2" data-empty-create>إنشاء أفلييت</Link>}
+            {!root && canCreate && <Link href="/recruiter/affiliates/new" className="inline-block rounded-xl bg-emerald-600 text-white font-bold px-4 py-2" data-empty-create>إنشاء أفلييت</Link>}
           </div>
         ) : (
           <>
             <Section title="المجموع" data-totals>
               <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 <Card label="عدد الأفلييت" value={t.affiliates} attrs={{ "data-stats-total": "" }} />
-                <Card label={root ? "المباشرون تحت هذا الحساب" : "الأفلييت المباشرون (المستوى 1)"} value={t.direct} attrs={{ "data-stats-direct": "" }} />
+                <Card label={root ? "المباشرون تحت هذا الحساب" : "الأفلييت الرئيسيون (المستوى 1)"} value={t.direct} attrs={{ "data-stats-direct": "" }} />
                 <Card label="أعمق مستوى" value={t.maxLevel} attrs={{ "data-stats-max-level": "" }} />
                 <Card label="مفعّلون" value={t.active} tone="green" attrs={{ "data-stats-active": "" }} />
                 <Card label="غير مفعّلين" value={t.inactive} attrs={{ "data-stats-inactive": "" }} />
@@ -142,7 +150,10 @@ function NetworkStats() {
             </Section>
             )}
 
-            <Section title={root ? "حسب المستوى (1 = المباشرون تحت هذا الحساب)" : "حسب المستوى"} data-levels>
+            <Section title="حسب المستوى" data-levels>
+              <p className="text-xs text-slate-500" data-levels-note>
+                المستويات نفسها في الشجرة والإحصائيات: المستوى 1 = الأفلييت الرئيسيون في شبكتك{root ? "، حتى داخل شبكة فرعية" : ""}.
+              </p>
               <div className="overflow-x-auto max-w-full rounded-xl border border-slate-200" data-levels-scroll>
                 <table className="min-w-[44rem] w-full text-sm">
                   <thead className="bg-slate-50 text-slate-600">
@@ -155,7 +166,7 @@ function NetworkStats() {
                   <tbody className="divide-y divide-slate-100">
                     {stats.levels.map((l) => (
                       <tr key={l.level} data-level-row={l.level}>
-                        <th scope="row" className="text-start px-3 py-2 font-bold whitespace-nowrap">المستوى {fmt(l.level)}</th>
+                        <th scope="row" className="text-start px-3 py-2 font-bold whitespace-nowrap" data-level-label>{levelLabel(l.level)}</th>
                         <td className="px-3 py-2" data-level-affiliates>{fmt(l.affiliates)}</td>
                         <td className="px-3 py-2">{fmt(l.active)}</td>
                         <td className="px-3 py-2">{fmt(l.inactive)}</td>

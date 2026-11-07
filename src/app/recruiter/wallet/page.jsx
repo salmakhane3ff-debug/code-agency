@@ -8,6 +8,12 @@
  *   • POST /api/recruiter/wallet/withdrawals   → { amountMad, requestId }
  *   • GET  /api/recruiter/identity             → the recruiter's KYC status (Phase 6 part 3c): a
  *                                                withdrawal needs it APPROVED (banner + link)
+ *   • GET  /api/recruiter/progress             → (Phase 7 Stage C) the recruiter's reward aggregates:
+ *                                                awarded vs reversed amounts, shown apart from the net
+ * Phase 7 Stage C: group reward rows (GROUP_REWARD / GROUP_REVERSAL) are labelled with their cycle
+ * and group size; a FAILED identity request shows "حالة التحقق غير متاحة" with a retry and never
+ * claims the recruiter is unverified nor blocks the form on it (the server enforces the KYC gate);
+ * ONLY 401 (and 403 RECRUITER_DISABLED) goes back to the login page.
  * The server is the authority (KYC gate, bank gate, available funds, idempotency); client
  * checks are hints only. Only error CODES are read and shown with fixed Arabic texts. No CIN
  * image, file, customer or order detail is ever requested or shown.
@@ -16,8 +22,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Banknote, CheckCircle2, Gift, Landmark, Loader2, RefreshCw, ShieldCheck, Wallet } from "lucide-react";
-import { toRecruiterError, toRecruiterIdentityView, toRecruiterWalletView } from "@/lib/recruiterVisibility";
+import { toRecruiterError, toRecruiterIdentityView, toRecruiterProgressSummaryView, toRecruiterWalletView } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel, recruiterFieldErrorLabel } from "../errorLabels";
+import { authAction, rewardAmountsDisplay } from "../recruiterUiState";
+import { groupRowDetail, rewardRowTitle, walletGrossNet } from "./walletUi";
 
 const EMPTY_BANK = { bankName: "", rib: "", accountName: "" };
 
@@ -98,6 +106,9 @@ export default function RecruiterWalletPage() {
   const router = useRouter();
   const [wallet, setWallet] = useState(null);
   const [identity, setIdentity] = useState(null); // KYC view (Phase 6 part 3c)
+  const [identityError, setIdentityError] = useState(false); // Stage C: the KYC request failed (status unknown)
+  const [identityBusy, setIdentityBusy] = useState(false);
+  const [amounts, setAmounts] = useState({ data: null, error: null }); // Stage C: /api/recruiter/progress rewards
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [notice, setNotice] = useState("");
@@ -124,28 +135,57 @@ export default function RecruiterWalletPage() {
     }
   }, [router]);
 
-  /** 401 / 403 RECRUITER_DISABLED → login. Returns true when handled. */
+  /** ONLY 401 / 403 RECRUITER_DISABLED → login. Returns true when handled. */
   const authGate = useCallback((res, err) => {
-    if (res.status === 401 || (res.status === 403 && err.code === "RECRUITER_DISABLED")) {
-      toLogin(res.status === 403 ? err.code : "UNAUTHORIZED");
+    const action = authAction(res.status, err.code);
+    if (action) {
+      toLogin(action === "disabled" ? err.code : "UNAUTHORIZED");
       return true;
     }
     return false;
   }, [toLogin]);
 
+  /** The recruiter's KYC status; a failure leaves it UNKNOWN (never "not verified"). */
+  const loadIdentity = useCallback(async () => {
+    setIdentityBusy(true);
+    try {
+      const res = await fetch("/api/recruiter/identity", { credentials: "include", cache: "no-store" });
+      const body = await res.json().catch(() => null);
+      if (!aliveRef.current) return;
+      if (res.ok && body?.identity) { setIdentity(toRecruiterIdentityView(body.identity)); setIdentityError(false); return; }
+      if (!res.ok && authGate(res, toRecruiterError(body))) return;
+      setIdentity(null);
+      setIdentityError(true);
+    } catch {
+      if (aliveRef.current) { setIdentity(null); setIdentityError(true); }
+    } finally {
+      if (aliveRef.current) setIdentityBusy(false);
+    }
+  }, [authGate]);
+
+  /** Awarded / reversed aggregates (the whole ledger, server-side) — never derived from the capped history. */
+  const loadAmounts = useCallback(async () => {
+    setAmounts({ data: null, error: null });
+    try {
+      const res = await fetch("/api/recruiter/progress", { credentials: "include", cache: "no-store" });
+      const body = await res.json().catch(() => null);
+      if (!aliveRef.current) return;
+      if (res.ok) { setAmounts({ data: rewardAmountsDisplay(toRecruiterProgressSummaryView(body?.progress).rewards), error: null }); return; }
+      const err = toRecruiterError(body);
+      if (authGate(res, err)) return;
+      setAmounts({ data: null, error: err.code });
+    } catch {
+      if (aliveRef.current) setAmounts({ data: null, error: "SERVER_ERROR" });
+    }
+  }, [authGate]);
+
   const load = useCallback(async ({ keepBank = false } = {}) => {
     setLoading(true);
     setLoadError("");
     try {
-      const [res, idRes] = await Promise.all([
-        fetch("/api/recruiter/wallet", { credentials: "include", cache: "no-store" }),
-        fetch("/api/recruiter/identity", { credentials: "include", cache: "no-store" }).catch(() => null),
-      ]);
+      const res = await fetch("/api/recruiter/wallet", { credentials: "include", cache: "no-store" });
       const body = await res.json().catch(() => null);
-      const idBody = idRes?.ok ? await idRes.json().catch(() => null) : null;
       if (!aliveRef.current) return;
-      // KYC unknown (request failed) → shown as not approved; the server decides anyway.
-      setIdentity(idBody?.identity ? toRecruiterIdentityView(idBody.identity) : null);
       if (!res.ok) {
         const err = toRecruiterError(body);
         if (authGate(res, err)) return;
@@ -154,13 +194,16 @@ export default function RecruiterWalletPage() {
       }
       const w = toRecruiterWalletView(body?.wallet);
       setWallet(w);
+      // KYC and reward aggregates load alongside; their failure never hides the wallet.
+      loadIdentity();
+      loadAmounts();
       if (!keepBank) setBank({ bankName: w.bank.bankName ?? "", rib: w.bank.rib ?? "", accountName: w.bank.accountName ?? "" });
     } catch {
       if (aliveRef.current) setLoadError(recruiterErrorLabel(null));
     } finally {
       if (aliveRef.current) setLoading(false);
     }
-  }, [authGate]);
+  }, [authGate, loadIdentity, loadAmounts]);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -214,7 +257,9 @@ export default function RecruiterWalletPage() {
   const available = wallet?.totals.availableCents ?? 0;
   const bankComplete = wallet?.bank.complete === true;
   const identityApproved = identity?.status === "APPROVED";
-  const canRequest = identityApproved && bankComplete && available > 0;
+  // Stage C: a FAILED KYC request (status unknown) never blocks here — the server enforces the KYC gate.
+  const identityUnknown = identityError && !identity;
+  const canRequest = (identityApproved || identityUnknown) && bankComplete && available > 0;
 
   const editAmount = (v) => {
     requestIdRef.current = null; // any edit = a new attempt
@@ -298,7 +343,7 @@ export default function RecruiterWalletPage() {
         {loadError && (
           <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center gap-3 justify-between" data-error>
             <span className="min-w-0">{loadError}</span>
-            <button type="button" onClick={() => load()} className="inline-flex items-center gap-1.5 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-50">
+            <button type="button" onClick={() => load()} data-retry className="inline-flex items-center gap-1.5 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-50">
               <RefreshCw className="w-4 h-4" aria-hidden="true" /> إعادة المحاولة
             </button>
           </div>
@@ -313,7 +358,7 @@ export default function RecruiterWalletPage() {
                 <h2 className="text-base font-bold mb-1">قاعدة المكافأة</h2>
                 {s.rewardsEnabled ? (
                   <p data-reward-rule-text>
-                    تحصل على مكافأة <strong dir="ltr">{fmtMad(s.rewardAmountCents)}</strong> عن كل أفلييت أنشأته عندما يصل إلى{" "}
+                    تحصل على مكافأة <strong dir="ltr">{fmtMad(s.rewardAmountCents)}</strong> عن كل أفلييت في شبكتك (أنشأته أنت أو انضم عبر أحد أفلييتك) عندما يصل إلى{" "}
                     <strong>{s.requiredDeliveredOrders}</strong> طلبية حقيقية مسلّمة وتتم الموافقة على بطاقته الوطنية من طرف الإدارة.
                   </p>
                 ) : (
@@ -321,6 +366,47 @@ export default function RecruiterWalletPage() {
                 )}
                 <p className="text-xs text-slate-500 mt-1">الطلبات التجريبية لا تُحتسب أبداً. المكافأة تُسجَّل فوراً عند تحقق الشرطين.</p>
               </div>
+            </section>
+
+            {/* Stage C: gross awarded vs reversed, apart from the net */}
+            <section className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-3 min-w-0" aria-labelledby="gn-title" data-gross-net>
+              <h2 id="gn-title" className="text-base font-bold">المكافآت: الإجمالي والإلغاءات والصافي</h2>
+              {amounts.error ? (
+                <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 flex flex-wrap items-center justify-between gap-2" data-gross-error>
+                  <span className="min-w-0">تفاصيل الإجمالي والإلغاءات غير متاحة: {recruiterErrorLabel(amounts.error)}</span>
+                  <button type="button" onClick={loadAmounts} data-gross-retry
+                    className="shrink-0 inline-flex items-center gap-1.5 rounded-xl border border-red-300 bg-white px-3 py-1 font-semibold hover:bg-red-100">
+                    <RefreshCw className="w-4 h-4" aria-hidden="true" /> إعادة المحاولة
+                  </button>
+                </div>
+              ) : !amounts.data ? (
+                <p className="text-sm text-slate-500" aria-live="polite" data-gross-loading>جارٍ التحميل…</p>
+              ) : (() => {
+                const g = walletGrossNet(amounts.data, t.earnedCents);
+                return (
+                  <>
+                    <dl className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
+                      <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 px-3 py-2 min-w-0">
+                        <dt className="text-xs text-slate-500">إجمالي المكافآت الممنوحة</dt>
+                        <dd className="font-black" dir="ltr" style={{ textAlign: "right" }} data-gross-total>{fmtMad(g.grossCents)}</dd>
+                        <p className="text-[11px] text-slate-500">فردية: <bdi dir="ltr">{fmtMad(amounts.data.individual.awardedCents)}</bdi> · المجموعة: <bdi dir="ltr">{fmtMad(amounts.data.group.awardedCents)}</bdi></p>
+                      </div>
+                      <div className="rounded-xl border border-red-200 bg-red-50/40 px-3 py-2 min-w-0">
+                        <dt className="text-xs text-slate-500">المكافآت الملغاة</dt>
+                        <dd className="font-black text-red-700" dir="ltr" style={{ textAlign: "right" }} data-reversed-total>{fmtMad(-g.reversedCents)}</dd>
+                        <p className="text-[11px] text-slate-500">فردية: <bdi dir="ltr">{fmtMad(amounts.data.individual.reversedCents)}</bdi> · المجموعة: <bdi dir="ltr">{fmtMad(amounts.data.group.reversedCents)}</bdi></p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 px-3 py-2 min-w-0">
+                        <dt className="text-xs text-slate-500">الصافي (إجمالي المكافآت المكتسبة)</dt>
+                        <dd className="font-black" dir="ltr" style={{ textAlign: "right" }} data-net-total>{fmtMad(t.earnedCents)}</dd>
+                        {g.adjustmentCents !== 0 && (
+                          <p className="text-[11px] text-slate-500" data-adjustments>يشمل تعديلات الإدارة: <bdi dir="ltr">{fmtMad(g.adjustmentCents)}</bdi></p>
+                        )}
+                      </div>
+                    </dl>
+                  </>
+                );
+              })()}
             </section>
 
             {/* Totals */}
@@ -336,11 +422,20 @@ export default function RecruiterWalletPage() {
               <h2 id="w-title" className="text-base font-bold flex items-center gap-2">
                 <Banknote className="w-5 h-5 text-emerald-600" aria-hidden="true" /> طلب سحب
               </h2>
-              {!identityApproved && (
-                <div className="text-sm rounded-xl border border-amber-200 bg-amber-50 text-amber-900 px-3 py-2 space-y-1.5" data-identity-required={identity?.status ?? "UNKNOWN"}>
+              {identityUnknown && (
+                <div className="text-sm rounded-xl border border-slate-200 bg-slate-50 text-slate-700 px-3 py-2 flex flex-wrap items-center justify-between gap-2" data-identity-unavailable>
+                  <span className="min-w-0">حالة التحقق غير متاحة حالياً. يمكنك المتابعة، والتحقق من هويتك يتم عند معالجة الطلب.</span>
+                  <button type="button" onClick={loadIdentity} disabled={identityBusy} data-identity-retry
+                    className="shrink-0 inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-1 font-semibold hover:bg-slate-100 disabled:opacity-60">
+                    <RefreshCw className="w-4 h-4" aria-hidden="true" /> إعادة المحاولة
+                  </button>
+                </div>
+              )}
+              {identity && !identityApproved && (
+                <div className="text-sm rounded-xl border border-amber-200 bg-amber-50 text-amber-900 px-3 py-2 space-y-1.5" data-identity-required={identity.status}>
                   <p className="font-semibold">
-                    {identity?.status === "PENDING" ? "التحقق من هويتك قيد المراجعة. يمكنك طلب السحب بعد قبوله."
-                      : identity?.status === "REJECTED" ? "تم رفض التحقق من هويتك. أرسل صوراً جديدة لبطاقتك الوطنية لتتمكن من طلب السحب."
+                    {identity.status === "PENDING" ? "التحقق من هويتك قيد المراجعة. يمكنك طلب السحب بعد قبوله."
+                      : identity.status === "REJECTED" ? "تم رفض التحقق من هويتك. أرسل صوراً جديدة لبطاقتك الوطنية لتتمكن من طلب السحب."
                       : "يجب التحقق من هويتك (البطاقة الوطنية) قبل طلب أي سحب."}
                   </p>
                   <Link href="/recruiter/verification" data-identity-link
@@ -430,17 +525,19 @@ export default function RecruiterWalletPage() {
                   {rewards.map((r, i) => (
                     <li key={`${r.createdAt}-${i}`} className="py-3 flex flex-wrap items-start gap-x-3 gap-y-1 justify-between min-w-0" data-reward-row>
                       <div className="min-w-0 flex-1">
-                        <p className="font-semibold truncate">
-                          {r.affiliate ? (r.affiliate.name || r.affiliate.username || "—") : "—"}
+                        <p className="font-semibold truncate" data-reward-title={r.type ?? ""}>
+                          {rewardRowTitle(r) ?? (r.affiliate ? (r.affiliate.name || r.affiliate.username || "—") : "—")}
                           {r.affiliate?.username && <span className="text-xs text-slate-500 font-normal" dir="ltr"> @{r.affiliate.username}</span>}
                         </p>
                         <p className="text-xs text-slate-600 mt-0.5" data-reward-reason>
-                          {r.reason === "REAL_DELIVERED_AND_CIN_APPROVED"
+                          {r.type === "GROUP_REWARD" || r.type === "GROUP_REVERSAL"
+                            ? groupRowDetail(r)
+                            : r.reason === "REAL_DELIVERED_AND_CIN_APPROVED"
                             ? `${r.requiredDeliveredOrders ?? "—"} طلبية حقيقية مسلّمة + بطاقة وطنية مقبولة`
                             : r.reason === "REAL_DELIVERED_BELOW_THRESHOLD"
                               ? `سحب المكافأة: الطلبيات الحقيقية المسلّمة أصبحت أقل من ${r.requiredDeliveredOrders ?? "—"} (إلغاء أو إرجاع)`
                               : r.type === "ADMIN_ADJUSTMENT" ? "تعديل من طرف الإدارة" : "—"}
-                          {Number.isInteger(r.cycle) && r.cycle > 1 ? ` · الدورة ${r.cycle}` : ""}
+                          {r.type !== "GROUP_REWARD" && r.type !== "GROUP_REVERSAL" && Number.isInteger(r.cycle) && r.cycle > 1 ? ` · الدورة ${r.cycle}` : ""}
                         </p>
                         <p className="text-xs text-slate-400 mt-0.5">{fmtDate(r.createdAt)}</p>
                       </div>

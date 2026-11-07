@@ -5,10 +5,12 @@
  * Arabic labels, the read-only API helper, the page header and small chips. Read only —
  * nothing here can change an affiliate, an order, a verification or a parent.
  */
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, BarChart3, GitBranch } from "lucide-react";
+import { ArrowRight, BarChart3, GitBranch, ListChecks } from "lucide-react";
 import { toRecruiterError } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel } from "../errorLabels";
+import { NETWORK_INVITED_HINT, authAction, nodeBadges, permsFromMe, progressDisplay } from "../recruiterUiState";
 
 const NUM = new Intl.NumberFormat("ar-MA");
 export const fmt = (n) => NUM.format(Number.isFinite(n) ? n : 0);
@@ -39,15 +41,44 @@ export async function getJson(url) {
   }
 }
 
-/** 401 / 403 (disabled) → login page. Returns true when the caller must stop. */
+/**
+ * ONLY 401 → login page; 403 RECRUITER_DISABLED → notice then login. Returns true when the caller
+ * must stop. Anything else (5xx, 429, network) stays on the page as an error with a retry button.
+ */
 export function handleAuth(result, router, setNotice) {
-  if (result.status === 401) { router.replace("/recruiter/login"); return true; }
-  if (result.status === 403 && result.code === "RECRUITER_DISABLED") {
+  const action = authAction(result.status, result.code);
+  if (action === "login") { router.replace("/recruiter/login"); return true; }
+  if (action === "disabled") {
     setNotice(recruiterErrorLabel(result.code));
     setTimeout(() => router.replace("/recruiter/login"), 2500);
     return true;
   }
   return false;
+}
+
+/**
+ * The recruiter's permissions (GET /api/recruiter/me) for the network / affiliates pages: creation
+ * actions stay hidden until the server said canCreateAffiliates = true. A failed check (not 401)
+ * keeps the page usable and shows an error with a retry.
+ */
+export function useRecruiterPerms(router, setNotice) {
+  const [perms, setPerms] = useState(null);
+  const [error, setError] = useState(null);
+  const alive = useRef(true);
+  const load = useCallback(async () => {
+    setError(null);
+    const r = await getJson("/api/recruiter/me");
+    if (!alive.current) return;
+    if (handleAuth(r, router, setNotice)) return;
+    if (!r.ok) { setError(r.code); return; }
+    setPerms(permsFromMe(r.body));
+  }, [router, setNotice]);
+  useEffect(() => {
+    alive.current = true;
+    load();
+    return () => { alive.current = false; };
+  }, [load]);
+  return { perms, permsError: error, retryPerms: load, canCreate: perms?.canCreateAffiliates === true };
 }
 
 export function PageNotice({ text }) {
@@ -61,11 +92,12 @@ export function PageNotice({ text }) {
 /** Page header: back to the dashboard + switch between the tree and the statistics. */
 export function NetworkHeader({ title, current, root }) {
   const q = root ? `?root=${encodeURIComponent(root)}` : "";
+  // Phase 7 Stage C: on a phone the other tabs show their icon only (the title keeps its room).
   const tab = (key, href, label, Icon) => (
-    <Link href={href} aria-current={current === key ? "page" : undefined} data-tab={key}
-      className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-sm font-semibold ${current === key ? "bg-emerald-600 text-white" : "text-slate-700 hover:bg-slate-100"}`}>
+    <Link href={href} aria-current={current === key ? "page" : undefined} data-tab={key} aria-label={label} title={label}
+      className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3 py-1.5 text-sm font-semibold ${current === key ? "bg-emerald-600 text-white" : "text-slate-700 hover:bg-slate-100"}`}>
       <Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
-      {label}
+      <span className={current === key ? "" : "hidden sm:inline"}>{label}</span>
     </Link>
   );
   return (
@@ -78,6 +110,7 @@ export function NetworkHeader({ title, current, root }) {
         <nav aria-label="أقسام الشبكة" className="flex items-center gap-1 shrink-0">
           {tab("tree", `/recruiter/network${q}`, "الشجرة", GitBranch)}
           {tab("stats", `/recruiter/network/stats${q}`, "الإحصائيات", BarChart3)}
+          {tab("list", "/recruiter/affiliates", "القائمة", ListChecks)}
         </nav>
       </div>
     </header>
@@ -134,5 +167,41 @@ export const ORDERS_HIDDEN_TEXT = "عرض أرقام الطلبات معطّل �
 export function OrdersHidden() {
   return (
     <p className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2" data-orders-hidden>{ORDERS_HIDDEN_TEXT}</p>
+  );
+}
+
+/**
+ * Phase 7 Stage C: "x / T مبيعات" of one affiliate (its own real delivered orders vs the individual
+ * threshold). Nothing at all when the count is withheld (canViewOrders off) — never a zero.
+ */
+export function ProgressBar({ progress }) {
+  const p = progressDisplay(progress);
+  if (!p) return null;
+  return (
+    <div className="min-w-0 space-y-1" data-progress={p.threshold ? `${p.delivered}/${p.threshold}` : `${p.delivered}`}>
+      <div className="flex items-center justify-between gap-2 text-[11px]">
+        <span className="text-slate-500">المبيعات الحقيقية المسلّمة</span>
+        <span className={`font-bold ${p.reached ? "text-emerald-700" : "text-slate-700"}`} data-progress-text><bdi dir="ltr">{p.ratio}</bdi> مبيعات</span>
+      </div>
+      {p.threshold && (
+        <div className="h-1.5 w-full rounded-full bg-slate-100 overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={p.threshold}
+          aria-valuenow={Math.min(p.delivered, p.threshold)} aria-label="التقدّم نحو المكافأة">
+          <div className={`h-full rounded-full ${p.reached ? "bg-emerald-500" : "bg-emerald-300"}`} style={{ width: `${p.pct}%` }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "مدعو عبر الشبكة" (information, Stage E) and the qualified / reward state badges of a network member. */
+export function NodeBadges({ node }) {
+  const badges = nodeBadges(node);
+  if (!badges.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 min-w-0" data-node-badges>
+      {badges.map((b) => (
+        <Chip key={b.key} tone={b.tone} data-badge={b.key} title={b.key === "invited" ? NETWORK_INVITED_HINT : undefined}>{b.label}</Chip>
+      ))}
+    </div>
   );
 }

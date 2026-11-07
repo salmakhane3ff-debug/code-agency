@@ -16,6 +16,7 @@ import { useRouter } from "next/navigation";
 import { ArrowRight, CheckCircle2, Clock, IdCard, Loader2, ShieldAlert, ShieldCheck, Upload } from "lucide-react";
 import { toRecruiterError, toRecruiterIdentityView } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel, recruiterFieldErrorLabel } from "../errorLabels";
+import { authAction } from "../recruiterUiState";
 
 const ACCEPT = "image/jpeg,image/png,image/webp";
 const ACCEPTED = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
@@ -90,8 +91,9 @@ export default function RecruiterVerificationPage() {
     }
   }, [router]);
   const authGate = useCallback((res, err) => {
-    if (res.status === 401 || (res.status === 403 && err.code === "RECRUITER_DISABLED")) {
-      toLogin(res.status === 403 ? err.code : "UNAUTHORIZED");
+    const action = authAction(res.status, err.code); // ONLY 401 / 403 RECRUITER_DISABLED
+    if (action) {
+      toLogin(action === "disabled" ? err.code : "UNAUTHORIZED");
       return true;
     }
     return false;
@@ -209,7 +211,7 @@ export default function RecruiterVerificationPage() {
         {loadError && (
           <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center gap-3 justify-between" data-error>
             <span className="min-w-0">{loadError}</span>
-            <button type="button" onClick={load} className="rounded-xl border border-red-300 px-3 py-1.5 font-semibold hover:bg-red-100">إعادة المحاولة</button>
+            <button type="button" onClick={load} data-retry className="rounded-xl border border-red-300 px-3 py-1.5 font-semibold hover:bg-red-100">إعادة المحاولة</button>
           </div>
         )}
 
@@ -250,7 +252,6 @@ export default function RecruiterVerificationPage() {
               <CinPicker side="back" label="الوجه الخلفي للبطاقة" file={files.back} preview={previews.back}
                 error={fieldMsg("back")} disabled={busy} onPick={(f) => pick("back", f)} />
             </div>
-            {error && <p role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2" data-identity-error>{error}</p>}
             <button type="submit" disabled={busy || !files.front || !files.back} data-identity-submit
               className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 text-white font-bold px-5 py-2.5 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed">
               {busy && <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />}
@@ -258,6 +259,10 @@ export default function RecruiterVerificationPage() {
             </button>
           </form>
         )}
+
+        {/* Stage C: outside the form, so it stays visible when the refreshed status hides the form
+            (e.g. IDENTITY_SUBMISSION_NOT_ALLOWED: already pending or approved meanwhile). */}
+        {error && <p role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2" data-identity-error>{error}</p>}
 
         {success && (
           <p role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800" data-identity-success>{success}</p>

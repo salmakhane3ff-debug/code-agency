@@ -12,22 +12,29 @@
  * Phase 6 part 4: when the admin turned off a permission, its entries are hidden and a short note
  * explains why (canCreateAffiliates → no "add affiliate"; canViewOrders → no order tracking).
  * The server enforces both on every request; hiding here is only a convenience.
+ * Phase 7 Stage C: a progress summary from GET /api/recruiter/progress (directly created / network affiliates — Stage E: N(R),
+ * the group reward progress "q / groupSize", rewards awarded / reversed with their amounts, the
+ * switches shown "غير مفعّلة" when off), a KYC card from GET /api/recruiter/identity and a link to the
+ * affiliates list /recruiter/affiliates. ONLY 401 (and 403 RECRUITER_DISABLED with its notice) goes
+ * back to the login page: 5xx / 429 / network failures show an error with a retry button. The
+ * creation entries need an explicit canCreateAffiliates = true.
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Home, Users, UserPlus, GitBranch, ShieldCheck, PackageCheck, Gift, History, LogOut, Menu, X, UserCog, BarChart3,
-  Wallet, KeyRound, Lock,
+  Wallet, KeyRound, Lock, ListChecks, RefreshCw, TrendingUp,
 } from "lucide-react";
-import { toRecruiterError } from "@/lib/recruiterVisibility";
+import { toRecruiterError, toRecruiterIdentityView, toRecruiterProgressSummaryView } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel } from "./errorLabels";
+import { authAction, fmtMadCents, groupProgressDisplay, permsFromMe, rewardAmountsDisplay } from "./recruiterUiState";
 
 const SECTIONS = [
   { id: "home", label: "الرئيسية والإحصائيات", Icon: Home, active: true },
-  { id: "network", label: "شبكة الأفلييت ديالي", Icon: Users, href: "/recruiter/network" },
+  { id: "network", label: "شبكة الأفلييت ديالي (الشجرة)", Icon: Users, href: "/recruiter/network" },
+  { id: "affiliates", label: "قائمة الأفلييت والتقدّم", Icon: ListChecks, href: "/recruiter/affiliates" },
   { id: "add", label: "إضافة أفلييت جديد", Icon: UserPlus, href: "/recruiter/affiliates/new" },
-  { id: "tree", label: "شجرة المستويات", Icon: GitBranch, href: "/recruiter/network" },
   { id: "verification", label: "التحقق من الهوية", Icon: ShieldCheck, href: "/recruiter/verification" },
   { id: "orders", label: "الطلبات المسلّمة وغير المسلّمة", Icon: PackageCheck, href: "/recruiter/network/stats" },
   { id: "rewards", label: "مكافآتي", Icon: Gift, href: "/recruiter/wallet" },
@@ -37,9 +44,9 @@ const SECTIONS = [
 const DATE_FMT = new Intl.DateTimeFormat("ar-MA", { timeZone: "Africa/Casablanca", dateStyle: "medium", timeStyle: "short" });
 const fmtDate = (iso) => (iso ? DATE_FMT.format(new Date(iso)) : "—");
 
-/** Menu sections the recruiter's permissions allow (only an explicit `false` hides one). */
+/** Menu sections the recruiter's permissions allow (creation / orders need an explicit `true`). */
 const allowedSections = (perms) => SECTIONS.filter((s) =>
-  !(s.id === "add" && perms?.canCreateAffiliates === false) && !(s.id === "orders" && perms?.canViewOrders === false));
+  !(s.id === "add" && perms?.canCreateAffiliates !== true) && !(s.id === "orders" && perms?.canViewOrders !== true));
 
 function Nav({ onNavigate, perms }) {
   return (
@@ -79,43 +86,226 @@ function InfoRow({ label, value, dirLtr = false }) {
   );
 }
 
+/** GET a recruiter API → { ok, status, code, body } (never throws; only the error CODE is kept). */
+async function getApi(url) {
+  try {
+    const res = await fetch(url, { credentials: "include", cache: "no-store" });
+    const body = await res.json().catch(() => null);
+    return res.ok ? { ok: true, status: res.status, code: null, body } : { ok: false, status: res.status, code: toRecruiterError(body).code, body: null };
+  } catch {
+    return { ok: false, status: 0, code: "SERVER_ERROR", body: null };
+  }
+}
+
+function RetryError({ code, onRetry, hook = "" }) {
+  return (
+    <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3" data-error={hook}>
+      <span className="min-w-0">{recruiterErrorLabel(code)}</span>
+      <button type="button" onClick={onRetry} data-retry={hook}
+        className="shrink-0 inline-flex items-center gap-1.5 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100">
+        <RefreshCw className="w-4 h-4" aria-hidden="true" /> إعادة المحاولة
+      </button>
+    </div>
+  );
+}
+
+function Stat({ label, value, hook, sub }) {
+  return (
+    <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2 min-w-0">
+      <dt className="text-[11px] text-slate-500 leading-tight">{label}</dt>
+      <dd className="text-lg font-bold text-slate-900" {...{ [hook]: "" }}>{value}</dd>
+      {sub && <p className="text-[11px] text-slate-500 leading-tight">{sub}</p>}
+    </div>
+  );
+}
+
+function Off() {
+  return <span className="text-[11px] font-bold rounded-full bg-slate-100 text-slate-500 px-2 py-0.5" data-off>غير مفعّلة</span>;
+}
+
+/** One reward type: awarded / reversed (counts and amounts) and what stays (awarded − reversed). */
+function RewardSide({ title, enabled, side, hook }) {
+  return (
+    <div className="rounded-xl border border-slate-200 p-3 space-y-2 min-w-0" data-reward-side={hook}>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-bold">{title}</h3>
+        {!enabled && <Off />}
+      </div>
+      <dl className="grid grid-cols-2 gap-2 text-xs">
+        <div className="min-w-0">
+          <dt className="text-slate-500">ممنوحة</dt>
+          <dd className="font-bold text-emerald-700" data-awarded>{side.awarded} · <bdi dir="ltr">{fmtMadCents(side.awardedCents)}</bdi></dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="text-slate-500">ملغاة</dt>
+          <dd className="font-bold text-red-700" data-reversed>{side.reversed} · <bdi dir="ltr">{fmtMadCents(side.reversedCents)}</bdi></dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
+/** Phase 7 Stage C: the recruiter's progress summary (aggregates of GET /api/recruiter/progress). */
+function ProgressSummary({ state, onRetry }) {
+  if (state.error) return <RetryError code={state.error} onRetry={onRetry} hook="progress" />;
+  if (!state.data) return <p className="text-sm text-slate-500" aria-live="polite" data-progress-loading>جارٍ تحميل الملخص…</p>;
+  const s = state.data;
+  const g = groupProgressDisplay(s);
+  const r = rewardAmountsDisplay(s.rewards);
+  return (
+    <section className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4 min-w-0" aria-labelledby="sum-title" data-progress-summary>
+      <h2 id="sum-title" className="text-base font-bold flex items-center gap-2">
+        <TrendingUp className="w-5 h-5 text-emerald-600" aria-hidden="true" /> ملخص التقدّم
+      </h2>
+      {s.downlineAffiliates === 0 ? (
+        <p className="text-sm text-slate-600" data-progress-empty>لا يوجد أفلييت في شبكتك بعد. سيظهر تقدّمك هنا عند إضافة أول أفلييت.</p>
+      ) : null}
+      <dl className="grid grid-cols-2 gap-2">
+        <Stat label="الأفلييت الذين أنشأتهم" value={s.linkedAffiliates} hook="data-linked" sub="مرتبطون بحسابك مباشرة" />
+        <Stat label="كل الأفلييت في شبكتك" value={s.downlineAffiliates} hook="data-downline" sub="مع المدعوين عبر أفلييتك — تُحتسب عنهم جميعاً المكافآت" />
+      </dl>
+
+      <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3 space-y-2 min-w-0" data-group-progress={g.text}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-bold">مكافأة المجموعة</h3>
+          {!g.enabled && <Off />}
+        </div>
+        {g.enabled ? (
+          <>
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="text-slate-600 min-w-0">
+                الأفلييت المؤهَّلون نحو المكافأة القادمة{g.threshold ? ` (${g.threshold} مبيعات حقيقية مسلّمة + بطاقة مقبولة)` : ""}
+              </span>
+              <b className="shrink-0 text-emerald-800" dir="ltr" data-group-text>{g.text}</b>
+            </div>
+            <div className="h-2 w-full rounded-full bg-white border border-emerald-100 overflow-hidden" role="progressbar"
+              aria-valuemin={0} aria-valuemax={g.size ?? 0} aria-valuenow={g.toward} aria-label="التقدّم نحو مكافأة المجموعة">
+              <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${g.pct}%` }} data-group-bar />
+            </div>
+            <p className="text-[11px] text-slate-500">مجموع المؤهَّلين: {g.qualified} · مكافآت مجموعة سارية: {g.active}</p>
+          </>
+        ) : (
+          <p className="text-xs text-slate-600" data-group-off>مكافأة المجموعة غير مفعّلة حالياً.</p>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <RewardSide title="المكافآت الفردية" enabled={s.individualEnabled} side={r.individual} hook="individual" />
+        <RewardSide title="مكافآت المجموعة" enabled={s.groupEnabled} side={r.group} hook="group" />
+      </div>
+      <dl className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
+        <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2 min-w-0">
+          <dt className="text-[11px] text-slate-500">إجمالي المكافآت الممنوحة</dt>
+          <dd className="font-bold" dir="ltr" style={{ textAlign: "right" }} data-gross>{fmtMadCents(r.grossCents)}</dd>
+        </div>
+        <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2 min-w-0">
+          <dt className="text-[11px] text-slate-500">المكافآت الملغاة</dt>
+          <dd className="font-bold text-red-700" dir="ltr" style={{ textAlign: "right" }} data-reversed-total>− {fmtMadCents(r.reversedCents)}</dd>
+        </div>
+        <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-2 min-w-0">
+          <dt className="text-[11px] text-slate-500">الصافي بعد الإلغاء</dt>
+          <dd className="font-bold text-emerald-800" dir="ltr" style={{ textAlign: "right" }} data-net>{fmtMadCents(r.netCents)}</dd>
+        </div>
+      </dl>
+      <Link href="/recruiter/affiliates" className="inline-block text-sm font-semibold text-emerald-700 hover:underline" data-progress-list-link>
+        تقدّم كل أفلييت ‹
+      </Link>
+    </section>
+  );
+}
+
+const KYC_UI = {
+  NOT_SUBMITTED: { label: "لم تُرسل بعد", cls: "bg-slate-50 text-slate-600 border-slate-200" },
+  PENDING: { label: "قيد المراجعة", cls: "bg-amber-50 text-amber-800 border-amber-200" },
+  APPROVED: { label: "مقبولة", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  REJECTED: { label: "مرفوضة", cls: "bg-red-50 text-red-700 border-red-200" },
+};
+
+/** KYC card: the recruiter's own verification status (unknown when the request failed). */
+function IdentityCard({ state, onRetry }) {
+  const ui = state.data ? KYC_UI[state.data.status] ?? KYC_UI.NOT_SUBMITTED : null;
+  return (
+    <section className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-wrap items-start gap-3 justify-between min-w-0" data-kyc-card={state.data?.status ?? (state.error ? "UNKNOWN" : "LOADING")}>
+      <Link href="/recruiter/verification" data-kyc-link className="flex items-start gap-3 min-w-0 flex-1 hover:text-emerald-700">
+        <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" aria-hidden="true" />
+        <span className="min-w-0">
+          <span className="block text-base font-bold">التحقق من الهوية</span>
+          <span className="block text-sm text-slate-500 mt-0.5">البطاقة الوطنية مطلوبة قبل أي طلب سحب.</span>
+        </span>
+      </Link>
+      {ui ? (
+        <span className={`shrink-0 text-xs font-bold rounded-full border px-2.5 py-1 ${ui.cls}`} data-kyc-status>{ui.label}</span>
+      ) : state.error ? (
+        <span className="shrink-0 flex items-center gap-2 text-xs text-slate-600" data-kyc-unknown>
+          حالة التحقق غير متاحة
+          <button type="button" onClick={onRetry} className="rounded-lg border border-slate-300 px-2 py-0.5 font-semibold hover:bg-slate-50" data-retry="kyc">إعادة المحاولة</button>
+        </span>
+      ) : null}
+    </section>
+  );
+}
+
 export default function RecruiterDashboardPage() {
   const router = useRouter();
   const [me, setMe] = useState(null);
   const [perms, setPerms] = useState(null); // { canViewOrders, canCreateAffiliates } (Phase 6 part 4)
   const [notice, setNotice] = useState("");
+  const [meError, setMeError] = useState(null); // error code of /me (not 401): shown with a retry
+  const [progress, setProgress] = useState({ data: null, error: null });
+  const [kyc, setKyc] = useState({ data: null, error: null });
   const [menuOpen, setMenuOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const aliveRef = useRef(true);
+
+  /** 401 → login; 403 RECRUITER_DISABLED → notice then login. Returns true when handled. */
+  const gate = useCallback((r) => {
+    const action = authAction(r.status, r.code);
+    if (action === "login") { router.replace("/recruiter/login"); return true; }
+    if (action === "disabled") {
+      setNotice(recruiterErrorLabel(r.code));
+      setTimeout(() => { if (aliveRef.current) router.replace("/recruiter/login"); }, 2500);
+      return true;
+    }
+    return false;
+  }, [router]);
+
+  const loadMe = useCallback(async () => {
+    setMeError(null);
+    const r = await getApi("/api/recruiter/me");
+    if (!aliveRef.current || gate(r)) return;
+    if (!r.ok) { setMeError(r.code); return; }
+    setPerms(permsFromMe(r.body));
+    setMe(r.body?.recruiter ?? null);
+    if (!r.body?.recruiter) setMeError("SERVER_ERROR");
+  }, [gate]);
+
+  const loadProgress = useCallback(async () => {
+    setProgress({ data: null, error: null });
+    const r = await getApi("/api/recruiter/progress");
+    if (!aliveRef.current || gate(r)) return;
+    setProgress(r.ok ? { data: toRecruiterProgressSummaryView(r.body?.progress), error: null } : { data: null, error: r.code });
+  }, [gate]);
+
+  const loadKyc = useCallback(async () => {
+    setKyc({ data: null, error: null });
+    const r = await getApi("/api/recruiter/identity");
+    if (!aliveRef.current || gate(r)) return;
+    setKyc(r.ok && r.body?.identity ? { data: toRecruiterIdentityView(r.body.identity), error: null } : { data: null, error: r.code ?? "SERVER_ERROR" });
+  }, [gate]);
 
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const res = await fetch("/api/recruiter/me", { credentials: "include", cache: "no-store" });
-        if (!alive) return;
-        if (res.ok) {
-          const body = await res.json();
-          if (alive) {
-            setPerms(body?.permissions && typeof body.permissions === "object"
-              ? { canViewOrders: body.permissions.canViewOrders === true, canCreateAffiliates: body.permissions.canCreateAffiliates === true }
-              : null);
-            setMe(body?.recruiter ?? null);
-          }
-          return;
-        }
-        const { code } = toRecruiterError(await res.json().catch(() => null));
-        if (res.status === 403 && code === "RECRUITER_DISABLED") {
-          setNotice(recruiterErrorLabel(code));
-          setTimeout(() => { if (alive) router.replace("/recruiter/login"); }, 2500);
-          return;
-        }
-        router.replace("/recruiter/login");
-      } catch {
-        if (alive) setNotice(recruiterErrorLabel(null));
-      }
-    })();
-    return () => { alive = false; };
-  }, [router]);
+    aliveRef.current = true;
+    loadMe();
+    return () => { aliveRef.current = false; };
+  }, [loadMe]);
+
+  // The summary and the KYC card load once the session is confirmed.
+  const ready = !!me;
+  useEffect(() => {
+    if (!ready) return;
+    loadProgress();
+    loadKyc();
+  }, [ready, loadProgress, loadKyc]);
 
   async function logout() {
     setLoggingOut(true);
@@ -128,14 +318,16 @@ export default function RecruiterDashboardPage() {
       <main className="min-h-screen flex items-center justify-center px-4">
         {notice
           ? <p role="alert" className="max-w-sm text-center text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3" data-dashboard-notice>{notice}</p>
-          : <p className="text-sm text-slate-500" aria-live="polite">جارٍ التحميل…</p>}
+          : meError
+            ? <div className="max-w-sm w-full" data-dashboard-error><RetryError code={meError} onRetry={loadMe} hook="me" /></div>
+            : <p className="text-sm text-slate-500" aria-live="polite">جارٍ التحميل…</p>}
       </main>
     );
   }
 
   const active = me.status === "ACTIVE";
-  const canCreate = perms?.canCreateAffiliates !== false;
-  const canViewOrders = perms?.canViewOrders !== false;
+  const canCreate = perms?.canCreateAffiliates === true;
+  const canViewOrders = perms?.canViewOrders === true;
   return (
     <div className="min-h-screen lg:flex [contain:inline-size]" data-recruiter-dashboard>
       {/* Desktop sidebar */}
@@ -200,6 +392,10 @@ export default function RecruiterDashboardPage() {
             </dl>
           </section>
 
+          <ProgressSummary state={progress} onRetry={loadProgress} />
+
+          <IdentityCard state={kyc} onRetry={loadKyc} />
+
           {active && canCreate && (
             <section className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col sm:flex-row sm:items-center gap-3 justify-between" data-add-cta>
               <div className="min-w-0">
@@ -254,6 +450,17 @@ export default function RecruiterDashboardPage() {
             </Link>
           </section>
 
+          <section data-affiliates-cta>
+            <Link href="/recruiter/affiliates" data-affiliates-link
+              className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex items-start gap-3 hover:border-emerald-300 min-w-0">
+              <ListChecks className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" aria-hidden="true" />
+              <span className="min-w-0">
+                <span className="block text-base font-bold">قائمة الأفلييت والتقدّم</span>
+                <span className="block text-sm text-slate-500 mt-0.5">بحث في كل أفلييت شبكتك، مستوى كل واحد، تقدّمه نحو المكافأة وحالة مكافأته.</span>
+              </span>
+            </Link>
+          </section>
+
           <section data-wallet-cta>
             <Link href="/recruiter/wallet" data-wallet-link
               className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex items-start gap-3 hover:border-emerald-300 min-w-0">
@@ -277,7 +484,7 @@ export default function RecruiterDashboardPage() {
           </section>
 
           <section className="bg-white rounded-2xl border border-dashed border-slate-300 p-5 text-sm text-slate-600" data-coming-soon>
-            باقي الأقسام (السجل) ستكون متاحة قريباً.
+            سجل العمليات: قريباً.
           </section>
         </main>
       </div>

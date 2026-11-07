@@ -14,8 +14,10 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-// Route prefixes that must never be redirected.
-const ALWAYS_PREFIXES = ["/admin", "/api", "/_next", "/uploads"];
+// Route prefixes that must never be redirected. "/recruiter" (the recruiter area) and
+// "/affiliate/activate" (an affiliate choosing their password with an activation code) are
+// operational pages, never storefront: Landing Page Only Mode must not lock them out.
+const ALWAYS_PREFIXES = ["/admin", "/api", "/_next", "/uploads", "/recruiter", "/affiliate/activate"];
 // Exact infrastructure files.
 const ALWAYS_EXACT = new Set([
   "/favicon.ico", "/robots.txt", "/sitemap.xml",
