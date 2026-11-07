@@ -2043,6 +2043,14 @@ model RecruiterSettingsVersion {
   minDeliveredSales Int
   createdBy         String
   createdAt         DateTime @default(now())
+  // Reward B — group reward (Phase 7, migration 20261112): the amount (MAD cents) earned each time
+  // groupSize distinct affiliates of the recruiter each have groupMinDeliveredSales real delivered
+  // orders and an APPROVED CIN. Rows written before the migration read these defaults (OFF).
+  // Ledger rows GROUP_REWARD / GROUP_REVERSAL (no affiliate, cycles per recruiter) — DB CHECKs.
+  groupEnabled           Boolean @default(false)
+  groupRewardAmountCents Int     @default(0)
+  groupSize              Int     @default(10)
+  groupMinDeliveredSales Int     @default(10)
 
   @@map("recruiter_settings_versions")
 }

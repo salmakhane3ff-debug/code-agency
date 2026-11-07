@@ -42,13 +42,142 @@ const git = (args) => execFileSync('git', args, { cwd: new URL('..', import.meta
 /** Words of the removed designs (UGC condition, release delay / jitter / keyed hash). */
 const REMOVED = /ugc|video|vid[eé]o|release|jitter|hmac|delay|casablanca|minApproved/i;
 
+// ── Phase 6 part 5b: the affiliate identity-write detector and its ONE documented allowance ─────────
+// recruiterNetworkService.js aggregates the network statistics in PostgreSQL. Its two statistics statements
+// (tags recruiter-network-stats and recruiter-network-stats-orders) count identity statuses through ONE
+// read-only join, LEFT JOIN "identity_verifications" iv ON iv."affiliateId" = t."id", reading iv."status"
+// only (the former code read the same column with identityVerification.findMany({ select: { affiliateId, status } })).
+// identityWriteHit(re, file, source) = the rule's ORIGINAL regex `re` on the comment-stripped code, from which
+// exactly that join is removed — in recruiterNetworkService.js only, and only while EVERY condition of
+// networkJoinAllowance holds (otherwise the file is scanned exactly as before) — OR a raw SQL write on
+// identity_verifications (rawSqlIdentityWrite), which is checked in EVERY file with no allowance.
+const NETWORK_SVC = 'src/lib/services/recruiterNetworkService.js';
+// the allowed join, whitespace-insensitive; GROUP BY must follow, so its ON condition is exactly the key equality
+const IV_JOIN = /LEFT\s+JOIN\s+"identity_verifications"\s+iv\s+ON\s+iv\s*\.\s*"affiliateId"\s*=\s*t\s*\.\s*"id"(?=\s+GROUP\s+BY\b)/g;
+// an SQL word that writes data / schema / privileges or takes a lock (incl. the 4 row-locking clauses), any case
+const SQL_WRITE_WORD = /\b(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE|ALTER|DROP|CREATE|GRANT|REVOKE|COPY|INTO|LOCK)\b|\bFOR\s+(?:NO\s+KEY\s+UPDATE|UPDATE|KEY\s+SHARE|SHARE)\b/i;
+// the table itself: quoted or not, any case, schema-qualified or not (never a longer name such as recruiter_identity_verifications)
+const IV_TABLE = /(?<![\w$])identity_verifications(?![\w$])/i;
+// a raw write on it: INSERT INTO / UPDATE / DELETE FROM / MERGE INTO / TRUNCATE / ALTER TABLE / DROP / COPY (/ CREATE / GRANT / REVOKE / LOCK) … the table, in one statement
+const SQL_IDENTITY_WRITE = /\b(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE|ALTER|DROP|COPY|CREATE|GRANT|REVOKE|LOCK)\b[^;`]*?(?<![\w$])identity_verifications(?![\w$])/i;
+// the tagged $queryRaw templates of a text (what is between the backticks, ${…} included)
+const queryRawTemplates = (s) => [...s.matchAll(/\$queryRaw\s*`((?:[^`\\$]|\\[\s\S]|\$(?!\{)|\$\{[^{}`]*\})*)`/g)].map((m) => m[1]);
+// the argument of every $executeRaw / $executeRawUnsafe / $queryRawUnsafe: its template or its (…); anything else → the rest of the text (fail closed)
+const rawExecCalls = (s) => [...s.matchAll(/\$(?:executeRawUnsafe|executeRaw|queryRawUnsafe)\b/g)].map((m) => {
+  const rest = s.slice(m.index + m[0].length);
+  const tpl = /^\s*`(?:[^`\\]|\\[\s\S])*`/.exec(rest);
+  if (tpl) return tpl[0];
+  if (/^\s*\(/.test(rest)) {
+    for (let i = 0, depth = 0; i < rest.length; i++) {
+      if (rest[i] === '(') depth++;
+      else if (rest[i] === ')' && --depth === 0) return rest.slice(0, i + 1);
+    }
+  }
+  return rest;
+});
+const rawSqlIdentityWrite = (code) => SQL_IDENTITY_WRITE.test(code) || rawExecCalls(code).some((c) => IV_TABLE.test(c));
+// The allowance. Every check runs on the RAW source of recruiterNetworkService.js (comments included):
+//   noRawExec            no $executeRaw / $executeRawUnsafe / $queryRawUnsafe anywhere in the file;
+//   taggedBoundOnly      every $queryRaw of the code is a tagged template whose ${…} are plain identifiers (bound
+//                        values), and the file never names Prisma / @prisma/* (no SQL fragment can be spliced in);
+//   commentsHideNothing  comment stripping removes nothing from the templates but their /* … */ comments;
+//   readOnlyQueries      every template is ONE read query (no ';', starts with SELECT / WITH) without any
+//                        SQL_WRITE_WORD (INSERT … COPY, INTO, LOCK, FOR UPDATE / NO KEY UPDATE / SHARE / KEY SHARE);
+//   exactJoins           identity_verifications (any case) occurs exactly twice, each time as IV_JOIN, in the
+//                        recruiter-network-stats and recruiter-network-stats-orders statements;
+//   aliasStatusOnly      iv appears only in that join (iv."affiliateId") and as iv."status": a select-list item
+//                        (", iv."status" AS status") or a plain GROUP BY item; never another column, iv.*, the row or a call.
+const networkJoinAllowance = (src) => {
+  const code = stripJs(src);
+  const tpls = queryRawTemplates(src), codeTpls = queryRawTemplates(code);
+  const tagOf = (t) => (/^\s*\/\*\s*([\w-]+)\s*\*\//.exec(t) || [])[1] ?? null;
+  const ivLeft = (t) => t.replace(IV_JOIN, ' ')
+    .replace(/,\s*iv\."status"\s+AS\s+status(?=\s*,|\s+FROM\b)/g, ',')
+    .replace(/(\bGROUP\s+BY\s+(?:[\w."]+\s*,\s*)*)iv\."status"(?=\s*(?:,|\)|$)|\s+(?:UNION|ORDER|HAVING|LIMIT|OFFSET|WINDOW)\b)/g, '$1');
+  const checks = {
+    noRawExec: !/executeRaw|queryRawUnsafe/.test(src),
+    taggedBoundOnly: (code.match(/\$queryRaw/g) || []).length === codeTpls.length && !/\bPrisma\b|@prisma\//.test(code)
+      && tpls.every((t) => [...t.matchAll(/\$\{([^{}`]*)\}/g)].every((m) => /^\s*[A-Za-z_$][\w$]*\s*$/.test(m[1]))),
+    commentsHideNothing: eq(tpls.map((t) => t.replace(/\/\*[\s\S]*?\*\//g, '')), codeTpls),
+    readOnlyQueries: tpls.length > 0 && tpls.every((t) => !t.includes(';') && !SQL_WRITE_WORD.test(t)
+      && /^\s*(?:SELECT|WITH)\b/i.test(t.replace(/\/\*[\s\S]*?\*\/|--[^\n]*/g, ' '))),
+    exactJoins: (src.match(/identity_verifications/gi) || []).length === 2
+      && eq(tpls.flatMap((t) => (t.match(IV_JOIN) || []).map(() => tagOf(t))).sort(), ['recruiter-network-stats', 'recruiter-network-stats-orders']),
+    aliasStatusOnly: tpls.every((t) => !/\biv\b/i.test(ivLeft(t))),
+  };
+  const failed = Object.keys(checks).filter((k) => !checks[k]);
+  return { ok: failed.length === 0, failed };
+};
+const identityWriteHit = (re, file, src) => {
+  const code = stripJs(src);
+  const scanned = file === NETWORK_SVC && networkJoinAllowance(src).ok ? code.replace(IV_JOIN, ' ') : code;
+  return re.test(scanned) || rawSqlIdentityWrite(code);
+};
+// Negative self-checks (the detector is not vacuous): every synthetic source MUST be flagged by identityWriteHit(re, …);
+// a network-service variant must also void the allowance through the named condition; (a) / (b) must also be caught by
+// rawSqlIdentityWrite alone. A variant whose anchor is missing from the service (null) fails. → [[label, pass, extra]]
+const identitySelfChecks = (re, netSrc) => {
+  const JOIN = 'LEFT JOIN "identity_verifications" iv ON iv."affiliateId" = t."id"';
+  const OTHER = 'src/lib/services/recruiterStatsService.js', ROUTE = 'src/app/api/recruiter/network/route.js';
+  const swap = (s, from, to) => (s.includes(from) ? s.replace(from, () => to) : null); // first occurrence
+  const add = (sql) => `${netSrc}\nexport const injected = (db, id) => db.$queryRaw\`${sql}\`;\n`;
+  // Phase 7 Stage B: the statistics statements start with the downline CTEs (cand, mark, roots) — the data-modifying
+  // CTE is inserted before their `seed AS (` CTE (first occurrence: the -orders statistics statement).
+  const cte = (sql) => swap(netSrc, 'seed AS (', `w AS (${sql} RETURNING 1), seed AS (`);
+  const net = (cond, texts) => texts.map((s) => [NETWORK_SVC, s, cond]);
+  const INSERTS = ['INSERT INTO "identity_verifications" ("id", "affiliateId", "status") VALUES (${id}, ${id}, \'APPROVED\')', 'insert into identity_verifications (id) values (${id})',
+    'INSERT\n\t INTO   "identity_verifications" DEFAULT VALUES', 'INSERT INTO public."identity_verifications" ("id") VALUES (${id})', 'INSERT INTO IDENTITY_VERIFICATIONS ("id") VALUES (${id})'];
+  const UPDATES = ["UPDATE identity_verifications SET status = 'APPROVED'", 'update "identity_verifications" set "status" = \'APPROVED\' where "affiliateId" = ${id}',
+    "UPDATE\n  ONLY  public.identity_verifications\n  SET status = 'APPROVED'", "UPDATE IDENTITY_VERIFICATIONS SET status = 'APPROVED'"];
+  const WRITES = ['DELETE FROM "identity_verifications" WHERE "affiliateId" = ${id}', 'delete\n  from identity_verifications',
+    'MERGE INTO identity_verifications v USING "affiliates" a ON a."id" = v."affiliateId" WHEN MATCHED THEN DELETE', 'TRUNCATE TABLE ONLY "identity_verifications"',
+    'ALTER TABLE IF EXISTS public.identity_verifications DROP COLUMN "status"', 'DROP TABLE identity_verifications', 'COPY IDENTITY_VERIFICATIONS ("status") FROM STDIN'];
+  const cases = [
+    ['(a): INSERT INTO "identity_verifications" in 5 spellings (quoted, unquoted lower case, split by newline / tab, schema-qualified, upper-case table) — in another src file ($executeRaw), appended to recruiterNetworkService.js ($queryRaw) and as a data-modifying CTE of its statistics statement — is flagged, and rawSqlIdentityWrite alone catches every variant',
+      [...INSERTS.map((q) => [OTHER, `export const w = (db, id) => db.$executeRaw\`${q}\`;\n`]), ...net(null, INSERTS.map((q) => add(`${q} RETURNING "id"`))), ...net(null, INSERTS.map(cte))], INSERTS],
+    ["(b): UPDATE identity_verifications SET status = 'APPROVED' in 4 spellings (unquoted, quoted lower case, ONLY + schema + newlines, upper-case table) — in another src file ($executeRawUnsafe), appended to recruiterNetworkService.js and as a data-modifying CTE of its statistics statement — is flagged, and rawSqlIdentityWrite alone catches every variant",
+      [...UPDATES.map((q) => [OTHER, `export const w = (db) => db.$executeRawUnsafe(${JSON.stringify(q)});\n`]), ...net(null, UPDATES.map(add)), ...net(null, UPDATES.map(cte))], UPDATES],
+    ['(c): a mention of identity_verifications in a file other than recruiterNetworkService.js is flagged as before (the service text itself under another path, the exact allowed join in a recruiter route, a bare table-name string)',
+      [[OTHER, netSrc], [ROUTE, `export const q = (db) => db.$queryRaw\`SELECT iv."status" FROM t ${JOIN} GROUP BY iv."status"\`;\n`], [OTHER, "export const TABLE = 'identity_verifications';\n"]]],
+    ['(d): recruiterNetworkService.js + an extra iv."cinFrontFile" read (select item, GROUP BY item, upper-case IV."cinFrontFile" in place of the status) is flagged — allowance void (aliasStatusOnly)',
+      net('aliasStatusOnly', [swap(netSrc, 'iv."status" AS status,', 'iv."status" AS status, iv."cinFrontFile" AS file,'),
+        swap(netSrc, 'GROUP BY t.depth, t."isActive", iv."status"\n', 'GROUP BY t.depth, t."isActive", iv."status", iv."cinFrontFile"\n'), swap(netSrc, 'iv."status" AS status,', 'IV."cinFrontFile" AS status,')])],
+    ['(e): recruiterNetworkService.js + a second, different identity_verifications join (new statement, extra join after the allowed one, extended ON condition, lower-case keywords) is flagged — allowance void (exactJoins)',
+      net('exactJoins', [add('SELECT v."status" FROM "affiliates" a LEFT JOIN "identity_verifications" v ON v."affiliateId" = a."id" WHERE a."id" = ${id}'),
+        swap(netSrc, JOIN, `${JOIN}\n      LEFT JOIN identity_verifications iv2 ON iv2."affiliateId" = t."id"`), swap(netSrc, JOIN, `${JOIN} OR true`),
+        swap(netSrc, JOIN, 'left join "identity_verifications" iv on iv."affiliateId" = t."id"')])],
+    ['(f): recruiterNetworkService.js + $executeRaw (also $executeRawUnsafe, $queryRawUnsafe) is flagged — allowance void (noRawExec)',
+      net('noRawExec', [`${netSrc}\nexport const touch = (db) => db.$executeRaw\`SELECT 1\`;\n`, `${netSrc}\nexport const touch = (db) => db.$executeRawUnsafe('SELECT 1');\n`,
+        `${netSrc}\nexport const touch = (db) => db.$queryRawUnsafe('SELECT 1');\n`])],
+    ['(g): every other allowance condition is live — FOR SHARE / FOR NO KEY UPDATE on the statistics statement, a 2nd statement after ";", a CALL, a DELETE in another template (readOnlyQueries), a non-tagged $queryRaw(sql) and a spliced ${Prisma.raw(…)} (taggedBoundOnly), SQL hidden after "//" in a template (commentsHideNothing) — each is flagged',
+      [...net('readOnlyQueries', [swap(netSrc, 'iv."status"`;', 'iv."status" FOR SHARE`;'), swap(netSrc, 'iv."status"`;', 'iv."status" FOR NO KEY UPDATE OF t`;'),
+        add('SELECT 1; SELECT 2'), add('CALL approve_everything()'), add('DELETE FROM "affiliates" WHERE "id" = ${id}')]),
+      ...net('taggedBoundOnly', [`${netSrc}\nexport const q = (db, sql) => db.$queryRaw(sql);\n`, add('SELECT ${Prisma.raw(id)}')]),
+      ...net('commentsHideNothing', [add('SELECT 1 -- see http://example.test/x\n')])]],
+    ['(h): the other raw write forms on identity_verifications — DELETE FROM, MERGE INTO, TRUNCATE, ALTER TABLE, DROP, COPY (quoted or not, any case, any whitespace, schema-qualified) — and the table named inside a $executeRaw / $queryRawUnsafe call (even a read, any case) are flagged in another src file and in recruiterNetworkService.js, and rawSqlIdentityWrite alone catches every variant',
+      [...WRITES.map((q) => [OTHER, `export const w = (db) => db.$executeRawUnsafe(${JSON.stringify(q)});\n`]), ...net(null, WRITES.map(add)),
+        [OTHER, `export const r = (db) => db.$queryRawUnsafe('SELECT "status" FROM IDENTITY_VERIFICATIONS');\n`], [OTHER, 'export const r = (db) => db.$executeRaw`SELECT 1 FROM Public.Identity_Verifications`;\n'],
+        ...net(null, [`${netSrc}\nexport const r = (db) => db.$queryRawUnsafe('SELECT status FROM identity_verifications');\n`])], WRITES],
+  ];
+  return cases.map(([label, variants, rawSql = []]) => {
+    const res = variants.map(([f, s, cond]) => s !== null && identityWriteHit(re, f, s) && (!cond || networkJoinAllowance(s).failed.includes(cond))
+      && (!rawSql.length || rawSqlIdentityWrite(stripJs(s))));
+    const hits = res.filter(Boolean).length;
+    return [`identity-write self-check ${label} [${hits}/${res.length} variants flagged]`, hits === res.length && rawSql.every((q) => SQL_IDENTITY_WRITE.test(q)),
+      JSON.stringify(variants.map(([f, s, cond], i) => (res[i] ? null : { i, f, anchorMissing: s === null, cond, failed: s === null ? null : networkJoinAllowance(s).failed })).filter(Boolean))];
+  });
+};
+
 // ── 1. Settings rules ─────────────────────────────────────────────────────────
 console.log('\n1a. Exports, MAD only, parseMadToCents');
 {
   ok('exports are exactly the documented settings API (no UGC / release / unit / bank export left)',
     eq(Object.keys(R).sort(), ['AUDIT_ACTOR_TYPES', 'CURRENCY', 'DEFAULT_MIN_DELIVERED_SALES', 'DEFAULT_RECRUITER_SETTINGS', 'DELIVERED_ORDER_STATUS',
       'IDENTITY_APPROVED_STATUS', 'MAX_REWARD_CENTS', 'MIN_SALES_RANGE', 'REWARD_TYPES', 'evaluateRecruitQualification', 'normalizeRecruiterSettings',
-      'parseMadToCents', 'recruitRewardCycleKey', 'recruitRewardKey', 'reversalCycleKey', 'reversalKey', 'validateRecruiterSettingsInput']), Object.keys(R).sort().join(','));
+      'parseMadToCents', 'recruitRewardCycleKey', 'recruitRewardKey', 'reversalCycleKey', 'reversalKey', 'validateRecruiterSettingsInput',
+      // Phase 7 (Reward B — group reward, migration 20261112): exactly these group exports are added.
+      'DEFAULT_GROUP_MIN_DELIVERED_SALES', 'DEFAULT_GROUP_SIZE', 'DEFAULT_RECRUITER_GROUP_SETTINGS', 'GROUP_SIZE_RANGE', 'groupRewardCycleKey', 'groupReversalCycleKey',
+      'groupRewardsOn', 'normalizeRecruiterGroupSettings', 'normalizeRecruiterSettingsWithGroup', 'validateRecruiterGroupSettingsInput'].sort()), Object.keys(R).sort().join(','));
   // Phase 6 part 3a: the two cycle keys (recruit:<id>:v<n> / reverse:<id>:v<n>); the legacy keys are kept for cycle-1 rows.
   ok('Phase 6 part 3a cycle keys: recruit:<id>:v<n> / reverse:<id>:v<n>; legacy recruit:<id> / reverse:<id> unchanged',
     R.recruitRewardCycleKey('a1', 1) === 'recruit:a1:v1' && R.reversalCycleKey('a1', 3) === 'reverse:a1:v3' && R.recruitRewardKey('a1') === 'recruit:a1' && R.reversalKey('a1') === 'reverse:a1');
@@ -173,7 +302,9 @@ console.log('\n1d. evaluateRecruitQualification — real delivered orders AND ap
     (() => { const u = E({ linked: true, affiliateExists: true, identityStatus: 'X', deliveredSales: 0, approvedUgcVideos: 0, affiliate: { isActive: false } }, on(10)).unmet;
       return eq(u, ['NOT_ENOUGH_SALES', 'CIN_NOT_APPROVED']) && !u.some((x) => /UGC|ACTIVE|BANK|IDENTITY_NOT/.test(x)); })());
   ok('recruitRewardKey / reversalKey', R.recruitRewardKey('a1') === 'recruit:a1' && R.reversalKey('a1') === 'reverse:a1');
-  ok('enums: reward types and audit actors', eq(Object.values(R.REWARD_TYPES), ['RECRUIT_REWARD', 'REVERSAL', 'ADMIN_ADJUSTMENT']) && eq([...R.AUDIT_ACTOR_TYPES], ['RECRUITER', 'ADMIN', 'SYSTEM']));
+  // Phase 7: + GROUP_REWARD / GROUP_REVERSAL (the recruiter group reward and its reversal, migration 20261112).
+  ok('enums: reward types and audit actors', eq(Object.values(R.REWARD_TYPES), ['RECRUIT_REWARD', 'REVERSAL', 'ADMIN_ADJUSTMENT', 'GROUP_REWARD', 'GROUP_REVERSAL']) && Object.isFrozen(R.REWARD_TYPES)
+    && eq([...R.AUDIT_ACTOR_TYPES], ['RECRUITER', 'ADMIN', 'SYSTEM']));
 }
 
 console.log('\n1e. Data sources: real delivered orders (isFake = false) and the admin-only CIN approval');
@@ -202,8 +333,17 @@ console.log('\n1e. Data sources: real delivered orders (isFake = false) and the 
   // every write of a status 'APPROVED' in src (excluding the generated Prisma client)
   const walk = (dir) => git(['ls-files', '--cached', '--others', '--exclude-standard', dir]).split('\n').filter((f) => /\.(m?[jt]sx?|cjs)$/.test(f) && !f.startsWith('src/generated/'));
   const srcFiles = walk('src');
-  const idWriters = srcFiles.filter((f) => /identityVerification\.(create|createMany|update|updateMany|upsert)\b|identity_verifications/.test(stripJs(read(f))));
+  const ID_WRITE = /identityVerification\.(create|createMany|update|updateMany|upsert)\b|identity_verifications/; // the original detector, unchanged
+  const idWriters = srcFiles.filter((f) => identityWriteHit(ID_WRITE, f, read(f))); // + raw SQL writes in every file; the Part 5b join allowance (top of file)
   ok('only identityService.js writes identity verifications in src (no other create / update / upsert / raw SQL)', eq(idWriters, ['src/lib/services/identityService.js']), idWriters.join(','));
+  // Phase 6 part 5b (documented, narrow allowance — identityWriteHit / networkJoinAllowance at the top of this file).
+  const netSrc = read(NETWORK_SVC);
+  const netAllow = networkJoinAllowance(netSrc);
+  const rawIdWriters = srcFiles.filter((f) => rawSqlIdentityWrite(stripJs(read(f))));
+  ok('recruiterNetworkService.js reads identity_verifications only through the read-only status join; no raw SQL write anywhere (Phase 6 part 5b allowance: only the 2 statistics joins LEFT JOIN "identity_verifications" iv ON iv."affiliateId" = t."id", iv used only as iv."status" (select / GROUP BY) and the join key, every $queryRaw one read query with bound values and no write keyword / locking clause, no $executeRaw / $executeRawUnsafe / $queryRawUnsafe; without the allowance the original detector flags the file; no src file has a raw INSERT / UPDATE / DELETE / MERGE / TRUNCATE / ALTER / DROP / COPY on identity_verifications or names it in a raw execute call)',
+    srcFiles.includes(NETWORK_SVC) && netAllow.ok && ID_WRITE.test(stripJs(netSrc)) && !identityWriteHit(ID_WRITE, NETWORK_SVC, netSrc) && rawIdWriters.length === 0,
+    JSON.stringify({ failed: netAllow.failed, rawIdWriters }));
+  for (const [label, pass, extra] of identitySelfChecks(ID_WRITE, netSrc)) ok(label, pass, extra);
   const approveBody = fnBody(idSvc, 'adminApproveIdentity');
   const approvedSetters = [...stripJs(idSvc).matchAll(/status:\s*'APPROVED'/g)].length;
   ok("in identityService.js the ONLY status: 'APPROVED' assignment is inside adminApproveIdentity",
@@ -409,9 +549,13 @@ console.log('\n3. Prisma schema (vs pre-recruiter base ef79c6b)');
     section.length > 0 && !/POINTS|\bunit\b|rewardUnit|MAD_CENTS|ASSIGNED_BY_ADMIN|CREATED_BY_RECRUITER|\bsource\b/.test(section));
   ok('the UGC / timing removal is real in the recruiter schema section (and the 3 Affiliate back-relation lines): no ugc / video / release / jitter / hmac / delay / minApproved',
     section.length > 1000 && !REMOVED.test(section) && !extra.some((l) => REMOVED.test(l)), (REMOVED.exec(section) || [])[0]);
-  ok('ledger amountCents Int; settings model fields exactly version, enabled, rewardAmountCents, minDeliveredSales, createdBy, createdAt',
+  // Phase 7 (migration 20261112): + exactly the 4 group-reward fields, each with its DB default (OFF, 0, 10, 10).
+  ok('ledger amountCents Int; settings model fields exactly version, enabled, rewardAmountCents, minDeliveredSales, createdBy, createdAt + the 4 Phase 7 group fields with their defaults',
     /amountCents\s+Int\b/.test(N.get('model RecruiterRewardLedger'))
-    && eq([...N.get('model RecruiterSettingsVersion').matchAll(/^\s{2}(\w+)\s+\w/gm)].map((m) => m[1]), ['version', 'enabled', 'rewardAmountCents', 'minDeliveredSales', 'createdBy', 'createdAt']));
+    && eq([...N.get('model RecruiterSettingsVersion').matchAll(/^\s{2}(\w+)\s+\w/gm)].map((m) => m[1]), ['version', 'enabled', 'rewardAmountCents', 'minDeliveredSales', 'createdBy', 'createdAt',
+      'groupEnabled', 'groupRewardAmountCents', 'groupSize', 'groupMinDeliveredSales'])
+    && /^\s+groupEnabled\s+Boolean\s+@default\(false\)$/m.test(N.get('model RecruiterSettingsVersion')) && /^\s+groupRewardAmountCents\s+Int\s+@default\(0\)$/m.test(N.get('model RecruiterSettingsVersion'))
+    && /^\s+groupSize\s+Int\s+@default\(10\)$/m.test(N.get('model RecruiterSettingsVersion')) && /^\s+groupMinDeliveredSales\s+Int\s+@default\(10\)$/m.test(N.get('model RecruiterSettingsVersion')));
   // Phase 5 allowance: the Recruiter model carries its OWN bank details for withdrawals (exactly
   // these 4 lines). The reward rule, settings and ledger still never reference bank / active / identity requirements.
   const BANK_LINES = ['// Bank details for withdrawals (Phase 5) — same fields and rules as the affiliate ones.', 'bankName String?', 'rib String?', 'accountName String?'];

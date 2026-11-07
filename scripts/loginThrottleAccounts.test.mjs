@@ -351,10 +351,12 @@ console.log('\n8. Sensitive data, no migration');
   const prismaText = read('prisma/schema.prisma') + migrations.map((d) => { try { return read(`prisma/migrations/${d}/migration.sql`); } catch { return ''; } }).join('\n');
   // The only migration after 20261109 is the Phase 6 part 3a reward-cycles migration (recruiter_reward_ledger only).
   const after = migrations.slice(migrations.indexOf('20261109_account_token_version') + 1);
-  ok('no database migration for D5: 20261109_account_token_version is followed only by 20261110_recruiter_reward_cycles (Phase 6 part 3a, ledger only) and 20261111_recruiter_identity_verifications (Phase 6 part 3c, recruiter KYC only), and nothing in prisma/ stores login attempts',
-    migrations.includes('20261109_account_token_version') && JSON.stringify(after) === JSON.stringify(['20261110_recruiter_reward_cycles', '20261111_recruiter_identity_verifications'])
+  // Phase 7: + 20261112_recruiter_group_rewards (recruiter group reward: settings columns + ledger guards only).
+  ok('no database migration for D5: 20261109_account_token_version is followed only by 20261110_recruiter_reward_cycles (Phase 6 part 3a, ledger only), 20261111_recruiter_identity_verifications (Phase 6 part 3c, recruiter KYC only) and 20261112_recruiter_group_rewards (Phase 7, group reward only), and nothing in prisma/ stores login attempts',
+    migrations.includes('20261109_account_token_version') && JSON.stringify(after) === JSON.stringify(['20261110_recruiter_reward_cycles', '20261111_recruiter_identity_verifications', '20261112_recruiter_group_rewards'])
     && !/login|throttle|attempt/i.test(read('prisma/migrations/20261110_recruiter_reward_cycles/migration.sql'))
     && !/login|throttle|attempt/i.test(read('prisma/migrations/20261111_recruiter_identity_verifications/migration.sql'))
+    && !/login|throttle|attempt/i.test(read('prisma/migrations/20261112_recruiter_group_rewards/migration.sql'))
     && !/loginThrottle|login_failures|loginFailure|LoginAttempt|login_attempts|lockedUntil/i.test(prismaText), JSON.stringify(after));
 }
 
