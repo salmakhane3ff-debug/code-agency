@@ -50,7 +50,7 @@
  */
 
 import prisma from '../prisma.js';
-import { parseMadToCents, normalizeRecruiterSettings } from '../recruiterSettings.js';
+import { parseMadToCents, normalizeRecruiterSettings, normalizeRecruiterGroupSettings, REWARD_TYPES } from '../recruiterSettings.js';
 import { lockRecruiterMoney } from './recruiterRewardService.js';
 import { PAYOUT_RELEASING_STATUSES, validateBankInfo } from './affiliateSystemService.js';
 
@@ -114,10 +114,15 @@ export async function getRecruiterWallet(recruiterId, { db = prisma } = {}) {
   const versions = [...new Set(ledger.map((l) => l.settingsVersion).filter((v) => Number.isInteger(v)))];
   const [affs, vers] = await Promise.all([
     affIds.length ? db.affiliate.findMany({ where: { id: { in: affIds } }, select: { id: true, username: true, name: true } }) : [],
-    versions.length ? db.recruiterSettingsVersion.findMany({ where: { version: { in: versions } }, select: { version: true, minDeliveredSales: true } }) : [],
+    versions.length ? db.recruiterSettingsVersion.findMany({
+      where: { version: { in: versions } }, select: { version: true, minDeliveredSales: true, groupSize: true, groupMinDeliveredSales: true },
+    }) : [],
   ]);
   const affById = new Map(affs.map((a) => [a.id, a]));
   const thresholdByVersion = new Map(vers.map((v) => [v.version, v.minDeliveredSales]));
+  // Phase 7 (Reward B): a group row carries the group size and the per-affiliate threshold of ITS version.
+  const groupByVersion = new Map(vers.map((v) => [v.version, normalizeRecruiterGroupSettings(v)]));
+  const isGroup = (t) => t === REWARD_TYPES.GROUP_REWARD || t === REWARD_TYPES.GROUP_REVERSAL;
   return {
     settings: normalizeRecruiterSettings(settingsRow),
     totals,
@@ -125,6 +130,11 @@ export async function getRecruiterWallet(recruiterId, { db = prisma } = {}) {
       type: l.type, amountCents: l.amountCents, createdAt: l.createdAt, cycle: l.cycle ?? null,
       affiliate: l.affiliateId ? affById.get(l.affiliateId) ?? { id: l.affiliateId, username: null, name: null } : null,
       requiredDeliveredOrders: Number.isInteger(l.settingsVersion) ? thresholdByVersion.get(l.settingsVersion) ?? null : null,
+      ...(isGroup(l.type) ? {
+        settingsVersion: l.settingsVersion ?? null,
+        groupSize: groupByVersion.get(l.settingsVersion)?.groupSize ?? null,
+        requiredDeliveredOrders: groupByVersion.get(l.settingsVersion)?.groupMinDeliveredSales ?? null,
+      } : {}),
     })),
     withdrawals: payouts.map((p) => ({ id: p.id, amountCents: toCents(p.amount), status: p.status, createdAt: p.createdAt })),
     bank: bankOf(me),

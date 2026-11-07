@@ -18,6 +18,8 @@
  *   • reconcile reverses even with rewards OFF (and never awards then)
  *   • audit RECRUIT_REWARD_REVERSED, recruiter history / admin ledger display, wallet net
  *   • affiliate rows / commissions / points / balances untouched; affiliateSystemService unchanged
+ *   • Phase 6 part 5d: reconcile candidates use the reward's OWN version threshold (legacy / unknown /
+ *     out-of-range → 10, like thresholdOfVersion) and always agree with syncRecruiterReward across cycles
  * Run: node scripts/recruiterRewardReversal.test.mjs
  * ────────────────────────────────────────────────────────────────────────────
  */
@@ -36,6 +38,78 @@ const HK = await import('../src/lib/recruiterRewardHooks.js');
 const V = await import('../src/lib/recruiterVisibility.js');
 const SET = await import('../src/lib/recruiterSettings.js');
 
+// Phase 7 Stage B (documented, narrow): the affiliate LIST (listRecruiterNetwork + its JSDoc) gains keyset paging and
+// the downline placement / counts; undo exactly that change — the list block taken back from `base`, the network-service
+// import, LIST_LIMIT_MAX and LIST_CURSOR_RE removed — before the byte comparison below. The list block must not write.
+const undoStageBList = (cur, base) => {
+  const a = "/**\n * The recruiter's own network for the parent selector", z = "/**\n * Walk the parent's ancestry";
+  const [ba, bz, ca, cz] = [base.indexOf(a), base.indexOf(z), cur.indexOf(a), cur.indexOf(z)];
+  if (ba < 0 || bz < ba || ca < 0 || cz < ca || /\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\(/.test(cur.slice(ca, cz))) return '';
+  let out = cur.slice(0, ca) + base.slice(ba, bz) + cur.slice(cz);
+  out = out.replace("import { getAffiliateCounts, getAffiliatePlacement } from './recruiterNetworkService.js';\n", '').replace(' LIST_LIMIT_MAX: 100,', '');
+  const k = out.indexOf('/** Phase 7 Stage B: keyset cursor');
+  if (k >= 0) { const e1 = out.indexOf('\n', k); const e2 = out.indexOf('\n', e1 + 1); if (/^export const LIST_CURSOR_RE = /.test(out.slice(e1 + 1, e2))) out = out.slice(0, k) + out.slice(e2 + 1); }
+  return out;
+};
+// Phase 7 Stage E (approved product rule — ownership N(R); documented, narrow): undo exactly the Stage E change of
+// the creation service before the byte comparison below — the header's "Parent" bullet, the step-3 comment, the
+// creation's networkIds line (the parent just passed the check), networkIdSet (now: the members of N(R) among the
+// ids, through the ancestry statement) and the ancestry region (from the "Walk the parent's ancestry" JSDoc to the
+// creation JSDoc: parentInNetwork — the nearest-link walk — and assertAncestryInNetwork). Each replaced region is
+// checked first: the expected functions only, no write, ONE tagged recruiter-ancestry statement, ONE throw site.
+const undoStageE = (cur, base) => {
+  const swap = (s, x, y) => (s !== null && s.split(x).length === 2 ? s.replace(x, y) : null);
+  let out = swap(cur, ' *   • Parent: none (root) or a member of THIS recruiter\'s network N(R) (Phase 7 Stage E: its\n'
+    + ' *     owner — the recruiter of the nearest linked affiliate at or above it — is this recruiter),\n'
+    + ' *     checked on the server inside the transaction (never trusted from the client).\n',
+  ' *   • Parent: none (root) or an affiliate already linked to THIS recruiter, checked on the\n'
+    + ' *     server inside the transaction (never trusted from the client), with its whole\n'
+    + ' *     ancestry verified to be acyclic and inside the same network.\n');
+  out = swap(out, '      // 3. Parent: none, or a member of THIS recruiter\'s network N(R) (nearest link = this recruiter).',
+    '      // 3. Parent: none, or a member of THIS recruiter\'s network (whole ancestry checked).');
+  out = swap(out, '        row: plain, networkIds: new Set(plain.parentId ? [plain.parentId] : []), replayed: false, // Stage E: the parent passed step 3',
+    '        row: plain, networkIds: await networkIdSet(tx, recruiterId, [plain.parentId]), replayed: false,');
+  if (out === null) return '';
+  const span = (s, a, z) => { const i = s.indexOf(a); const j = i >= 0 ? s.indexOf(z, i + a.length) : -1; return i >= 0 && j > i && s.indexOf(a, i + 1) < 0 ? [i, j] : null; };
+  const fns = (s) => [...s.matchAll(/^(?:export )?(?:async )?function (\w+)/gm)].map((m) => m[1]);
+  const writes = (s) => /\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\(|\$executeRaw/.test(s);
+  const cN = span(out, '/** Phase 7 Stage E: the members of N(R) among', '/** Plain identity fields');
+  const bN = span(base, '/** The ids of every affiliate linked to this recruiter (their network). */', '/** Plain identity fields');
+  if (!cN || !bN) return '';
+  const nBlock = out.slice(cN[0], cN[1]);
+  if (fns(nBlock).join() !== 'networkIdSet' || writes(nBlock) || !/await parentInNetwork\(db, recruiterId, id\)/.test(nBlock)) return '';
+  out = out.slice(0, cN[0]) + base.slice(bN[0], bN[1]) + out.slice(cN[1]);
+  const A0 = "/**\n * Walk the parent's ancestry", A1 = '\n/**\n * Recruiter: create an affiliate (inactive)';
+  const cA = span(out, A0, A1), bA = span(base, A0, A1);
+  if (!cA || !bA) return '';
+  const aBlock = out.slice(cA[0], cA[1]);
+  if (fns(aBlock).join() !== 'parentInNetwork,assertAncestryInNetwork' || writes(aBlock) || (aBlock.match(/\/\* recruiter-ancestry \*\//g) || []).length !== 1
+    || (aBlock.match(/throw /g) || []).length !== 1 || !/throw fail\('PARENT_NOT_IN_NETWORK'\)/.test(aBlock)) return '';
+  return out.slice(0, cA[0]) + base.slice(bA[0], bA[1]) + out.slice(cA[1]);
+};
+// Phase 7 Stage F (approved clarification — the TOPMOST link wins; documented, narrow): undo exactly the Stage F text of
+// the creation service (header bullet, the network-service import, the step-3 comment, the JSDoc start of the ancestry
+// region — whose body undoStageE then takes back from the base after its own checks) so the Stage E / B undos apply.
+const undoStageFAffiliates = (cur) => {
+  const swaps = [
+    [' *   • Parent: none (root) or a member of THIS recruiter\'s network N(R) (Phase 7 Stage F: its\n'
+      + ' *     owner — the recruiter of the TOPMOST linked affiliate of its chain — is this recruiter; a\n'
+      + ' *     recruiter can never create under another recruiter\'s network, even below a nested legacy link\n'
+      + ' *     to itself), checked on the server inside the transaction (never trusted from the client). The\n'
+      + ' *     new affiliate is linked to that same recruiter, so creation always extends its ownership.\n',
+    ' *   • Parent: none (root) or a member of THIS recruiter\'s network N(R) (Phase 7 Stage E: its\n'
+      + ' *     owner — the recruiter of the nearest linked affiliate at or above it — is this recruiter),\n'
+      + ' *     checked on the server inside the transaction (never trusted from the client).\n'],
+    ["import { NETWORK_LIMITS, getAffiliateCounts, getAffiliatePlacement } from './recruiterNetworkService.js';",
+      "import { getAffiliateCounts, getAffiliatePlacement } from './recruiterNetworkService.js';"],
+    ['      // 3. Parent: none, or a member of THIS recruiter\'s network N(R) (Stage F: topmost link = this recruiter).',
+      '      // 3. Parent: none, or a member of THIS recruiter\'s network N(R) (nearest link = this recruiter).'],
+    ["/**\n * Walk the parent's WHOLE ancestry", "/**\n * Walk the parent's ancestry"],
+  ];
+  let out = cur;
+  for (const [x, y] of swaps) { if (out.split(x).length !== 2) return ''; out = out.replace(x, y); }
+  return out;
+};
 let pass = 0, fail = 0;
 const ok = (n, c, extra = '') => { if (c) { pass++; console.log('  PASS ', n); } else { fail++; console.log('  FAIL ', n, extra); } };
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -356,20 +430,22 @@ console.log('\n8. Reconcile: reverses even with rewards OFF, never awards then')
   E.db._tables.affiliateOrder.find((o) => o.id === g.os[0].id).status = 'cancelled'; // committed without a hook (e.g. the hook failed)
   E.db._tables.affiliateOrder.find((o) => o.id === k.os[0].id).status = 'returned';
   const r = await RS.reconcileRecruiterRewards({ db: E.db, now: T0 });
+  // Phase 7: + groupChecked / groupAwarded / groupReversed (group rewards off and none exists → no group pass;
+  // the same for a recruiter-scoped run: groupChecked 0).
   ok('rewards OFF (v2 disabled): reconcile reverses the 2 open rewards now below their v1 threshold, awards nothing (the qualifying never-awarded affiliate gets nothing)',
-    eq(r, { checked: 4, awarded: 0, reversed: 2, unchanged: 0 }) && ledger(E.db, { affiliateId: g.a.id, type: 'REVERSAL' }).length === 1 && ledger(E.db, { affiliateId: k.a.id, type: 'REVERSAL' }).length === 1
+    eq(r, { checked: 4, awarded: 0, reversed: 2, unchanged: 0, candidates: 2, batches: 1, cursor: null, hasMore: false, busy: false, groupChecked: 0, groupAwarded: 0, groupReversed: 0 }) && ledger(E.db, { affiliateId: g.a.id, type: 'REVERSAL' }).length === 1 && ledger(E.db, { affiliateId: k.a.id, type: 'REVERSAL' }).length === 1
     && ledger(E.db, { affiliateId: h.a.id, type: 'REVERSAL' }).length === 0 && ledger(E.db, { affiliateId: fresh.a.id }).length === 0, big(r));
-  ok('…a second reconcile changes nothing (idempotent)', eq(await RS.reconcileRecruiterRewards({ db: E.db, now: T0 }), { checked: 4, awarded: 0, reversed: 0, unchanged: 0 }));
+  ok('…a second reconcile changes nothing (idempotent)', eq(await RS.reconcileRecruiterRewards({ db: E.db, now: T0 }), { checked: 4, awarded: 0, reversed: 0, unchanged: 0, candidates: 0, batches: 1, cursor: null, hasMore: false, busy: false, groupChecked: 0, groupAwarded: 0, groupReversed: 0 }));
   ok('…with rewards OFF, re-delivery does not open a new cycle (sync → NOT_QUALIFIED REWARDS_DISABLED)',
     (E.db._tables.affiliateOrder.find((o) => o.id === g.os[0].id).status = 'delivered', eq(await sync(E, g.a), { action: 'NOT_QUALIFIED', unmet: ['REWARDS_DISABLED'] })));
   const S = setup();
   const sa = qualified(S.db, S.A), sb = qualified(S.db, S.B);
   await sync(S, sa.a); await sync(S, sb.a);
   for (const x of [sa, sb]) S.db._tables.affiliateOrder.find((o) => o.id === x.os[0].id).status = 'cancelled';
-  ok('reconcile scoped to recruiter A reverses only A\'s affiliate', eq(await RS.reconcileRecruiterRewards({ db: S.db, recruiterId: S.A.id, now: T0 }), { checked: 1, awarded: 0, reversed: 1, unchanged: 0 }) && ledger(S.db, { affiliateId: sb.a.id, type: 'REVERSAL' }).length === 0);
+  ok('reconcile scoped to recruiter A reverses only A\'s affiliate', eq(await RS.reconcileRecruiterRewards({ db: S.db, recruiterId: S.A.id, now: T0 }), { checked: 1, awarded: 0, reversed: 1, unchanged: 0, candidates: 1, batches: 1, cursor: null, hasMore: false, busy: false, groupChecked: 0, groupAwarded: 0, groupReversed: 0 }) && ledger(S.db, { affiliateId: sb.a.id, type: 'REVERSAL' }).length === 0);
   S.db._tables.affiliateOrder.find((o) => o.id === sa.os[0].id).status = 'delivered';
   const on = await RS.reconcileRecruiterRewards({ db: S.db, now: T0 });
-  ok('reconcile with rewards ON: re-awards the re-delivered affiliate of A (new cycle) and reverses B', eq(on, { checked: 2, awarded: 1, reversed: 1, unchanged: 0 }), big(on));
+  ok('reconcile with rewards ON: re-awards the re-delivered affiliate of A (new cycle) and reverses B', eq(on, { checked: 2, awarded: 1, reversed: 1, unchanged: 0, candidates: 2, batches: 1, cursor: null, hasMore: false, busy: false, groupChecked: 0, groupAwarded: 0, groupReversed: 0 }), big(on));
   ok('…end state: A has cycle 2 open, B reversed', ledger(S.db, { affiliateId: sa.a.id, cycle: 2, type: 'RECRUIT_REWARD' }).length === 1 && ledger(S.db, { affiliateId: sb.a.id, type: 'REVERSAL' }).length === 1 && consistent(S.db, sa.a.id) && consistent(S.db, sb.a.id));
 }
 
@@ -475,7 +551,36 @@ console.log('\n11. Affiliate commissions, points, balances and payouts untouched
     'src/app/recruiter/network/networkUi.jsx', 'src/app/recruiter/network/page.jsx', 'src/app/recruiter/network/stats/page.jsx',
     'src/lib/recruiterNetworkRouteHandlers.js', 'src/lib/recruiterProfileView.js', 'src/lib/recruiterRouteHandlers.js',
     'src/lib/services/affiliateActivationService.js', 'src/lib/services/recruiterNetworkService.js', 'src/lib/services/recruiterService.js',
+    // Phase 6 part 5c (approved): the affiliate creation's ancestry check (one statement); only
+    // assertAncestryInNetwork differs — pinned below and in recruiterPermissions.test.mjs.
+    'src/lib/services/recruiterAffiliateService.js',
+    // Phase 7 Stage B (approved): downline visibility / progress — the affiliate list handler, the progress
+    // summary (handler, service, route); the network service / handlers, visibility and the list above.
+    'src/lib/recruiterAffiliateRouteHandlers.js', 'src/lib/recruiterProgressHandlers.js', 'src/lib/services/recruiterProgressService.js',
+    'src/app/api/recruiter/progress/route.js',
+    // Phase 7 Stage C (approved, UI only): the new affiliates list page, the password page (401-only redirect, double-
+    // submit guard), the pure UI helpers and the Landing Page Only Mode allowlist — no commission / points / balance /
+    // payout / affiliate KYC file (the dashboard, verification, wallet and errorLabels files are already listed above).
+    'src/app/recruiter/affiliates/page.jsx', 'src/app/recruiter/password/page.jsx', 'src/app/recruiter/recruiterUiState.js',
+    'src/app/recruiter/wallet/walletUi.js', 'src/lib/landingMode.js',
+    // Phase 7 Stage F (approved clarification): an affiliate with children cannot be deleted — the deletion helper and the
+    // 409 mapping of the admin DELETE route and of the legacy controller (no commission / points / balance / payout file).
+    'src/app/api/admin/affiliates/route.js', 'src/lib/affiliateDeletion.js', 'src/lib/controllers/affiliateController.js',
   ].sort()), big({ changed, untracked }));
+  ok('recruiterAffiliateService.js (Phase 6 part 5c): versus the part 3 base, every changed line lies inside assertAncestryInNetwork or its // comment, and none mentions commission / points / balance / payout / orders / rewards (Phase 7 Stage B: the affiliate list change undone first — undoStageBList)', (() => {
+    const f = 'src/lib/services/recruiterAffiliateService.js';
+    const base = git(['show', `${PART3_BASE}:${f}`]);
+    const cur = undoStageBList(undoStageE(undoStageFAffiliates(read(f)), base), base); // Stage F, then Stage E, then Stage B undone
+    const head = 'async function assertAncestryInNetwork(';
+    const tail = '\n/**\n * Recruiter: create an affiliate (inactive)';
+    const bi = base.indexOf(head), bt = base.indexOf(tail);
+    if (bi < 0 || bt < bi) return false;
+    const pre = base.slice(0, bi), post = base.slice(bt);
+    if (!cur.startsWith(pre) || !cur.endsWith(post) || cur.length < pre.length + post.length) return false;
+    const mid = cur.slice(pre.length, cur.length - post.length);
+    return mid.includes(head) && (mid.match(/\bfunction\b/g) || []).length === 1 && !/\bexport\b|\bimport\b/.test(mid)
+      && !/commission|rewardPoint|balance|payout|affiliate_orders|affiliateOrder|ledger|reward/i.test(mid);
+  })());
   const os2 = git(['diff', PART3_BASE, '--', 'src/lib/services/orderService.js']).split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l));
   ok('orderService.js: only the hook import, its comment and the post-sync call were added (nothing removed)', eq(os2, [
     "+import { onRecruiterLinkedOrderSynced } from '../recruiterRewardHooks.js';",
@@ -535,6 +640,137 @@ console.log('\n13. Migration 20261110 and schema (static)');
   const model = read('prisma/schema.prisma').match(/model RecruiterRewardLedger \{[\s\S]*?\n\}/)?.[0] ?? '';
   ok('schema: RecruiterRewardLedger.cycle Int (required, no default)', /\n\s+cycle\s+Int\s*\n/.test(model) && !/cycle\s+Int[^\n]*@default/.test(model));
   ok('settings: recruitRewardCycleKey / reversalCycleKey', SET.recruitRewardCycleKey('x', 4) === 'recruit:x:v4' && SET.reversalCycleKey('x', 4) === 'reverse:x:v4');
+}
+
+// ── 14. Phase 6 part 5d: reconcile candidates vs the authoritative sync ──────────
+console.log('\n14. Phase 6 part 5d: candidate thresholds (the reward\'s version, legacy → 10) and agreement with syncRecruiterReward');
+{
+  // Stage F: a recruiter-scoped (wallet) run uses recruiter-reward-network-candidates (the roots of N(R)) — the same rows
+  const isCand = (sql) => /^\s*\/\* recruiter-reward-(network-)?candidates \*\//.test(sql ?? '');
+  // The candidate rows of each reconcile run (captured from the statement the service runs on db).
+  const spy = (raw) => {
+    const seen = [];
+    const db = new Proxy(raw, {
+      get(t, p) {
+        if (p !== '$queryRaw') return t[p];
+        return async (strings, ...values) => { const rows = await t.$queryRaw(strings, ...values); if (isCand(Array.isArray(strings) ? strings.join('') : '')) seen.push(rows); return rows; };
+      },
+    });
+    return { db, seen };
+  };
+  const candOf = async (E, a) => {
+    const S = spy(E.db);
+    await RS.reconcileRecruiterRewards({ db: S.db, now: T0, recruiterId: E.A.id, batchSize: 1000 }).catch(() => null);
+    return S.seen.flat().filter((r) => r.kind !== 'batch' && r.id === a.id).map((r) => r.kind);
+  };
+  // Candidates only, nothing written: a recruiter-scoped run (no lease) through a db that refuses every
+  // transaction, so the statement runs and the first sync stops the run before any write.
+  const probe = async (E, a) => {
+    const S = spy(E.db);
+    const noTx = new Proxy(S.db, { get(t, p) { return p === '$transaction' ? () => Promise.reject(new Error('probe: no sync')) : t[p]; } });
+    const before = E.db._tables.recruiterRewardLedger.length;
+    await RS.reconcileRecruiterRewards({ db: noTx, now: T0, recruiterId: E.A.id }).catch(() => null);
+    if (E.db._tables.recruiterRewardLedger.length !== before || S.seen.length !== 1) throw new Error('probe wrote or ran no candidates statement');
+    return S.seen.flat().filter((r) => r.kind !== 'batch' && r.id === a.id).map((r) => r.kind);
+  };
+  /** Alternating cycles 1..n, every reversal = −its reward (same cycle, same recruiter). */
+  const alternating = (db, affiliateId) => {
+    let cycle = 1, type = 'RECRUIT_REWARD', open = null;
+    for (const r of ledger(db, { affiliateId })) {
+      if (r.type !== type || r.cycle !== cycle) return false;
+      if (r.type === 'RECRUIT_REWARD') { open = r; type = 'REVERSAL'; } else { if (r.amountCents !== -open.amountCents || r.recruiterId !== open.recruiterId) return false; type = 'RECRUIT_REWARD'; cycle += 1; }
+    }
+    return true;
+  };
+
+  // a) the reward's OWN version threshold: v1 = 5, current v2 = 50
+  for (const [count, expectReversal] of [[10, false], [5, false], [4, true], [3, true]]) {
+    const E = setup({ settings: { version: 1, enabled: true, rewardAmountCents: 15000, minDeliveredSales: 5 } });
+    const { a, os } = qualified(E.db, E.A, 10);
+    await sync(E, a);
+    E.db._seed.settings({ version: 2, enabled: true, rewardAmountCents: 20000, minDeliveredSales: 50 });
+    for (const o of os.slice(count)) E.db._tables.affiliateOrder.find((x) => x.id === o.id).status = 'cancelled';
+    const kinds = await probe(E, a);
+    const r = await RS.reconcileRecruiterRewards({ db: E.db, now: T0 });
+    const rev = ledger(E.db, { affiliateId: a.id, type: 'REVERSAL' });
+    ok(`reward earned under v1 (threshold 5), current v2 threshold 50, ${count} delivered → ${expectReversal ? 'reversal candidate, REVERSED (−15000, v1)' : 'NOT a candidate (never judged on 50), nothing written'}`,
+      eq(kinds, expectReversal ? ['reversal'] : []) && r.reversed === (expectReversal ? 1 : 0) && r.candidates === (expectReversal ? 1 : 0) && rev.length === (expectReversal ? 1 : 0)
+      && (!expectReversal || (rev[0].amountCents === -15000 && rev[0].settingsVersion === 1)), big({ kinds, r }));
+  }
+
+  // b) legacy / NULL / unknown / out-of-range settings version → the default threshold 10 (as thresholdOfVersion)
+  const legacyCases = [
+    ['legacy cycle-1 reward with settingsVersion NULL', { settingsVersion: null, idempotencyKey: (id) => `recruit:${id}` }, null],
+    ['settingsVersion 0', { settingsVersion: 0 }, null],
+    ['settingsVersion 99 (no such version row)', { settingsVersion: 99 }, null],
+    ['version 2 stored with an out-of-range threshold 0', { settingsVersion: 2 }, { version: 2, enabled: true, rewardAmountCents: 100, minDeliveredSales: 0 }],
+    ['version 2 stored with threshold 100001 (above the range)', { settingsVersion: 2 }, { version: 2, enabled: true, rewardAmountCents: 100, minDeliveredSales: 100001 }],
+  ];
+  for (const [label, row, badVersion] of legacyCases) {
+    const res = [];
+    for (const count of [10, 9]) {
+      const E = setup({ settings: { version: 1, enabled: false, rewardAmountCents: 0, minDeliveredSales: 3 } });
+      if (badVersion) E.db._seed.settings(badVersion);
+      const a = aff(E.db, E.A); orders(E.db, a, count); identity(E.db, a);
+      E.db._seed.ledger({ recruiterId: E.A.id, affiliateId: a.id, type: 'RECRUIT_REWARD', amountCents: 5000, settingsVersion: row.settingsVersion, idempotencyKey: (row.idempotencyKey ?? ((id) => `recruit:${id}:v1`))(a.id) });
+      const kinds = await probe(E, a);
+      const s = await sync(E, a);
+      res.push([count, kinds, s.action]);
+    }
+    ok(`${label} → threshold 10 like thresholdOfVersion: 10 delivered → no candidate and the sync agrees (NO_CHANGE); 9 → reversal candidate and the sync REVERSES`,
+      eq(res, [[10, [], 'NO_CHANGE'], [9, ['reversal'], 'REVERSED']]), big(res));
+  }
+
+  // c) candidate verdicts agree with syncRecruiterReward across cycles (award → reverse → re-award …), random walk
+  let s = 0x5d5d;
+  const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+  const disagreements = [];
+  const seenKinds = { award: 0, reversal: 0, none: 0 };
+  let maxCycle = 0;
+  for (let run = 0; run < 6; run++) {
+    const E = setup({ settings: { version: 1, enabled: true, rewardAmountCents: 15000, minDeliveredSales: 4 } });
+    const affs = [];
+    for (let i = 0; i < 6; i++) { const a = aff(E.db, E.A); orders(E.db, a, Math.floor(rnd() * 8)); if (rnd() < 0.85) identity(E.db, a); affs.push(a); }
+    for (let step = 0; step < 25; step++) {
+      // random change: (re)deliver / cancel orders, new orders, sometimes a new settings version or rewards OFF / ON
+      for (const o of E.db._tables.affiliateOrder) if (rnd() < 0.12) o.status = o.status === 'delivered' ? 'cancelled' : 'delivered';
+      if (rnd() < 0.2) orders(E.db, affs[Math.floor(rnd() * affs.length)], 1 + Math.floor(rnd() * 3));
+      if (rnd() < 0.12) {
+        const v = E.db._tables.recruiterSettingsVersion.length + 1;
+        const on = rnd() < 0.7;
+        E.db._seed.settings({ version: v, enabled: on, rewardAmountCents: on ? (1 + Math.floor(rnd() * 200)) * 100 : 0, minDeliveredSales: 1 + Math.floor(rnd() * 8) });
+      }
+      for (const a of affs) {
+        const kinds = await probe(E, a);
+        const approved = E.db._tables.identityVerification.some((v) => v.affiliateId === a.id && v.status === 'APPROVED');
+        const r = await sync(E, a);
+        const expected = kinds.includes('reversal') ? 'REVERSED' : kinds.includes('award') && approved ? 'AWARDED' : null;
+        const wrote = ['AWARDED', 'REVERSED'].includes(r.action);
+        if ((expected && r.action !== expected) || (!expected && wrote) || kinds.length > 1) disagreements.push(`${run}/${step}: ${kinds} approved=${approved} → ${r.action}`);
+        seenKinds[kinds[0] ?? 'none'] += 1;
+        maxCycle = Math.max(maxCycle, r.cycle ?? 0);
+      }
+    }
+    if (!affs.every((a) => alternating(E.db, a.id))) disagreements.push(`run ${run}: ledger not alternating / reversal ≠ −reward`);
+  }
+  ok('random walk (6 networks × 25 steps × 6 affiliates, order changes, new versions, rewards OFF / ON): the candidate verdict ALWAYS matches the authoritative sync (reversal ⇔ REVERSED, approved award ⇔ AWARDED, none ⇔ no write)',
+    disagreements.length === 0, disagreements.slice(0, 4).join(' | '));
+  ok(`…not vacuous: award, reversal and no-candidate verdicts all occurred and cycles went up to ${maxCycle}`, seenKinds.award > 10 && seenKinds.reversal > 10 && seenKinds.none > 10 && maxCycle >= 3, big({ seenKinds, maxCycle }));
+
+  // d) the same cycles end to end through reconcile only: award → reverse → re-award
+  const E = setup();
+  const { a, os } = qualified(E.db, E.A);
+  const shape = () => ledger(E.db, { affiliateId: a.id }).map((r) => `${r.type === 'REVERSAL' ? 'V' : 'R'}${r.cycle}`).join();
+  const steps = [];
+  steps.push([await candOf(E, a), shape()]);
+  E.db._tables.affiliateOrder.find((o) => o.id === os[0].id).status = 'cancelled';
+  steps.push([await candOf(E, a), shape()]);
+  steps.push([await candOf(E, a), shape()]);
+  E.db._tables.affiliateOrder.find((o) => o.id === os[0].id).status = 'delivered';
+  steps.push([await candOf(E, a), shape()]);
+  steps.push([await candOf(E, a), shape()]);
+  ok('reconcile alone drives the cycles: award (R1) → cancel → reversal (V1) → nothing → re-delivery → award cycle 2 (R2) → nothing; reversal = −reward',
+    eq(steps, [[['award'], 'R1'], [['reversal'], 'R1,V1'], [[], 'R1,V1'], [['award'], 'R1,V1,R2'], [[], 'R1,V1,R2']]) && alternating(E.db, a.id) && consistent(E.db, a.id), big(steps));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

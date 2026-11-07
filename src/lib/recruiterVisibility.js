@@ -127,8 +127,8 @@ export function toRecruiterError(err) {
 /**
  * Recruiter-facing view of an affiliate of THEIR OWN network (Phase 3: parent selector and
  * creation result). Identity only — never the password hash, phone, activation, bank,
- * verification or any amount. `networkIds` = ids linked to this recruiter: a parentId outside
- * it is never shown (null). Filtering rows by recruiter is the caller's job.
+ * verification or any amount. `networkIds` = ids of the recruiter's network (Phase 7 Stage E: members
+ * of N(R)): a parentId outside it is never shown (null). Filtering rows by recruiter is the caller's job.
  */
 export function toRecruiterNetworkAffiliateView(row, networkIds) {
   const at = row?.createdAt ? new Date(row.createdAt) : null;
@@ -165,6 +165,35 @@ function identityCountView(o) {
   return out;
 }
 
+// ── Phase 7 Stage B → E: network progress (N(R) — the same network the rewards use) ──
+const PROGRESS_THRESHOLD_MAX = 100000;
+const REWARD_STATE_KEYS = Object.freeze(['NONE', 'AWARDED', 'REVERSED']);
+const threshold = (v) => (Number.isInteger(v) && v >= 1 && v <= PROGRESS_THRESHOLD_MAX ? v : null);
+const flag = (v) => (v === true ? true : v === false ? false : null);
+/**
+ * Progress of one network node: its OWN real delivered orders against the CURRENT thresholds, and
+ * whether its identity is APPROVED. Without a delivered count (canViewOrders off) both qualified
+ * values are null too — nothing derived from delivered orders is shown.
+ */
+function progressView(p) {
+  if (!p || typeof p !== 'object') return null;
+  const delivered = Number.isInteger(p.realDelivered) && p.realDelivered >= 0 ? p.realDelivered : null;
+  return {
+    realDelivered: delivered,
+    individualThreshold: threshold(p.individualThreshold),
+    groupThreshold: threshold(p.groupThreshold),
+    identityApproved: p.identityApproved === true,
+    qualifiedIndividual: delivered === null ? null : flag(p.qualifiedIndividual),
+    qualifiedGroup: delivered === null ? null : flag(p.qualifiedGroup),
+  };
+}
+/** The latest individual reward cycle of a network member (already visible in the wallet). */
+function rewardStateView(r) {
+  if (!r || typeof r !== 'object') return null;
+  const state = REWARD_STATE_KEYS.includes(r.state) ? r.state : 'NONE';
+  return { state, cycle: state !== 'NONE' && Number.isInteger(r.cycle) && r.cycle >= 1 ? r.cycle : null };
+}
+
 /**
  * Recruiter-facing node of their network tree: identity, level, account status, identity
  * STATUS only, counts of children / descendants and order counts (real vs fake) — never a
@@ -182,12 +211,18 @@ export function toRecruiterNetworkNodeView(node) {
     childrenCount: count(node?.childrenCount),
     descendantsCount: count(node?.descendantsCount),
     orders: ordersOrNull(node?.orders),
+    // Phase 7 Stage B → E: the node is a member of the recruiter's network N(R); linkedToMe = directly
+    // recruited (information only — every member is reward-eligible), its progress (delivered values
+    // null without canViewOrders) and the latest individual reward cycle.
+    linkedToMe: node?.linkedToMe === true,
+    progress: progressView(node?.progress),
+    rewardState: rewardStateView(node?.rewardState),
   };
 }
 
 /** Breadcrumb entry (an ancestor in the recruiter's own network). */
 export function toRecruiterNetworkPathView(entry) {
-  return { id: str(entry?.id), username: str(entry?.username), name: str(entry?.name), level: level(entry?.level) };
+  return { id: str(entry?.id), username: str(entry?.username), name: str(entry?.name), level: level(entry?.level), linkedToMe: entry?.linkedToMe === true };
 }
 
 /** Recruiter-facing statistics of their network (or of one of their sub-networks). */
@@ -206,6 +241,60 @@ export function toRecruiterNetworkStatsView(stats) {
       level: level(l?.level), affiliates: count(l?.affiliates), active: count(l?.active), inactive: count(l?.inactive),
       identity: identityCountView(l?.identity), orders: ordersOrNull(l?.orders),
     })),
+  };
+}
+
+/**
+ * Phase 7 Stage B → E: one affiliate of the recruiter's paged list (GET /api/recruiter/affiliates) — the
+ * former parent-selector fields unchanged (toRecruiterNetworkAffiliateView: id, username, name,
+ * parentId only when the parent is in the recruiter's network, createdAt) plus its activation (status
+ * ACTIVE / INACTIVE, like the network nodes), identity STATUS, level in N(R) (null = unplaced), its
+ * parent when it is a placed member (masked otherwise), linkedToMe (directly recruited — information
+ * only), progress and latest individual reward cycle. Every listed affiliate is a member of N(R).
+ */
+export function toRecruiterAffiliateListItemView(row, networkIds) {
+  const base = toRecruiterNetworkAffiliateView(row, networkIds);
+  const p = row?.parent;
+  return {
+    id: base.id, username: base.username, name: base.name, parentId: base.parentId, createdAt: base.createdAt,
+    // activation as the network nodes show it (this module never reads the activation flag itself)
+    status: row?.status === 'ACTIVE' || row?.status === 'INACTIVE' ? row.status : null,
+    identityStatus: NETWORK_IDENTITY_KEYS.includes(row?.identityStatus) ? row.identityStatus : 'NONE',
+    level: level(row?.level),
+    parent: p && typeof p === 'object' && typeof p.id === 'string'
+      ? { id: p.id, username: str(p.username), name: str(p.name), linkedToMe: p.linkedToMe === true } : null,
+    linkedToMe: row?.linkedToMe === true,
+    progress: progressView(row?.progress),
+    rewardState: rewardStateView(row?.rewardState),
+  };
+}
+
+/** Phase 7 Stage B: one side (individual / group) of the recruiter's own reward counts (MAD cents). */
+function rewardCountsView(x) {
+  return { awarded: count(x?.awarded), awardedCents: count(x?.awardedCents), reversed: count(x?.reversed), reversedCents: count(x?.reversedCents) };
+}
+/**
+ * Phase 7 Stage B: the recruiter's progress summary (GET /api/recruiter/progress) — aggregates only:
+ * linked (directly recruited) / network counts (Phase 7 Stage E: downlineAffiliates = |N(R)|), the
+ * group progress ("progressTowardNextGroup / groupSize"), the switches, the current thresholds and the
+ * recruiter's own reward counts. No per-affiliate delivered count.
+ */
+export function toRecruiterProgressSummaryView(s) {
+  const size = Number.isInteger(s?.groupSize) && s.groupSize >= 1 && s.groupSize <= 10000 ? s.groupSize : null;
+  const toward = count(s?.progressTowardNextGroup);
+  return {
+    linkedAffiliates: count(s?.linkedAffiliates),
+    downlineAffiliates: count(s?.downlineAffiliates),
+    qualifiedForGroup: count(s?.qualifiedForGroup),
+    groupSize: size,
+    activeGroupRewards: count(s?.activeGroupRewards),
+    progressTowardNextGroup: size === null ? 0 : Math.min(toward, size),
+    groupEnabled: s?.groupEnabled === true,
+    individualEnabled: s?.individualEnabled === true,
+    individualThreshold: threshold(s?.individualThreshold),
+    groupThreshold: threshold(s?.groupThreshold),
+    currency: 'MAD',
+    rewards: { individual: rewardCountsView(s?.rewards?.individual), group: rewardCountsView(s?.rewards?.group) },
   };
 }
 
@@ -247,6 +336,24 @@ export function toRecruiterWithdrawalView(row) {
 export function toRecruiterRewardHistoryView(row) {
   const type = Object.values(REWARD_TYPES).includes(row?.type) ? row.type : null;
   const a = row?.affiliate;
+  if (type === REWARD_TYPES.GROUP_REWARD || type === REWARD_TYPES.GROUP_REVERSAL) {
+    // Phase 7 (Reward B): a group reward belongs to the recruiter's group of qualified affiliates —
+    // no affiliate; its cycle, the settings version it was judged with, the group size and the
+    // per-affiliate threshold of that version.
+    const pos = (v, max) => (Number.isInteger(v) && v >= 1 && v <= max ? v : null);
+    return {
+      type,
+      amountCents: cents(row?.amountCents),
+      currency: 'MAD',
+      affiliate: null,
+      reason: type === REWARD_TYPES.GROUP_REWARD ? 'GROUP_QUALIFIED_AFFILIATES' : 'GROUP_QUALIFIED_BELOW_THRESHOLD',
+      requiredDeliveredOrders: pos(row?.requiredDeliveredOrders, 100000),
+      cycle: pos(row?.cycle, 2147483647),
+      settingsVersion: pos(row?.settingsVersion, 2147483647),
+      groupSize: pos(row?.groupSize, 10000),
+      createdAt: iso(row?.createdAt),
+    };
+  }
   return {
     type,
     amountCents: cents(row?.amountCents),

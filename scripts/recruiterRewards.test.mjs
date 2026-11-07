@@ -21,6 +21,11 @@
  *   • admin processing: pay / reject pending only, audited, releases funds on reject
  *   • isolation: own wallet only, auth wrappers, every payout query scoped by recruiterId
  *   • the affiliate payout / balance code is unchanged and never sees recruiter rows
+ *   • Phase 6 part 5d — bounded reconcile: the candidates statement (binds in source order, drift
+ *     guard), candidate selection, equivalence with the pre-5d reconcile (7e111e1) on randomized
+ *     datasets, keyset batches (0 / 1 / 999 / 1000 / 1001, batchSize 7, restart / retry), the
+ *     platform lease (409 RECONCILE_BUSY, released on error), financial invariants under concurrent
+ *     runs, wallet GET without full-scope reads, the admin cursor contract
  * Run: node scripts/recruiterRewards.test.mjs
  * ────────────────────────────────────────────────────────────────────────────
  */
@@ -50,6 +55,7 @@ const ok = (n, c, extra = '') => { if (c) { pass++; console.log('  PASS ', n); }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const read = (p) => readFileSync(join(ROOT, p), 'utf8');
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const big = (v) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? String(x) : x));
 const keys = (o) => (o && typeof o === 'object' ? Object.keys(o).sort() : null);
 const stripJs = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 const git = (args) => { try { return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim(); } catch (e) { return `git error ${e.status}`; } };
@@ -205,11 +211,13 @@ console.log('\n2. Settings: defaults, validation, audited consecutive versions, 
   ok('nothing written by the invalid attempts', E.db._tables.recruiterSettingsVersion.length === 0 && audits(E.db, 'RECRUITER_SETTINGS_CHANGED').length === 0);
 
   const v1 = await save({ enabled: true, rewardAmountMad: '150.50', minDeliveredSales: 10 });
-  ok('save → version 1, 150.50 MAD stored as 15050 cents', eq(v1.v, { version: 1, enabled: true, rewardAmountCents: 15050, minDeliveredSales: 10 }), JSON.stringify(v1));
+  // Phase 7: the saved version also carries the 4 group-reward fields (defaults OFF, 0, 10, 10 when not given).
+  ok('save → version 1, 150.50 MAD stored as 15050 cents', eq(v1.v, { version: 1, enabled: true, rewardAmountCents: 15050, minDeliveredSales: 10, groupEnabled: false, groupRewardAmountCents: 0, groupSize: 10, groupMinDeliveredSales: 10 }), JSON.stringify(v1));
   const au = audits(E.db, 'RECRUITER_SETTINGS_CHANGED');
   ok('audited: RECRUITER_SETTINGS_CHANGED by the ADMIN (no recruiter), entity = the version, details = the values',
     au.length === 1 && au[0].actorType === 'ADMIN' && au[0].actorId === 'admin-1' && au[0].recruiterId === null && au[0].entityId === '1'
-    && eq(au[0].details, { version: 1, enabled: true, rewardAmountCents: 15050, minDeliveredSales: 10 }));
+    // Phase 7: the values of both reward types + the previous version's values (null for the first version)
+    && eq(au[0].details, { version: 1, enabled: true, rewardAmountCents: 15050, minDeliveredSales: 10, groupEnabled: false, groupRewardAmountCents: 0, groupSize: 10, groupMinDeliveredSales: 10, previous: null }));
   const a1 = qualified(E.db, E.A);
   await award(E, a1);
   const v2 = await save({ enabled: true, rewardAmountMad: '99', minDeliveredSales: 3 });
@@ -289,7 +297,8 @@ console.log('\n3. Idempotency and concurrency: one reward per affiliate whatever
   try {
     await C.db.$transaction(async (tx) => tx.recruiterRewardLedger.create({ data: { recruiterId: C.B.id, affiliateId: other.id, type: 'RECRUIT_REWARD', amountCents: 1, idempotencyKey: `recruit:${other.id}:v1`, cycle: 1, actorType: 'SYSTEM', settingsVersion: 1 } }));
   } catch (e) { guard = e; }
-  ok('a reward credited to a recruiter who is not the affiliate\'s → refused by the link guard', guard?.code === 'P2010' && /not linked/.test(guard?.message));
+  // Stage E: the guard (20261112) checks owner(affiliate) = the row's recruiter — its message names the network.
+  ok('a reward credited to a recruiter who is not the affiliate\'s (owner) → refused by the link guard', guard?.code === 'P2010' && /is not in the network of recruiter/.test(guard?.message));
 
   // an injected failure in the audit insert rolls the reward back; the next event awards it
   const F = setup({ failOnce: { 'recruiterAuditLog.create': true } });
@@ -311,11 +320,18 @@ console.log('\n3. Idempotency and concurrency: one reward per affiliate whatever
   const off = setup({ settings: { version: 1, enabled: false, rewardAmountCents: 100, minDeliveredSales: 1 } });
   qualified(off.db, off.A);
   const before = off.db._queryCount();
+  const logAt = off.db._log.length;
   const ro = await RS.reconcileRecruiterRewards({ db: off.db });
-  // Phase 6 part 3a: the REVERSAL pass runs even with rewards OFF, so the batched reads still happen
-  // (settings, links, ledger, real delivered counts — no identity read, no write).
-  ok('rewards OFF → reconcile awards nothing (4 batched reads for the reversal pass, no identity read, no write)',
-    eq(ro, { checked: 1, awarded: 0, reversed: 0, unchanged: 0 }) && off.db._queryCount() - before === 4 && off.db._tables.recruiterRewardLedger.length === 0, `${JSON.stringify(ro)} q=${off.db._queryCount() - before}`);
+  // Phase 6 part 3a: the REVERSAL pass runs even with rewards OFF. Phase 6 part 5d: the reads are the
+  // reconcile lease, the settings and ONE candidate statement per keyset batch (reversal candidates
+  // always; award candidates only when rewards are on) — no link / ledger / order read in the
+  // application, no identity read, no write.
+  const offCalls = off.db._log.slice(logAt).filter((l) => l.model !== '$transaction').map((l) => (l.model === '$queryRaw' ? (/pg_try_advisory_xact_lock/.test(l.sql) ? 'lease' : /^\s*\/\* recruiter-reward-candidates \*\//.test(l.sql) ? 'candidates' : l.sql) : `${l.model}.${l.op}`));
+  // Phase 7: + ONE constant read at the end of the run — does any group reward exist (group rewards off →
+  // the group pass runs only when a group reward could need a reversal; here none → no group pass).
+  ok('rewards OFF → reconcile awards nothing (4 statements: the lease, the settings, ONE candidate statement, the Phase 7 "any group reward" probe — no identity read, no write)',
+    eq(ro, { checked: 1, awarded: 0, reversed: 0, unchanged: 0, candidates: 0, batches: 1, cursor: null, hasMore: false, busy: false, groupChecked: 0, groupAwarded: 0, groupReversed: 0 }) && off.db._queryCount() - before === 4
+    && eq(offCalls, ['lease', 'recruiterSettingsVersion.findFirst', 'candidates', 'recruiterRewardLedger.findFirst']) && off.db._tables.recruiterRewardLedger.length === 0, `${JSON.stringify(ro)} q=${off.db._queryCount() - before} ${offCalls}`);
 
   const queries = async (n, qualify) => {
     const S = setup();
@@ -325,14 +341,18 @@ console.log('\n3. Idempotency and concurrency: one reward per affiliate whatever
     return { q: S.db._queryCount() - b0, r };
   };
   const q10 = await queries(10, false), q300 = await queries(300, false);
-  // Phase 6 part 3a: settings, links, ledger, order counts (identity is read only for award candidates).
-  ok('no N+1: reconcile over 10 and 300 non-qualifying affiliates issues the same number of queries (4)', q10.q === q300.q && q10.q === 4, `10→${q10.q} 300→${q300.q}`);
+  // Phase 6 part 5d: lease, settings, ONE candidate statement per batch of ≤ 1000 links (identity is
+  // read only for award candidates).
+  ok('no N+1: reconcile over 10 and 300 non-qualifying affiliates issues the same number of queries (4: lease, settings, one candidate statement, the Phase 7 group probe)', q10.q === q300.q && q10.q === 4 && q10.r.checked === 10 && q300.r.checked === 300 && q300.r.batches === 1, `10→${q10.q} 300→${q300.q}`);
   const w20 = await queries(20, true);
   // Phase 6 part 3a: each award is one syncRecruiterReward transaction that re-reads every fact under the
   // per-affiliate lock: link, lock, ledger, count, settings, affiliate, identity + 2 writes (ledger + audit) = 9.
-  ok('with awards: exactly base (5, incl. the batched identity read) + 9 statements per awarded affiliate (re-check under the lock + ledger + audit)', w20.r.awarded === 20 && w20.q === 5 + 9 * 20, `q=${w20.q} awarded=${w20.r.awarded}`);
+  // Phase 6 part 5d: base = lease, settings, one candidate statement, ONE identity read of the batch's award candidates.
+  ok('with awards: exactly base (5, incl. the batched identity read and the Phase 7 group probe) + 9 statements per awarded affiliate (re-check under the lock + ledger + audit)', w20.r.awarded === 20 && w20.r.candidates === 20 && w20.q === 5 + 9 * 20, `q=${w20.q} awarded=${w20.r.awarded}`);
   const q6k = await queries(6000, false);
-  ok('6000 affiliates: chunked by 5000 ids (settings, links, 2 ledger chunks, 2 order chunks; no candidate → no identity read)', q6k.q === 6 && q6k.r.checked === 6000, `q=${q6k.q}`);
+  // Phase 6 part 5d: keyset batches of 1000 links — 6 full batches, then a 7th that scans nothing and ends the run.
+  ok('6000 affiliates: 7 keyset batches of ≤ 1000 (6 full + 1 empty end) → lease, settings, 7 candidate statements (no candidate → no identity read), the Phase 7 group probe',
+    q6k.q === 10 && q6k.r.checked === 6000 && q6k.r.batches === 7 && q6k.r.hasMore === false && q6k.r.cursor === null, `q=${q6k.q} ${JSON.stringify(q6k.r)}`);
 }
 
 // ── 4. hooks ──────────────────────────────────────────────────────────────────
@@ -637,7 +657,11 @@ console.log('\n8. Admin: pay / reject a recruiter withdrawal (pending only, audi
     || (ov.status === 200 && E.db._tables.affiliatePayout.find((p) => p.id === w3.withdrawal.id).status === 'rejected' && ov.body.balances.find((b) => b.recruiterId === E.A.id).availableCents === 20000), ov.text.slice(0, 300));
   const rc = await call(withAdminAuth(admin.reconcile), req('/api/admin/recruiter-rewards', { method: 'POST', body: { action: 'reconcile' }, cookie: adminCookie() }));
   const rcBad = await call(withAdminAuth(admin.reconcile), req('/api/admin/recruiter-rewards', { method: 'POST', body: { action: 'other' }, cookie: adminCookie() }));
-  ok('admin recheck: { action: "reconcile" } → 200 with the counts; anything else → 400', rc.status === 200 && eq(keys(rc.body.reconcile), ['awarded', 'checked', 'reversed', 'unchanged']) && rcBad.status === 400);
+  // Phase 6 part 5d: one bounded batch per request, with its cursor / hasMore.
+  ok('admin recheck: { action: "reconcile" } → 200 with the counts of ONE batch (+ candidates, batches, cursor, hasMore, busy); anything else → 400',
+    // Phase 7: + groupAwarded / groupChecked / groupReversed (additive)
+    rc.status === 200 && eq(keys(rc.body.reconcile), ['awarded', 'batches', 'busy', 'candidates', 'checked', 'cursor', 'groupAwarded', 'groupChecked', 'groupReversed', 'hasMore', 'reversed', 'unchanged'])
+    && rc.body.reconcile.batches === 1 && rc.body.reconcile.hasMore === false && rc.body.reconcile.cursor === null && rc.body.reconcile.busy === false && rcBad.status === 400, rc.text);
   ok('admin endpoints refuse a recruiter token (403) and no token (401)',
     (await call(withAdminAuth(admin.overview), req('/x', { cookie: `auth_token=${signToken({ recruiterId: E.A.id, username: 'rec.a', type: 'recruiter' })}` }))).status === 403
     && (await call(withAdminAuth(admin.overview), req('/x'))).status === 401);
@@ -735,16 +759,530 @@ console.log('\n11. Static checks');
     !/\.(create|update|updateMany|upsert|delete|deleteMany)\(/.test(hk) && /select: \{ affiliateId: true, status: true, isFake: true \}/.test(hk) && /select: \{ affiliateId: true, status: true \}/.test(hk) && !/cin|ugc/i.test(hk));
   const rs = stripJs(read('src/lib/services/recruiterRewardService.js'));
   const models = new Set([...rs.matchAll(/\b(?:db|tx)\.(\$?\w+)/g)].map((m) => m[1]));
-  ok('the reward service touches only settings / ledger / audit / links / orders (counts) / identity (status) / affiliate (existence) / $transaction',
-    [...models].every((m) => ['recruiterSettingsVersion', 'recruiterRewardLedger', 'recruiterAuditLog', 'recruiterAffiliateLink', 'affiliateOrder', 'identityVerification', 'affiliate', '$transaction', '$executeRaw'].includes(m)), [...models].join(','));
+  // Phase 6 part 5d: + $queryRaw (the reconcile lease and the tagged candidates statement, both pinned below).
+  ok('the reward service touches only settings / ledger / audit / links / orders (counts) / identity (status) / affiliate (existence) / $transaction / the two pinned raw reads',
+    // Phase 7: + recruiter (ids only — the group pass pages over recruiters.id), pinned below.
+    [...models].every((m) => ['recruiterSettingsVersion', 'recruiterRewardLedger', 'recruiterAuditLog', 'recruiterAffiliateLink', 'affiliateOrder', 'identityVerification', 'affiliate', 'recruiter', '$transaction', '$executeRaw', '$queryRaw'].includes(m))
+    && (rs.match(/\b(?:db|tx)\.recruiter\./g) || []).length === 1 && /db\.recruiter\.findMany\(\{\s*where: cursor === null \? \{\} : \{ id: \{ gt: cursor \} \}, orderBy: \{ id: 'asc' \}, take: GROUP_PASS_BATCH, select: \{ id: true \},\s*\}\)/.test(rs), [...models].join(','));
+  ok('Phase 6 part 5d: reconcile no longer loads the whole scope — no links findMany, no ledger read over many affiliates, no affiliateOrder.groupBy, no id chunking',
+    !/recruiterAffiliateLink\.findMany|affiliateOrder\.groupBy|recruiterRewardLedger\.(findMany|groupBy)\(\{\s*where:\s*\{\s*affiliateId:\s*\{\s*in\b|\bCHUNK\b|\bchunks\(/.test(rs)
+    // Phase 7: + exactly one more ledger findMany — ONE recruiter's group rows (groupLedgerState, where recruiterId + the 2 group types).
+    && (rs.match(/recruiterRewardLedger\.findMany\(/g) || []).length === 2 && /async function cycleState\(tx, affiliateId\)[\s\S]*?tx\.recruiterRewardLedger\.findMany\(\{\s*where: \{ affiliateId, type/.test(rs)
+    && /async function groupLedgerState\(tx, recruiterId\)[\s\S]*?tx\.recruiterRewardLedger\.findMany\(\{\s*where: \{ recruiterId, type: \{ in: \[REWARD_TYPES\.GROUP_REWARD, REWARD_TYPES\.GROUP_REVERSAL\] \} \}/.test(rs));
   // Phase 6 part 3a adds exactly one: the per-affiliate reward lock (the SAME key as the cycle-guard trigger);
   // the part 3b race fix adds exactly one more: the per-recruiter money lock (shared with the withdrawal payment).
-  ok('the ONLY raw SQL of the reward service: the settings advisory lock (same key as the version trigger), the per-affiliate reward lock (same key as the cycle guard) and the per-recruiter money lock, all tagged / bound',
-    [...rs.matchAll(/\$(?:executeRaw|queryRaw)(?:Unsafe)?`([^`]*)`/g)].map((m) => m[1]).join('|') === "SELECT pg_advisory_xact_lock(hashtext('recruiter_settings_versions'))|SELECT pg_advisory_xact_lock(hashtext(${'recruit:' + affiliateId}))|SELECT pg_advisory_xact_lock(hashtext(${'recruiter-money:' + recruiterId}))"
-    && !/\$(?:executeRaw|queryRaw)Unsafe/.test(rs));
-  ok('identity is read with select affiliateId / status only (never a document field)', /identityVerification\.findMany\(\{ where: \{ affiliateId: \{ in: part \} \}, select: \{ affiliateId: true, status: true \} \}\)/.test(rs) && !/cinFront|cinBack/.test(rs));
+  // Phase 6 part 5d adds exactly two reads: the reconcile lease (a two-key try-lock, its own key space)
+  // and ONE tagged candidates statement whose interpolations are bound values only (no Unsafe, no
+  // identifier / SQL fragment interpolated); its exact text is pinned by the fake's drift guard.
+  const raws = [...read('src/lib/services/recruiterRewardService.js').matchAll(/\$(?:executeRaw|queryRaw)(?:Unsafe)?`([^`]*)`/g)].map((m) => m[1]);
+  const candSql = raws.find((x) => /^\s*\/\* recruiter-reward-candidates \*\//.test(x)) ?? '';
+  // Phase 7: + the per-recruiter GROUP lock (same key as the group cycle-guard trigger) and ONE tagged group
+  // statement (recruiter-group-qualified) whose interpolations are bound values only; its text is pinned by the fake.
+  const groupSql = raws.find((x) => /^\s*\/\* recruiter-group-qualified \*\//.test(x)) ?? '';
+  // Phase 7 Stage E: + ONE tagged owner statement (recruiter-affiliate-owner — the nearest link at or above an
+  // affiliate) bound to the affiliate id only; the group statement binds the recruiter twice (the N(R) walk's
+  // "not linked to another recruiter" filter) and the candidates statement its segment depth cap.
+  const ownerSql = raws.find((x) => /^\s*\/\* recruiter-affiliate-owner \*\//.test(x)) ?? '';
+  // Phase 7 Stage F: + the wallet scope's tagged network candidates statement (roots of N(R)) and the admin read-only
+  // conflicts statement; the group statement binds the shared N(R) CTEs (recruiter ×4 + the walk cap); the owner
+  // statement binds the affiliate twice (the chain + the topmost walk).
+  const netCandSql = raws.find((x) => /^\s*\/\* recruiter-reward-network-candidates \*\//.test(x)) ?? '';
+  const confSql = raws.find((x) => /^\s*\/\* recruiter-ownership-conflicts \*\//.test(x)) ?? '';
+  ok('the ONLY raw SQL of the reward service: the settings advisory lock (same key as the version trigger), the per-affiliate reward lock (same key as the cycle guard), the per-recruiter money lock, the reconcile lease, the tagged candidates statement, the Phase 7 group lock and the tagged group statement, (Stage E) the tagged owner statement, (Stage F) the tagged network candidates and conflicts statements — all bound',
+    eq(raws.filter((x) => x !== candSql && x !== groupSql && x !== ownerSql && x !== netCandSql && x !== confSql), ["SELECT pg_advisory_xact_lock(hashtext('recruiter_settings_versions'))", "SELECT pg_advisory_xact_lock(hashtext(${'recruit:' + affiliateId}))", "SELECT pg_advisory_xact_lock(hashtext(${'recruiter-money:' + recruiterId}))", "SELECT pg_try_advisory_xact_lock(hashtext('recruiter-reward-reconcile'), 0) AS ok", "SELECT pg_advisory_xact_lock(hashtext(${'recruiter-group:' + recruiterId}))"])
+    && raws.length === 10 && groupSql !== '' && [...groupSql.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1]).join() === 'recruiterId,cap,recruiterId,recruiterId,recruiterId,DELIVERED_ORDER_STATUS,minDelivered,minDelivered' && [...candSql.matchAll(/\$\{([^}]*)\}/g)].every((m) => /^(recruiterId|after|size|SEGMENT_DEPTH_CAP|awardsOn|minDeliveredSales|REWARD_TYPES\.(RECRUIT_REWARD|REVERSAL)|MIN_SALES_RANGE\.(min|max)|DEFAULT_MIN_DELIVERED_SALES|DELIVERED_ORDER_STATUS)$/.test(m[1]))
+    && netCandSql !== '' && [...netCandSql.matchAll(/\$\{([^}]*)\}/g)].every((m) => /^(recruiterId|after|size|cap|awardsOn|minDeliveredSales|REWARD_TYPES\.(RECRUIT_REWARD|REVERSAL)|MIN_SALES_RANGE\.(min|max)|DEFAULT_MIN_DELIVERED_SALES|DELIVERED_ORDER_STATUS)$/.test(m[1]))
+    && confSql !== '' && [...confSql.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1]).join() === 'cap,take'
+    && ownerSql !== '' && [...ownerSql.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1]).join() === 'affiliateId,affiliateId'
+    && !/\$(?:executeRaw|queryRaw)Unsafe|Prisma\.raw|Prisma\.sql/.test(rs), big(raws));
+  // Phase 6 part 5d: only for the (≤ one batch of) award candidates.
+  // Stage E: chunked (a batch's segments may hold more ids than links), same projection.
+  ok('identity is read with select affiliateId / status only (never a document field), for one batch of award candidates (chunked)', /identityVerification\.findMany\(\{ where: \{ affiliateId: \{ in: ids\.slice\(i, i \+ GROUP_QUALIFIED_CHUNK\) \} \}, select: \{ affiliateId: true, status: true \} \}\)/.test(rs) && !/cinFront|cinBack/.test(rs));
   const ws = stripJs(read('src/lib/services/recruiterWalletService.js'));
   ok('the wallet service never reads an affiliate balance, commission, point or provider', !/commission|rewardPoint|getAffiliateBalance|getWithdrawableBalance|computeRegisteredBalance|providerRegistry|bonusBalance/.test(ws));
+}
+
+// ── 12. Phase 6 part 5d: bounded keyset reconcile ─────────────────────────────
+console.log('\n12. Phase 6 part 5d: bounded keyset reconcile (candidates, equivalence, batches, lease, wallet, admin)');
+{
+  const LEASE = '__advisory2__:recruiter-reward-reconcile:0';
+  const isCand = (sql) => /^\s*\/\* recruiter-reward-candidates \*\//.test(sql ?? '');
+  // Every candidates statement the service runs through the returned db (it calls db.$queryRaw itself;
+  // the lease runs on the transaction client, which is the raw fake).
+  const spy = (raw) => {
+    const seen = [];
+    const db = new Proxy(raw, {
+      get(t, p) {
+        if (p !== '$queryRaw') return t[p];
+        return async (strings, ...values) => {
+          const rows = await t.$queryRaw(strings, ...values);
+          if (isCand(Array.isArray(strings) ? strings.join('') : '')) seen.push({ strings, values, rows });
+          return rows;
+        };
+      },
+    });
+    return { db, seen };
+  };
+  // Stage E: a sync no longer starts with a link lookup (the owner is one raw statement): it is detected by its
+  // cycle-state read under the lock (ledger findMany WHERE affiliateId = one id — the sync's only such read).
+  const synced = (db, from = 0) => db._log.slice(from).filter((l) => l.model === 'recruiterRewardLedger' && l.op === 'findMany' && typeof l.where?.affiliateId === 'string').map((l) => l.where.affiliateId);
+  const kinds = (rows) => rows.filter((r) => r.kind !== 'batch' && r.kind !== 'members').map((r) => `${r.kind}:${r.id}`);
+  const cmp = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
+  // An independent copy of a fake database (same rows, committed), e.g. to run two versions side by side.
+  const clone = (src) => {
+    const db = makeRecruiterFakeDb({ phase5: true });
+    for (const k of Object.keys(src._tables)) db._tables[k].push(...structuredClone(src._tables[k]));
+    return db;
+  };
+
+  // a) the statement: binds in source order, drift guard
+  {
+    const E = setup();
+    const a = qualified(E.db, E.A);
+    const S = spy(E.db);
+    const r = await RS.reconcileRecruiterRewards({ db: S.db, now: T0 });
+    const src = read('src/lib/services/recruiterRewardService.js');
+    const fn = src.slice(src.indexOf('async function rewardCandidates('));
+    const tpl = /db\.\$queryRaw`([\s\S]*?)`;/.exec(fn)?.[1] ?? '';
+    const exprs = [...tpl.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1]);
+    const SRC = { rid: 'recruiterId', after: 'after', size: 'size', cap: 'SEGMENT_DEPTH_CAP', tReward: 'REWARD_TYPES.RECRUIT_REWARD', tReversal: 'REWARD_TYPES.REVERSAL', smin: 'MIN_SALES_RANGE.min', smax: 'MIN_SALES_RANGE.max', dflt: 'DEFAULT_MIN_DELIVERED_SALES', awardsOn: 'awardsOn', delivered: 'DELIVERED_ORDER_STATUS', minSales: 'minDeliveredSales' };
+    // Stage E: + the segment walk's depth cap (16 binds) and ONE 'members' row (segment members scanned)
+    ok('the fake reads the candidates binds in the SOURCE placeholder order (16 binds: recruiterId ×2, after ×2, size, the segment depth cap, the types, the threshold range / default, awardsOn ×2, the delivered status, the current threshold)',
+      exprs.length === 16 && eq(E.db._rewardCandidatesRoles.map((x) => SRC[x]), exprs), big({ exprs, roles: E.db._rewardCandidatesRoles }));
+    ok('one candidates statement, binds = [null, null, null, null, 1000, 1000000, RECRUIT_REWARD, REVERSAL, 1, 100000, RECRUIT_REWARD, 10, true, "delivered", true, 10]; rows = the award + the batch row + the members row',
+      S.seen.length === 1 && eq(S.seen[0].values, [null, null, null, null, 1000, 1000000, 'RECRUIT_REWARD', 'REVERSAL', 1, 100000, 'RECRUIT_REWARD', 10, true, 'delivered', true, 10])
+      && eq(S.seen[0].rows, [{ kind: 'award', id: a.id, n: null }, { kind: 'batch', id: a.id, n: 1 }, { kind: 'members', id: null, n: 1 }]) && r.awarded === 1, big(S.seen.map((x) => [x.values, x.rows])));
+    const { strings, values } = S.seen[0];
+    const q = (st, vs) => E.db.$queryRaw(st, ...vs).then(() => 'ran', (e) => e.message);
+    const drift = await q(strings.map((s) => s.replace('LIMIT', 'LIMIT 1 +')), values);
+    const extra = await q(strings.map((s, i) => (i === strings.length - 1 ? `${s} , 1` : s)), values);
+    const fewer = await q(strings, values.slice(0, 15));
+    const badSize = await q(strings, values.map((v, i) => (i === 4 ? '1000' : v)));
+    const badRid = await q(strings, values.map((v, i) => (i === 0 ? 'x' : v)));
+    const badBool = await q(strings, values.map((v, i) => (i === 12 || i === 14 ? 1 : v)));
+    const splitBool = await q(strings, values.map((v, i) => (i === 14 ? !v : v)));
+    ok('drift guard: a changed / extended statement, a missing bind, a non-integer size, two different recruiterIds or a non-boolean awardsOn → refused with a clear message (two different awardsOn values too)',
+      /recruiter-reward-candidates query changed \(missing: ORDER BY l\."affiliateId" LIMIT \$\?::int \), \| /.test(drift) && /query changed \(missing: none, but other text was added\)/.test(extra) && /must bind exactly 16 values/.test(fewer)
+      && /non-integer size/.test(badSize) && /every rid placeholder .* must carry the same value/.test(badRid) && /non-boolean awardsOn/.test(badBool) && /every awardsOn placeholder .* must carry the same value/.test(splitBool), big([drift, extra, fewer, badSize, badRid, badBool, splitBool]));
+  }
+
+  // b) candidate selection
+  {
+    const E = setup({ settings: { version: 1, enabled: true, rewardAmountCents: 15000, minDeliveredSales: 10 } });
+    const good = qualified(E.db, E.A);
+    const pending = aff(E.db, E.A); orders(E.db, pending, 12); identity(E.db, pending, 'PENDING');
+    const noId = aff(E.db, E.B); orders(E.db, noId, 12);
+    const below = aff(E.db, E.A); orders(E.db, below, 9); identity(E.db, below);
+    const fakeOnly = aff(E.db, E.B); orders(E.db, fakeOnly, 9); orders(E.db, fakeOnly, 5, { isFake: true }); orders(E.db, fakeOnly, 5, { status: 'cancelled' }); identity(E.db, fakeOnly);
+    const openMet = qualified(E.db, E.B); await award(E, openMet);
+    const unlinked = E.db._seed.affiliate({ username: 'unl5d' }); orders(E.db, unlinked, 20); identity(E.db, unlinked);
+    const S = spy(E.db);
+    const m = E.db._log.length;
+    const r = await RS.reconcileRecruiterRewards({ db: S.db, now: T0 });
+    const awardsSql = kinds(S.seen[0].rows);
+    ok('award candidates in SQL: delivered ≥ the current threshold and no open reward — identity is not read in SQL (the pending / unsubmitted ones appear), below-threshold / fake / cancelled orders, the open reward and unlinked affiliates never',
+      eq(awardsSql, [good.id, pending.id, noId.id].sort(cmp).map((id) => `award:${id}`)), big(awardsSql));
+    ok('…then the identity filter: ONLY the APPROVED one is synced (one batched identity read; no sync for PENDING / missing identity)',
+      eq(synced(E.db, m), [good.id]) && r.awarded === 1 && r.candidates === 1 && r.unchanged === 0 && r.checked === 6
+      && E.db._log.slice(m).filter((l) => l.model === 'identityVerification' && l.op === 'findMany').length === 1, big(r));
+    const again = spy(E.db);
+    const m2 = E.db._log.length;
+    const r2 = await RS.reconcileRecruiterRewards({ db: again.db, now: T0 });
+    ok('an already-open reward (met) is never a candidate again: second run → only the 2 unapproved ones are award candidates again (one identity read), zero syncs, still 1 row',
+      eq(kinds(again.seen[0].rows), [pending.id, noId.id].sort(cmp).map((id) => `award:${id}`)) && synced(E.db, m2).length === 0 && r2.awarded === 0 && r2.candidates === 0 && ledger(E.db, { affiliateId: good.id }).length === 1
+      && E.db._log.slice(m2).filter((l) => l.model === 'identityVerification').length === 1, big(r2));
+    for (const [label, settings] of [['rewards OFF', { version: 1, enabled: false, rewardAmountCents: 15000, minDeliveredSales: 10 }], ['amount 0', { version: 1, enabled: true, rewardAmountCents: 0, minDeliveredSales: 10 }], ['no settings (defaults OFF)', null]]) {
+      const F = setup({ settings });
+      qualified(F.db, F.A); qualified(F.db, F.B);
+      const FS = spy(F.db);
+      const mm = F.db._log.length;
+      const rf = await RS.reconcileRecruiterRewards({ db: FS.db, now: T0 });
+      ok(`${label}: awardsOn bound false, no award candidate, no identity read, zero syncs, nothing written`,
+        FS.seen[0].values[12] === false && FS.seen[0].values[14] === false && kinds(FS.seen[0].rows).length === 0 && synced(F.db, mm).length === 0
+        && F.db._log.slice(mm).filter((l) => l.model === 'identityVerification').length === 0 && F.db._tables.recruiterRewardLedger.length === 0 && rf.checked === 2, big(rf));
+    }
+    // reversal found while rewards are disabled
+    const D = setup();
+    const d1 = qualified(D.db, D.A); await award(D, d1);
+    const d2 = qualified(D.db, D.A); await award(D, D === null ? null : d2);
+    D.db._seed.settings({ version: 2, enabled: false, rewardAmountCents: 0, minDeliveredSales: 10 });
+    D.db._tables.affiliateOrder.find((o) => o.affiliateId === d1.id).status = 'cancelled';
+    const DS = spy(D.db);
+    const rd = await RS.reconcileRecruiterRewards({ db: DS.db, now: T0 });
+    ok('rewards OFF: the open reward now below its threshold IS a reversal candidate (the met one is not) and is reversed (−15000)',
+      eq(kinds(DS.seen[0].rows), [`reversal:${d1.id}`]) && rd.reversed === 1 && rd.candidates === 1 && ledger(D.db, { affiliateId: d1.id, type: 'REVERSAL' })[0]?.amountCents === -15000 && ledger(D.db, { affiliateId: d2.id, type: 'REVERSAL' }).length === 0, big(rd));
+  }
+
+  // c) equivalence with the pre-5d reconcile (commit 7e111e1) on randomized datasets
+  {
+    const OLD_COMMIT = '7e111e10df7c2413820f34a52fe200aebdefa72e';
+    let oldSrc;
+    try { oldSrc = execFileSync('git', ['show', `${OLD_COMMIT}:src/lib/services/recruiterRewardService.js`], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch {
+      throw new Error(`equivalence test: commit ${OLD_COMMIT} (the pre-Part-5d reward service) is missing from this clone — fetch it (git fetch origin ${OLD_COMMIT}) and rerun`);
+    }
+    const PRISMA_IMPORT = "import prisma from '../prisma.js';";
+    const SETTINGS_FROM = "from '../recruiterSettings.js'";
+    if (!oldSrc.includes(PRISMA_IMPORT) || !oldSrc.includes(SETTINGS_FROM) || !/export async function reconcileRecruiterRewards\(\{ db = prisma, recruiterId = null, now = new Date\(\) \} = \{\}\)/.test(oldSrc)) {
+      throw new Error(`equivalence test: ${OLD_COMMIT}:src/lib/services/recruiterRewardService.js is not the expected pre-Part-5d service`);
+    }
+    const patched = oldSrc.replace(PRISMA_IMPORT, 'const prisma = null; // stubbed: the test always injects db').replace(SETTINGS_FROM, `from '${new URL('../src/lib/recruiterSettings.js', import.meta.url).href}'`);
+    const OLD = await import(`data:text/javascript;base64,${Buffer.from(patched).toString('base64')}`);
+    const dataset = async (seed) => {
+      let s = seed;
+      const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+      const pick = (xs) => xs[Math.floor(rnd() * xs.length)];
+      const E = setup({ settings: null });
+      const C = E.db._seed.recruiter({ username: `rec.c${seed}`, name: 'Recruteur C' });
+      const recs = [E.A, E.B, C];
+      let version = 0;
+      const addVersion = () => {
+        version += 1;
+        const cents = rnd() < 0.15 ? 0 : (1 + Math.floor(rnd() * 300)) * 100;
+        const odd = rnd() < 0.1; // a stored threshold outside 1..100000 (normalised to 10 by both)
+        E.db._seed.settings({ version, enabled: cents > 0 && rnd() < 0.85, rewardAmountCents: cents, minDeliveredSales: odd ? 0 : 1 + Math.floor(rnd() * 8) });
+      };
+      const affs = [];
+      const n = 15 + Math.floor(rnd() * 35);
+      for (let i = 0; i < n; i++) {
+        const a = aff(E.db, rnd() < 0.9 ? pick(recs) : null);
+        for (let k = Math.floor(rnd() * 12); k > 0; k--) orders(E.db, a, 1, { status: rnd() < 0.7 ? 'delivered' : pick(['cancelled', 'pending', 'returned']), isFake: rnd() < 0.1 });
+        const st = pick(['APPROVED', 'APPROVED', 'APPROVED', 'PENDING', 'REJECTED', null]);
+        if (st) identity(E.db, a, st);
+        affs.push(a);
+      }
+      const linkedIds = new Set(E.db._tables.recruiterAffiliateLink.map((l) => l.affiliateId));
+      // legacy open rewards (cycle 1, legacy key, settingsVersion NULL or unknown) on a few linked affiliates
+      for (const a of affs.filter((x) => linkedIds.has(x.id) && rnd() < 0.12)) {
+        const link = E.db._tables.recruiterAffiliateLink.find((l) => l.affiliateId === a.id);
+        E.db._seed.ledger({ recruiterId: link.recruiterId, affiliateId: a.id, type: 'RECRUIT_REWARD', amountCents: 5000, settingsVersion: rnd() < 0.5 ? null : 99, idempotencyKey: `recruit:${a.id}` });
+      }
+      const mutate = (p) => { for (const o of E.db._tables.affiliateOrder) if (rnd() < p) o.status = o.status === 'delivered' ? pick(['cancelled', 'returned']) : 'delivered'; };
+      const rounds = 1 + Math.floor(rnd() * 3);
+      for (let v = 0; v < rounds; v++) {
+        addVersion();
+        for (const a of affs) if (rnd() < 0.6) await RS.syncRecruiterReward(a.id, { db: E.db, now: T0 });
+        mutate(0.12);
+      }
+      if (rnd() < 0.5) addVersion();
+      mutate(0.1);
+      return E;
+    };
+    const ledgerSig = (db) => db._tables.recruiterRewardLedger.map((r) => big([r.type, r.cycle, r.amountCents, r.settingsVersion, r.idempotencyKey, r.recruiterId, r.affiliateId, r.reason, r.actorType, r.actorId])).sort();
+    const auditSig = (db) => db._tables.recruiterAuditLog.map((r) => big([r.action, r.recruiterId, r.actorType, r.actorId, r.entityType, r.entityId, r.details])).sort();
+    const counts = (r) => ({ checked: r.checked, awarded: r.awarded, reversed: r.reversed, unchanged: r.unchanged });
+    const bad = [];
+    let changes = 0, runs = 0, multiBatch = 0;
+    for (let seed = 1; seed <= 30; seed++) {
+      const E = await dataset(seed * 7919);
+      for (const variant of [{}, { batchSize: 7 }, { recruiterId: E.A.id, batchSize: 3 }, { recruiterId: E.B.id }]) {
+        const O = clone(E.db), N = clone(E.db);
+        const before = ledgerSig(O).length;
+        const ro = await OLD.reconcileRecruiterRewards({ db: O, now: T0, ...(variant.recruiterId ? { recruiterId: variant.recruiterId } : {}) });
+        const rn = await RS.reconcileRecruiterRewards({ db: N, now: T0, ...variant });
+        runs += 1;
+        changes += ledgerSig(O).length - before;
+        if (rn.batches > 1) multiBatch += 1;
+        if (!eq(ledgerSig(O), ledgerSig(N)) || !eq(auditSig(O), auditSig(N)) || !eq(counts(ro), counts(rn)) || rn.hasMore !== false || rn.cursor !== null || rn.busy !== false) {
+          bad.push(`seed ${seed} ${big(variant)}: old ${big(counts(ro))} new ${big(counts(rn))}`);
+        }
+      }
+    }
+    ok(`old (7e111e1) vs new reconcile on 30 randomized datasets × 4 scopes / batch sizes (${runs} runs): identical ledger rows (type, cycle, amount, settingsVersion, key, …), identical audit rows, identical counts`,
+      bad.length === 0, bad.slice(0, 3).join(' | '));
+    ok(`…the comparison is not vacuous: ${changes} ledger rows written across the runs, ${multiBatch} runs spanned several batches`, changes > 50 && multiBatch > 20, `${changes} ${multiBatch}`);
+  }
+
+  // d) batches: 0 / 1 / 999 / 1000 / 1001 linked affiliates (default batch 1000) through the admin handler
+  {
+    const shapes = [];
+    let good = true;
+    for (const n of [0, 1, 999, 1000, 1001]) {
+      const E = setup({ settings: { version: 1, enabled: true, rewardAmountCents: 1000, minDeliveredSales: 1 } });
+      const ids = [];
+      for (let i = 0; i < n; i++) { const a = aff(E.db, i % 3 ? E.A : E.B); orders(E.db, a, 1); identity(E.db, a); ids.push(a.id); }
+      ids.sort(cmp);
+      const admin = recruiterRewardAdminHandlers({ db: E.db, now });
+      const post = (body) => call(withAdminAuth(admin.reconcile), req('/api/admin/recruiter-rewards', { method: 'POST', body, cookie: adminCookie() }));
+      const m = E.db._log.length;
+      const seq = [];
+      let cursor;
+      for (let guard = 0; guard < 10; guard++) {
+        const res = await post({ action: 'reconcile', ...(cursor ? { cursor } : {}) });
+        if (res.status !== 200) { seq.push(res.status); break; }
+        const rc = res.body.reconcile;
+        seq.push([rc.checked, rc.awarded, rc.batches, rc.hasMore, rc.cursor === null ? null : rc.cursor === ids[999] ? 'id999' : rc.cursor]);
+        if (!rc.hasMore) break;
+        cursor = rc.cursor;
+      }
+      const syn = synced(E.db, m);
+      const expected = {
+        0: [[0, 0, 1, false, null]], 1: [[1, 1, 1, false, null]], 999: [[999, 999, 1, false, null]],
+        1000: [[1000, 1000, 1, true, 'id999'], [0, 0, 1, false, null]], 1001: [[1000, 1000, 1, true, 'id999'], [1, 1, 1, false, null]],
+      }[n];
+      const once = syn.length === n && new Set(syn).size === n && eq([...syn].sort(cmp), ids);
+      const rows = E.db._tables.recruiterRewardLedger;
+      shapes.push(`${n}:${big(seq)}`);
+      if (!eq(seq, expected) || !once || rows.length !== n || new Set(rows.map((r) => r.idempotencyKey)).size !== n) good = false;
+      // the same scope in ONE service call (maxBatches unbounded) → ⌊n/1000⌋ + 1 batches
+      if (n === 1001) {
+        const F = clone(E.db);
+        F._tables.recruiterRewardLedger.length = 0; F._tables.recruiterAuditLog.length = 0;
+        const all = await RS.reconcileRecruiterRewards({ db: F, now: T0 });
+        if (!(all.batches === 2 && all.checked === 1001 && all.awarded === 1001 && all.hasMore === false && all.cursor === null)) { good = false; shapes.push(`unbounded ${big(all)}`); }
+      }
+    }
+    ok('0 / 1 / 999 / 1000 / 1001 linked affiliates, one batch of ≤ 1000 per admin request: exact checked / batches / hasMore / cursor (the last scanned id, null when done); every affiliate synced exactly once, none skipped or duplicated; one ledger row each',
+      good, shapes.join(' | '));
+  }
+
+  // e) small batches, deterministic continuation, restart and retry
+  {
+    const E = setup({ settings: { version: 1, enabled: true, rewardAmountCents: 1000, minDeliveredSales: 1 } });
+    const ids = [];
+    for (let i = 0; i < 300; i++) { const a = aff(E.db, i % 2 ? E.A : E.B); orders(E.db, a, 1); if (i % 5) identity(E.db, a); ids.push(a.id); }
+    ids.sort(cmp);
+    const base = clone(E.db);
+    const m = E.db._log.length;
+    const cursors = [];
+    const scanned = [];
+    let cursor = null;
+    for (let guard = 0; guard < 100; guard++) {
+      const r = await RS.reconcileRecruiterRewards({ db: E.db, now: T0, after: cursor, batchSize: 7, maxBatches: 1 });
+      scanned.push(r.checked);
+      cursors.push(r.cursor);
+      if (!r.hasMore) break;
+      cursor = r.cursor;
+    }
+    const syn = synced(E.db, m);
+    const approved = ids.filter((id) => E.db._tables.identityVerification.some((v) => v.affiliateId === id && v.status === 'APPROVED'));
+    ok('batchSize 7 over 300 affiliates, one batch per call: 43 batches (42 × 7 + 6), each cursor = the 7k-th id, the last null; every approved affiliate synced exactly once (in id order), the 60 without identity never',
+      scanned.length === 43 && scanned.slice(0, 42).every((x) => x === 7) && scanned[42] === 6 && cursors.slice(0, 42).every((c, k) => c === ids[7 * k + 6]) && cursors[42] === null
+      && eq(syn, approved) && E.db._tables.recruiterRewardLedger.length === 240, big({ n: scanned.length, last: scanned.at(-1), syn: syn.length }));
+    // deterministic continuation: the same saved cursor on a fresh copy → the same next cursor / scanned set
+    const F = clone(base);
+    const k = 17;
+    const again = await RS.reconcileRecruiterRewards({ db: F, now: T0, after: cursors[k - 1], batchSize: 7, maxBatches: 1 });
+    ok('deterministic continuation: resuming from a saved cursor on an identical copy scans the same 7 ids and returns the same next cursor', again.checked === 7 && again.cursor === cursors[k] && eq(synced(F).sort(cmp), approved.filter((id) => id > cursors[k - 1] && id <= cursors[k])), big(again));
+    // retry of the same batch, then of the whole run: nothing new
+    const before = E.db._tables.recruiterRewardLedger.length;
+    const retry = await RS.reconcileRecruiterRewards({ db: E.db, now: T0, after: cursors[k - 1], batchSize: 7, maxBatches: 1 });
+    const whole = await RS.reconcileRecruiterRewards({ db: E.db, now: T0, batchSize: 7 });
+    ok('retrying a batch (and re-running everything) writes nothing new: no candidate, zero awards, same ledger',
+      retry.awarded === 0 && retry.candidates === 0 && whole.awarded === 0 && whole.batches === 43 && E.db._tables.recruiterRewardLedger.length === before && new Set(E.db._tables.recruiterRewardLedger.map((r) => r.idempotencyKey)).size === before);
+    // a failure in the middle of a batch: the run throws, the lease is released, a restart from the saved cursor completes without duplicates
+    const R = clone(base);
+    let n = 0;
+    const failing = new Proxy(R, { get(t, p) { if (p === '$transaction') return (fn, o) => t.$transaction(async (tx) => { if (++n === 25) throw Object.assign(new Error('boom'), { code: 'INJECTED' }); return fn(tx); }, o); return t[p]; } });
+    let saved = null, thrown = null;
+    for (let guard = 0; guard < 100; guard++) {
+      try {
+        const r = await RS.reconcileRecruiterRewards({ db: failing, now: T0, after: saved, batchSize: 7, maxBatches: 1 });
+        if (!r.hasMore) break;
+        saved = r.cursor;
+      } catch (e) { if (thrown) throw e; thrown = e; }
+    }
+    ok('an error inside a batch (sync transaction 25) fails that call; the lease and every lock are released; the restart from the last saved cursor completes; no duplicate row, every approved affiliate rewarded once',
+      thrown?.code === 'INJECTED' && R._locks.size === 0 && R._openTx.size === 0 && R._tables.recruiterRewardLedger.length === 240
+      && new Set(R._tables.recruiterRewardLedger.map((r) => r.affiliateId)).size === 240, big({ thrown: thrown?.code, rows: R._tables.recruiterRewardLedger.length }));
+    // recruiter scope: every batch of that recruiter, no lease
+    const W = clone(base);
+    const mw = W._log.length;
+    const rw = await RS.reconcileRecruiterRewards({ db: W, now: T0, recruiterId: E.A.id, batchSize: 7 });
+    const aIds = ids.filter((id) => W._tables.recruiterAffiliateLink.some((l) => l.affiliateId === id && l.recruiterId === E.A.id));
+    ok('recruiter scope (wallet): ALL batches of that recruiter in one call (150 links → 22 batches), only their affiliates, no lease statement',
+      rw.checked === 150 && rw.batches === 22 && rw.hasMore === false && rw.cursor === null && synced(W, mw).every((id) => aIds.includes(id)) && rw.awarded === aIds.filter((id) => approved.includes(id)).length
+      && !W._log.slice(mw).some((l) => l.model === '$queryRaw' && /pg_try_advisory_xact_lock/.test(l.sql)), big(rw));
+  }
+
+  // f) the lease: one full run at a time, released on every end; the syncs run beside it
+  {
+    // the fake's try-lock itself
+    const L = setup();
+    let gate; const held = new Promise((r) => { gate = r; });
+    let tx1Ok = null, tx1Again = null;
+    const t1 = L.db.$transaction(async (tx) => { tx1Ok = (await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext('recruiter-reward-reconcile'), 0) AS ok`)[0].ok; tx1Again = (await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext('recruiter-reward-reconcile'), 0) AS ok`)[0].ok; await held; });
+    while (tx1Ok === null || tx1Again === null) await new Promise((r) => setImmediate(r));
+    const t2 = await L.db.$transaction(async (tx) => tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext('recruiter-reward-reconcile'), 0) AS ok`);
+    const outside = await L.db.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext('recruiter-reward-reconcile'), 0) AS ok`.then(() => 'ran', (e) => e.message);
+    gate(); await t1;
+    const t3 = await L.db.$transaction(async (tx) => tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext('recruiter-reward-reconcile'), 0) AS ok`);
+    await L.db.$transaction(async (tx) => { await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext('recruiter-reward-reconcile'), 0) AS ok`; throw new Error('rollback'); }).catch(() => null);
+    const t4 = await L.db.$transaction(async (tx) => tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext('recruiter-reward-reconcile'), 0) AS ok`);
+    ok('fake try-lock: [{ ok: true }] for the first transaction (again true in it), [{ ok: false }] for a concurrent one (no wait), refused outside a transaction, released on commit and on rollback',
+      tx1Ok === true && tx1Again === true && eq(t2, [{ ok: false }]) && /outside a transaction/.test(outside) && eq(t3, [{ ok: true }]) && eq(t4, [{ ok: true }]) && L.db._locks.size === 0, big({ tx1Ok, t2, outside, t3, t4 }));
+
+    // two concurrent admin requests: one runs, the other → 409 RECONCILE_BUSY (French text); next request not busy
+    const E = setup();
+    const q = [qualified(E.db, E.A), qualified(E.db, E.B), qualified(E.db, E.A)];
+    let release; const paused = new Promise((r) => { release = r; });
+    let reached; const atCandidates = new Promise((r) => { reached = r; });
+    let first = true;
+    const during = [];
+    E.hookBox.fn = async (m, op, a) => {
+      if (m === '$queryRaw' && isCand(a?.sql) && first) { first = false; reached(); await paused; }
+      if (m === 'recruiterRewardLedger' && op === 'create') during.push([E.db._locks.has(LEASE), E.db._openTx.size]);
+    };
+    const admin = recruiterRewardAdminHandlers({ db: E.db, now });
+    const post = (body) => call(withAdminAuth(admin.reconcile), req('/api/admin/recruiter-rewards', { method: 'POST', body, cookie: adminCookie() }));
+    const p1 = post({ action: 'reconcile' });
+    await atCandidates;
+    const p2 = await post({ action: 'reconcile' });
+    const scoped = await RS.reconcileRecruiterRewards({ db: E.db, now: T0, recruiterId: E.B.id });
+    const svcBusy = await RS.reconcileRecruiterRewards({ db: E.db, now: T0, after: q[0].a?.id ?? q[0].id });
+    release();
+    const r1 = await p1;
+    E.hookBox.fn = null;
+    const r3 = await post({ action: 'reconcile' });
+    ok('concurrent admin reconcile requests: the second → 409 { code: RECONCILE_BUSY, error: <fixed French text> } without running anything; the first → 200 and awards',
+      p2.status === 409 && eq(p2.body, { code: 'RECONCILE_BUSY', error: 'Une vérification des récompenses est déjà en cours. Réessayez dans un instant.' }) && r1.status === 200 && r1.body.reconcile.awarded === 2, big([p2.body, r1.body]));
+    ok('…at the service: busy → { checked 0, …, batches 0, cursor = the given cursor, hasMore true, busy true } (the caller retries the same batch)',
+      eq(svcBusy, { checked: 0, awarded: 0, reversed: 0, unchanged: 0, candidates: 0, batches: 0, cursor: q[0].id, hasMore: true, busy: true, groupChecked: 0, groupAwarded: 0, groupReversed: 0 }), big(svcBusy));
+    ok('…a recruiter-scoped run (wallet) is never blocked by the lease: it ran meanwhile and awarded B\'s affiliate', scoped.busy === false && scoped.awarded === 1);
+    ok('…the syncs (the admin run\'s 2 and the scoped run\'s 1) ran in their OWN transactions while the lease transaction stayed open: lease held and exactly 2 open transactions (lease + that sync) at every ledger insert',
+      during.length === 3 && during.every(([l, n]) => l === true && n === 2), big(during));
+    ok('…lease released after the run: the next request is not busy (200, nothing left to do), no lock / transaction left', r3.status === 200 && r3.body.reconcile.busy === false && r3.body.reconcile.candidates === 0 && E.db._locks.size === 0 && E.db._openTx.size === 0, r3.text);
+
+    // an error thrown inside the batch (the candidates statement itself) → the lease is released
+    const X = setup();
+    qualified(X.db, X.A);
+    X.hookBox.fn = (m, _op, a) => { if (m === '$queryRaw' && isCand(a?.sql)) throw Object.assign(new Error('db down'), { code: 'P1001' }); };
+    const xe = await RS.reconcileRecruiterRewards({ db: X.db, now: T0 }).then(() => null, (e) => e.code);
+    const leaked = X.db._locks.size + X.db._openTx.size;
+    X.hookBox.fn = null;
+    const xr = await RS.reconcileRecruiterRewards({ db: X.db, now: T0 });
+    const xa = recruiterRewardAdminHandlers({ db: X.db, now });
+    X.hookBox.fn = (m, _op, a) => { if (m === '$queryRaw' && isCand(a?.sql)) throw new Error('db down'); };
+    const xh = await silence(() => call(withAdminAuth(xa.reconcile), req('/api/admin/recruiter-rewards', { method: 'POST', body: { action: 'reconcile' }, cookie: adminCookie() })));
+    X.hookBox.fn = null;
+    ok('an error inside the batch: the call fails (handler → 500 SERVER_ERROR), the lease is released (no lock, no open transaction), the next run is NOT busy and does the work',
+      xe === 'P1001' && leaked === 0 && xr.busy === false && xr.awarded === 1 && xh.out.status === 500 && xh.out.body.code === 'SERVER_ERROR' && X.db._locks.size === 0, big({ xe, leaked, xr }));
+  }
+
+  // g) financial invariants under duplicate / concurrent reconciliation
+  {
+    const E = setup();
+    const qs = []; for (let i = 0; i < 30; i++) qs.push(qualified(E.db, i % 2 ? E.A : E.B));
+    const toReverse = []; for (let i = 0; i < 10; i++) { const x = qualified(E.db, i % 2 ? E.A : E.B); await award(E, x); toReverse.push(x); }
+    for (const x of toReverse) E.db._tables.affiliateOrder.find((o) => o.affiliateId === x.id && o.status === 'delivered').status = 'returned';
+    E.hookBox.fn = () => new Promise((r) => setImmediate(r));
+    const res = await Promise.all([
+      ...Array.from({ length: 4 }, () => RS.reconcileRecruiterRewards({ db: E.db, now: T0 })),
+      ...Array.from({ length: 3 }, () => RS.reconcileRecruiterRewards({ db: E.db, now: T0, recruiterId: E.A.id, batchSize: 4 })),
+      ...Array.from({ length: 3 }, () => RS.reconcileRecruiterRewards({ db: E.db, now: T0, recruiterId: E.B.id })),
+      ...qs.slice(0, 10).map((x) => award(E, x)),
+    ]);
+    E.hookBox.fn = null;
+    const rows = E.db._tables.recruiterRewardLedger;
+    const reported = res.reduce((t, r) => t + (r.awarded ?? (r.action === 'AWARDED' ? 1 : 0)) + (r.reversed ?? (r.action === 'REVERSED' ? 1 : 0)), 0);
+    const pairsOk = rows.filter((r) => r.type === 'REVERSAL').every((v) => { const w = rows.find((x) => x.type === 'RECRUIT_REWARD' && x.affiliateId === v.affiliateId && x.cycle === v.cycle); return w && v.amountCents === -w.amountCents && v.recruiterId === w.recruiterId; });
+    ok('10 concurrent reconciles (4 full — the lease admits one at a time — 6 recruiter-scoped) + 10 direct syncs: exactly one reward per qualifying affiliate and one reversal per dropped one (30 + 10 + 10 rows), unique keys, each change reported once',
+      rows.length === 50 && new Set(rows.map((r) => r.idempotencyKey)).size === 50 && qs.every((x) => ledger(E.db, { affiliateId: x.id }).length === 1)
+      && toReverse.every((x) => ledger(E.db, { affiliateId: x.id, type: 'REVERSAL' }).length === 1) && reported === 40 && res.slice(0, 4).filter((r) => r.busy).length >= 1, `rows=${rows.length} reported=${reported} busy=${res.slice(0, 4).filter((r) => r.busy).length}`);
+    ok('…every reversal = −its reward (same cycle, same recruiter), never more; audits match the rows (40 earned incl. the seeded 10, 10 reversed)', pairsOk && audits(E.db, 'RECRUIT_REWARD_EARNED').length === 40 && audits(E.db, 'RECRUIT_REWARD_REVERSED').length === 10);
+    const ledgerOps = new Set(E.db._log.filter((l) => l.model === 'recruiterRewardLedger').map((l) => l.op));
+    const refused = [];
+    for (const op of ['update', 'updateMany', 'upsert', 'delete', 'deleteMany', 'createMany']) refused.push(await E.db.recruiterRewardLedger[op]({ where: { id: rows[0].id }, data: { amountCents: 1 } }).then(() => 'ran', (e) => /append-only/.test(e.message)));
+    // Phase 7: + findFirst (the read-only "any group reward" probe of a full run).
+    ok('…no ledger update / delete was ever called (only create / findMany / the read-only findFirst probe), and the fake still refuses update / updateMany / upsert / delete / deleteMany / createMany',
+      [...ledgerOps].every((op) => ['create', 'findMany', 'findFirst'].includes(op)) && refused.every((x) => x === true), big([...ledgerOps, refused]));
+    ok('…no lock left held, no transaction left open', E.db._locks.size === 0 && E.db._openTx.size === 0);
+
+    // award (candidate) racing a cancellation, at every step of the candidate's sync
+    const out = [];
+    let allOk = true;
+    // steps after the candidates statement: identity list (0), then the sync — link (1), ledger (2), count (3),
+    // settings (4), affiliate (5), identity (6), ledger insert (7), audit insert (8)
+    for (let k = 0; k <= 8; k++) {
+      const C = setup();
+      const x = qualified(C.db, C.A);
+      let steps = -1, started = false, cancelled = false;
+      C.hookBox.fn = (m, op, a) => {
+        if (m === '$queryRaw' && isCand(a?.sql)) { started = true; return; }
+        if (started && m !== '$queryRaw' && ++steps === k) { C.db._tables.affiliateOrder.find((o) => o.affiliateId === x.id).status = 'cancelled'; cancelled = true; }
+      };
+      const r = await RS.reconcileRecruiterRewards({ db: C.db, now: T0 });
+      C.hookBox.fn = null;
+      const r2 = await RS.reconcileRecruiterRewards({ db: C.db, now: T0 });
+      const rows2 = ledger(C.db, { affiliateId: x.id });
+      const net = rows2.reduce((t, y) => t + y.amountCents, 0);
+      const okK = cancelled && net === 0 && (rows2.length === 0 ? r.unchanged === 1 && r2.candidates === 0 : rows2.length === 2 && r.awarded === 1 && r2.reversed === 1);
+      if (!okK) allOk = false;
+      out.push(`${k}:${rows2.map((y) => y.type[4]).join('')}`);
+    }
+    ok('an award candidate cancelled at EVERY step of its sync: either the sync sees 9 (no reward) or the reward commits and the next reconcile reverses it — always net 0, never a stale award left open',
+      allOk && out.some((s) => s.endsWith(':')) && out.some((s) => s.endsWith(':UR')), out.join(' '));
+  }
+
+  // h) wallet GET: no full-scope read — only the candidate statement(s) of the caller's network
+  {
+    const W = setup();
+    for (let i = 0; i < 40; i++) { const x = aff(W.db, i % 2 ? W.A : W.B); orders(W.db, x, 3); identity(W.db, x); }
+    const mine = qualified(W.db, W.A); await award(W, mine);
+    const theirs = qualified(W.db, W.B); await award(W, theirs);
+    Object.assign(W.db._tables.recruiter.find((r) => r.id === W.A.id), { bankName: 'CIH Bank', accountName: 'Recruteur A', rib: '011780000012345678901234' });
+    const h = recruiterWalletHandlers({ db: W.db, now, rateLimit: noLimit });
+    const wallet = withRecruiterAuth(h.wallet);
+    const withdraw = withRecruiterAuth(h.withdraw);
+    const binds = [];
+    // Stage F: the wallet scope runs the network candidates statement (the roots of N(R)) — never the admin statement
+    const isNetCand = (sql) => /^\s*\/\* recruiter-reward-network-candidates \*\//.test(sql ?? '');
+    let adminCand = 0;
+    W.hookBox.fn = (m, _op, a) => { if (m === '$queryRaw' && isNetCand(a?.sql)) binds.push(a.values); if (m === '$queryRaw' && isCand(a?.sql)) adminCand += 1; };
+    const m0 = W.db._log.length;
+    const g0 = await call(wallet, req('/api/recruiter/wallet', { cookie: recruiterCookie(W.A) }));
+    const log0 = W.db._log.slice(m0);
+    const fullScope = (l) => (l.model === 'recruiterAffiliateLink' && l.op === 'findMany') || (l.model === 'affiliateOrder' && l.op === 'groupBy')
+      || (l.model === 'recruiterRewardLedger' && l.op === 'findMany' && (l.where?.affiliateId?.in !== undefined || !l.where?.recruiterId && !l.where?.affiliateId))
+      || (l.model === 'identityVerification' && l.op === 'findMany' && !eq(l.where, { affiliateId: { in: due } }));
+    let due = [];
+    ok('Stage F: wallet GET with nothing due: ONE network candidate statement bound to the caller (recruiterId ×4, no cursor), no admin candidate statement, no lease, ZERO sync transactions, no full-scope read (links findMany / ledger over many affiliates / affiliateOrder.groupBy / identity list)',
+      g0.status === 200 && binds.length === 1 && binds[0][0] === W.A.id && binds[0][1] === null && binds[0].filter((v) => v === W.A.id).length === 4 && !binds[0].includes(W.B.id) && adminCand === 0
+      && log0.filter((l) => l.model === '$transaction').length === 0
+      && !log0.some((l) => l.model === '$queryRaw' && /pg_try_advisory_xact_lock/.test(l.sql)) && !log0.some(fullScope) && g0.body.wallet.totals.earnedCents === 15000, big(log0.map((l) => `${l.model}.${l.op}`)));
+    const w1 = await call(withdraw, req('/api/recruiter/wallet/withdrawals', { method: 'POST', body: { amountMad: '150', requestId: randomUUID() }, cookie: recruiterCookie(W.A) }));
+    // now: one of A's affiliates qualifies, the rewarded one drops below its threshold; B's changes too
+    const fresh = aff(W.db, W.A); orders(W.db, fresh, 10); identity(W.db, fresh);
+    W.db._tables.affiliateOrder.find((o) => o.affiliateId === mine.id && o.status === 'delivered').status = 'cancelled';
+    W.db._tables.affiliateOrder.find((o) => o.affiliateId === theirs.id && o.status === 'delivered').status = 'cancelled';
+    binds.length = 0;
+    due = [fresh.id]; // the only award candidate of A's network: its identity is the only one read
+    const m1 = W.db._log.length;
+    const g1 = await call(wallet, req('/api/recruiter/wallet', { cookie: recruiterCookie(W.A) }));
+    const log1 = W.db._log.slice(m1);
+    ok('wallet GET processes the caller\'s due reward AND reversal candidates (exactly 2 syncs), never B\'s; still no full-scope read (the identity read covers exactly the 1 award candidate)',
+      g1.status === 200 && binds.length === 1 && log1.filter((l) => l.model === '$transaction').length === 2 && eq(synced(W.db, m1).sort(cmp), [fresh.id, mine.id].sort(cmp))
+      && ledger(W.db, { affiliateId: fresh.id }).length === 1 && ledger(W.db, { affiliateId: mine.id, type: 'REVERSAL' }).length === 1 && ledger(W.db, { affiliateId: theirs.id, type: 'REVERSAL' }).length === 0 && !log1.some(fullScope), big(log1.map((l) => `${l.model}.${l.op}`)));
+    ok('…balance is live and net: earned 15000 (+15000 −15000 +15000), 150 MAD pending → available 0; a further 0.01 MAD request → 400 INSUFFICIENT_BALANCE',
+      w1.status === 201 && g1.body.wallet.totals.earnedCents === 15000 && g1.body.wallet.totals.availableCents === 0
+      && (await call(withdraw, req('/api/recruiter/wallet/withdrawals', { method: 'POST', body: { amountMad: '0.01', requestId: randomUUID() }, cookie: recruiterCookie(W.A) }))).body?.code === 'INSUFFICIENT_BALANCE', big(g1.body.wallet.totals));
+    W.hookBox.fn = null;
+  }
+
+  // i) admin handler: cursor validation, one batch per request, first batch on save
+  {
+    const E = setup({ settings: { version: 1, enabled: true, rewardAmountCents: 1000, minDeliveredSales: 1 } });
+    for (let i = 0; i < 1003; i++) { const a = aff(E.db, i % 2 ? E.A : E.B); orders(E.db, a, 1); identity(E.db, a); }
+    const admin = recruiterRewardAdminHandlers({ db: E.db, now });
+    const post = (body, raw) => call(withAdminAuth(admin.reconcile), req('/api/admin/recruiter-rewards', { method: 'POST', body, raw, cookie: adminCookie() }));
+    const bad = [];
+    for (const cursor of ['bad id;', '', 'x'.repeat(101), 42, true, { a: 1 }, ['x'], 'a b']) bad.push((await post({ action: 'reconcile', cursor })).body?.code);
+    const m = E.db._log.length;
+    ok('invalid cursor (not 1–100 chars of [A-Za-z0-9_-], not a string) → 400 INVALID_INPUT, nothing read', bad.every((c) => c === 'INVALID_INPUT') && E.db._log.length === m, bad.join(','));
+    const s = await call(withAdminAuth(admin.saveSettings), req('/api/admin/recruiter-rewards/settings', { method: 'POST', cookie: adminCookie(), body: { enabled: true, rewardAmountMad: '10', minDeliveredSales: 1 } }));
+    const sr = s.body.reconcile;
+    ok('saving settings runs ONLY the first batch: 1000 checked / awarded, hasMore true, cursor = the 1000th id',
+      s.status === 201 && sr.checked === 1000 && sr.awarded === 1000 && sr.batches === 1 && sr.hasMore === true && typeof sr.cursor === 'string' && E.db._tables.recruiterRewardLedger.length === 1000, big(sr));
+    const n1 = await post({ action: 'reconcile', cursor: sr.cursor });
+    const nNull = await post({ action: 'reconcile', cursor: null });
+    ok('continuing with that cursor → the remaining 3 (hasMore false, cursor null); cursor null restarts from the start (1000 checked, nothing left to award)',
+      n1.status === 200 && n1.body.reconcile.checked === 3 && n1.body.reconcile.awarded === 3 && n1.body.reconcile.hasMore === false && n1.body.reconcile.cursor === null
+      && nNull.body.reconcile.checked === 1000 && nNull.body.reconcile.awarded === 0 && nNull.body.reconcile.hasMore === true && E.db._tables.recruiterRewardLedger.length === 1003, big([n1.body, nNull.body.reconcile]));
+    const unknown = await post({ action: 'reconcile', cursor: 'zzzz' });
+    ok('a well-formed cursor past every id → 200, 0 checked, hasMore false (no error, no write)', unknown.status === 200 && unknown.body.reconcile.checked === 0 && unknown.body.reconcile.hasMore === false && unknown.body.reconcile.cursor === null);
+    const pageSrc = read('src/app/admin/recruiter-rewards/page.jsx');
+    ok('the admin page loops one-batch requests with the cursor while hasMore (and stops on an error or a repeated cursor)',
+      /JSON\.stringify\(\{ action: "reconcile", \.\.\.\(cursor \? \{ cursor \} : \{\}\) \}\)/.test(pageSrc) && /if \(!r\.hasMore \|\| !r\.cursor \|\| r\.cursor === cursor\) return total;/.test(pageSrc) && /if \(!res\.ok\) \{ total\.error = errorText\(res, body\); return total; \}/.test(pageSrc));
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

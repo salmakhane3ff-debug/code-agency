@@ -14,7 +14,8 @@
  *     'reject' stays possible and releases the row
  *   • concurrency: 20 parallel requests never reserve above available; 2 parallel payments that
  *     together exceed the net earned → exactly one paid; a reversal racing a request / a payment
- *     at every interleaving point ends in a serial outcome (never paid above the earned it read)
+ *     at every interleaving point ends in a serial outcome (never paid above the earned it read);
+ *     Phase 6 part 5d: also when the reversal comes from the admin reconcile batch (under its lease)
  *   • idempotent replay still answers when the balance is now negative
  *   • history preserved (withdrawal rows only change status pending → paid / rejected; the ledger
  *     is append-only); HTTP bodies; static scope checks
@@ -93,7 +94,11 @@ async function earn(E, rec = E.A) {
 async function reverse(E, q) {
   const o = E.db._tables.affiliateOrder.find((x) => x.affiliateId === q.a.id && x.status === 'delivered');
   o.status = 'cancelled';
-  return HK.onRecruiterOrderStatusCommitted(o.id, { db: E.db });
+  // Phase 7: the hook also syncs the recruiter's GROUP reward afterwards, in its own later transaction
+  // (group rewards are off here, so it never writes). The step-by-step interleavings below are about
+  // the INDIVIDUAL reversal vs a payment, so that separate transaction is left out of the hook here;
+  // group reversal vs payment is covered in scripts/recruiterGroupRewards.test.mjs.
+  return HK.onRecruiterOrderStatusCommitted(o.id, { db: E.db, group: async () => ({}) });
 }
 const request = (E, amountMad, requestId = randomUUID(), rec = E.A) => WS.requestRecruiterWithdrawal(rec.id, { amountMad, requestId }, { db: E.db, now: T0 })
   .then((r) => ({ ok: true, r }), (e) => ({ ok: false, code: e?.code ?? String(e) }));
@@ -449,6 +454,57 @@ async function stepsOf(E, fn) {
     violations.length === 0, violations.slice(0, 5).join(' | '));
   ok(`…both serial orders occurred across the 100 runs ${big(tally)}`, tally.paidThenReversed > 0 && tally.reversedThenRefused > 0 && tally.paidThenReversed + tally.reversedThenRefused === 100, big(tally));
 
+  // Phase 6 part 5d: the same race with the reversal coming from the admin's bounded reconcile batch (its
+  // lease transaction stays open beside the reversal's own sync transaction and the payment).
+  const LEASE = '__advisory2__:recruiter-reward-reconcile:0';
+  const kTally = { paidThenReversed: 0, reversedThenRefused: 0 };
+  const kViol = [];
+  for (let i = 0; i < 60; i++) {
+    const E = setup();
+    const q = await earn(E);
+    const w = await request(E, '150');
+    E.db._tables.affiliateOrder.find((x) => x.affiliateId === q.a.id && x.status === 'delivered').status = 'cancelled'; // committed, its hook lost
+    const ev = [];
+    E.hookBox.fn = async (m, op, a) => {
+      if (m === 'recruiterAuditLog' && op === 'create' && a?.data?.action === 'RECRUITER_WITHDRAWAL_PAID') {
+        if (rawLedgerSum(E) < 15000 || paidCents(E) > rawLedgerSum(E)) kViol.push(`${i}: pay committing with ledger ${rawLedgerSum(E)}`);
+        ev.push('pay-final-write');
+      }
+      if (m === 'recruiterRewardLedger' && op === 'create' && a?.data?.type === 'REVERSAL') {
+        const lease = E.db._locks.has(LEASE);
+        if (!lease) kViol.push(`${i}: reversal written outside the reconcile lease`);
+        if (audits(E, 'RECRUITER_WITHDRAWAL_PAID').length && E.db._openTx.size !== (lease ? 2 : 1)) kViol.push(`${i}: reversal inserting while the pay is still open`);
+        ev.push('reversal-insert');
+      }
+      await jitter();
+    };
+    // Iterations 0-9 force reversal-first and 10-19 payment-first (the reconcile path awaits its lease, settings and
+    // candidate statement before the sync, so random timing alone rarely lets the reversal win); 20-59 stay random.
+    const runReconcile = () => RS.reconcileRecruiterRewards({ db: E.db, now: T0, maxBatches: 1 });
+    const runPay = () => pay(E, w.r.withdrawal.id);
+    const both = i < 10 ? runReconcile().then((rc0) => runPay().then((pr0) => [pr0, rc0]))
+      : i < 20 ? runPay().then((pr0) => runReconcile().then((rc0) => [pr0, rc0]))
+        : Promise.all([
+          (rnd() < 0.5 ? jitter() : Promise.resolve()).then(runPay),
+          (rnd() < 0.5 ? Promise.resolve() : jitter()).then(runReconcile),
+        ]);
+    const [pr, rc] = await guard(both, 5000, `reconcile iteration ${i}`).catch((e) => { kViol.push(e.message); return [{}, {}]; });
+    E.hookBox.fn = null;
+    const t = await totals(E);
+    if (rc.reversed !== 1 || rc.busy !== false || ledgerSum(E) !== 0 || E.db._tables.recruiterRewardLedger.filter((r) => r.type === 'REVERSAL').length !== 1) kViol.push(`${i}: reconcile ${big(rc)}`);
+    if (pr.ok) {
+      kTally.paidThenReversed += 1;
+      if (!(ev.indexOf('pay-final-write') >= 0 && ev.indexOf('pay-final-write') < ev.indexOf('reversal-insert')) || t.paidCents !== 15000 || t.availableCents !== -15000) kViol.push(`${i}: paid but order ${ev.join('>')} / ${big(t)}`);
+    } else {
+      kTally.reversedThenRefused += 1;
+      if (pr.code !== INSUFFICIENT || payouts(E)[0].status !== 'pending' || t.paidCents !== 0 || ev.includes('pay-final-write')) kViol.push(`${i}: refused ${pr.code} ${big(t)}`);
+    }
+    if (E.db._openTx.size !== 0 || E.db._locks.size !== 0) kViol.push(`${i}: lock / transaction leak`);
+  }
+  ok('Phase 6 part 5d: 60 races (10 forced reversal-first, 10 forced payment-first, 40 random) of a payment vs the admin reconcile batch that reverses (under its open lease): no hang / deadlock / leak, exactly one reversal, a paid row always committed BEFORE the reversal, otherwise the pay is refused',
+    kViol.length === 0, kViol.slice(0, 5).join(' | '));
+  ok(`…both serial orders occurred (≥ 10 each, forced) ${big(kTally)}`, kTally.paidThenReversed >= 10 && kTally.reversedThenRefused >= 10 && kTally.paidThenReversed + kTally.reversedThenRefused === 60, big(kTally));
+
   const rViol = [];
   const rTally = { created: 0, refused: 0 };
   for (let i = 0; i < 50; i++) {
@@ -589,7 +645,13 @@ console.log('\n8. Static: UI texts, service shape, scope');
   const revAt = syncFn.indexOf('await lockRecruiterMoney(tx, open.recruiterId);');
   ok('reward service: lockRecruiterMoney = pg_advisory_xact_lock(hashtext(\'recruiter-money:\' + recruiterId)), taken ONLY in the reversal branch — after the affiliate lock and the threshold check, before the REVERSAL insert',
     /export async function lockRecruiterMoney\(tx, recruiterId\) \{\s*await tx\.\$executeRaw`SELECT pg_advisory_xact_lock\(hashtext\(\$\{'recruiter-money:' \+ recruiterId\}\)\)`;\s*\}/.test(rsrc)
-    && (syncFn.match(/lockRecruiterMoney\(/g) || []).length === 1 && (rsrc.match(/lockRecruiterMoney\(/g) || []).length === 2
+    // Phase 7: + exactly one more call — the GROUP reversal branch of syncRecruiterGroupReward (group lock → money lock).
+    && (syncFn.match(/lockRecruiterMoney\(/g) || []).length === 1 && (rsrc.match(/lockRecruiterMoney\(/g) || []).length === 3
+    && (() => {
+      const g = rsrc.slice(rsrc.indexOf('export async function syncRecruiterGroupReward'), rsrc.indexOf('export async function syncRecruiterGroupRewardForAffiliate'));
+      const m = g.indexOf('await lockRecruiterMoney(tx, recruiterId);');
+      return (g.match(/lockRecruiterMoney\(/g) || []).length === 1 && g.indexOf('await lockRecruiterGroup(tx, recruiterId);') < m && m < g.indexOf('type: REWARD_TYPES.GROUP_REVERSAL');
+    })()
     && syncFn.indexOf('await lockAffiliateReward(tx, affiliateId);') < revAt && syncFn.indexOf("return { action: 'NO_CHANGE', cycle: open.cycle };") < revAt
     && revAt < syncFn.indexOf('type: REWARD_TYPES.REVERSAL') && revAt > syncFn.indexOf('if (open) {') && revAt < syncFn.indexOf('const settings = await getCurrentRecruiterSettings'));
   const page = read('src/app/recruiter/wallet/page.jsx');
@@ -597,7 +659,10 @@ console.log('\n8. Static: UI texts, service shape, scope');
     /\{available < 0 && \(/.test(page) && page.includes('data-negative-balance') && page.includes('رصيدك المتاح سالب')
     && /\{bankComplete && available === 0 && \(\s*<p[^>]*data-nothing-available/.test(page)
     // Phase 6 part 3c (documented extension): the form also needs the recruiter KYC APPROVED.
-    && /const canRequest = identityApproved && bankComplete && available > 0;/.test(page));
+    // Phase 7 Stage C (documented, narrow): a FAILED KYC request (status unknown) no longer blocks the form — the
+    // server enforces RECRUITER_IDENTITY_NOT_APPROVED anyway; a KNOWN non-approved status still disables it.
+    && /const identityUnknown = identityError && !identity;/.test(page)
+    && /const canRequest = \(identityApproved \|\| identityUnknown\) && bankComplete && available > 0;/.test(page));
   const labels = read('src/app/recruiter/errorLabels.js');
   ok('errorLabels: the Arabic INSUFFICIENT_BALANCE text explains that reversed rewards do not count (code still built from parts)',
     labels.includes('رصيدك المتاح غير كافٍ لهذا المبلغ (المكافآت المسحوبة بعد إلغاء أو إرجاع طلبيات لا تُحتسب)') && !labels.includes(INSUFFICIENT));
@@ -624,9 +689,10 @@ console.log('\n8. Static: UI texts, service shape, scope');
     ...git(['ls-files', '--others', '--exclude-standard', '--', 'prisma/migrations']).split('\n').filter(Boolean),
   ])].sort();
   const migDirs = readdirSync(join(ROOT, 'prisma/migrations')).filter((d) => /^\d/.test(d)).sort();
-  ok('no new migration besides 20261110_recruiter_reward_cycles (Part 3a) and 20261111_recruiter_identity_verifications (Part 3c); no existing migration edited',
-    migChanged.length === 0 && eq(migNew, ['prisma/migrations/20261110_recruiter_reward_cycles/migration.sql', 'prisma/migrations/20261111_recruiter_identity_verifications/migration.sql'])
-    && migDirs.at(-1) === '20261111_recruiter_identity_verifications', big({ migChanged, migNew, last: migDirs.at(-1) }));
+  ok('no new migration besides 20261110_recruiter_reward_cycles (Part 3a), 20261111_recruiter_identity_verifications (Part 3c) and 20261112_recruiter_group_rewards (Phase 7); no existing migration edited',
+    migChanged.length === 0 && eq(migNew, ['prisma/migrations/20261110_recruiter_reward_cycles/migration.sql', 'prisma/migrations/20261111_recruiter_identity_verifications/migration.sql',
+      'prisma/migrations/20261112_recruiter_group_rewards/migration.sql'])
+    && migDirs.at(-1) === '20261112_recruiter_group_rewards', big({ migChanged, migNew, last: migDirs.at(-1) }));
   const schemaDiff = git(['diff', PART3_BASE, '--', 'prisma/schema.prisma']).split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l));
   // Part 3a: the ledger `cycle Int` column (+ 3 comment lines). Part 3c: the Recruiter back-relation
   // (+ its comment) and the RecruiterIdentityVerification model — exactly these added lines, nothing removed.
@@ -659,9 +725,21 @@ console.log('\n8. Static: UI texts, service shape, scope');
     '+}',
     '+',
   ];
-  ok('prisma/schema.prisma differs from the part 3 base commit only by the Part 3a `cycle Int` column (+ its 3 comment lines) and the Part 3c recruiter KYC model + back-relation (exact lines)',
-    schemaDiff.length === 4 + PART3C_SCHEMA.length && eq(schemaDiff.slice(0, PART3C_SCHEMA.length), PART3C_SCHEMA)
-    && schemaDiff.slice(PART3C_SCHEMA.length).every((l) => l.startsWith('+')) && schemaDiff.at(-1).trim() === '+  cycle           Int'.trim(), big(schemaDiff));
+  // Phase 7 (migration 20261112): + the 4 RecruiterSettingsVersion group fields with their defaults (+ 4 comment lines), added only.
+  const P7_SCHEMA = [
+    '+  // Reward B — group reward (Phase 7, migration 20261112): the amount (MAD cents) earned each time',
+    '+  // groupSize distinct affiliates of the recruiter each have groupMinDeliveredSales real delivered',
+    '+  // orders and an APPROVED CIN. Rows written before the migration read these defaults (OFF).',
+    '+  // Ledger rows GROUP_REWARD / GROUP_REVERSAL (no affiliate, cycles per recruiter) — DB CHECKs.',
+    '+  groupEnabled           Boolean @default(false)',
+    '+  groupRewardAmountCents Int     @default(0)',
+    '+  groupSize              Int     @default(10)',
+    '+  groupMinDeliveredSales Int     @default(10)',
+  ];
+  ok('prisma/schema.prisma differs from the part 3 base commit only by the Part 3a `cycle Int` column (+ its 3 comment lines), the Part 3c recruiter KYC model + back-relation and the Phase 7 group settings fields (exact lines)',
+    schemaDiff.length === 4 + PART3C_SCHEMA.length + P7_SCHEMA.length && eq(schemaDiff.slice(0, PART3C_SCHEMA.length), PART3C_SCHEMA)
+    && schemaDiff.slice(PART3C_SCHEMA.length).every((l) => l.startsWith('+')) && schemaDiff.at(-1 - P7_SCHEMA.length).trim() === '+  cycle           Int'.trim()
+    && eq(schemaDiff.slice(-P7_SCHEMA.length), P7_SCHEMA), big(schemaDiff));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
