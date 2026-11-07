@@ -14,8 +14,9 @@
  *      audited once; no session bump; creation defaults both to true, honours explicit booleans,
  *      refuses anything else.
  *   2. canViewOrders — off → stats / nodes return orders: null (scope, levels, every node) for the
- *      whole network, a rootId, a parentId, cursor/limit pages and view=unplaced, and NO affiliateOrder
- *      query runs; on → identical counts; a flip applies on the next request of the same session;
+ *      whole network, a rootId, a parentId, cursor/limit pages and view=unplaced, and NO order read runs
+ *      (no affiliateOrder call, no raw SQL over affiliate_orders — Phase 6 part 5b); on → identical
+ *      counts; a flip applies on the next request of the same session;
  *      the reward history stays; no other recruiter route exposes order counts.
  *   3. canCreateAffiliates — off → creation and activation-code regeneration refused (403 FORBIDDEN at
  *      the API, FORBIDDEN at the service), nothing written; pending list still visible; the admin
@@ -23,7 +24,8 @@
  *      an admin toggle and an in-flight creation / regeneration are serialised by the row lock.
  *   4. Regression / scope — disable still revokes the session; a permission change touches nothing
  *      else; no schema / migration change; src/ changed only in the Part 4 files; affiliate and money
- *      files byte-identical to the Part 4 base commit.
+ *      files byte-identical to the Part 4 base commit. Phase 6 part 5d: the reward service may differ only
+ *      by its reconcile part, the admin reward handlers / page only by the batch / cursor lines (pinned).
  * Run: node scripts/recruiterPermissions.test.mjs
  * ────────────────────────────────────────────────────────────────────────────
  */
@@ -53,6 +55,119 @@ const ACS = await import('../src/lib/services/affiliateActivationService.js');
 const RS = await import('../src/lib/services/recruiterRewardService.js');
 const V = await import('../src/lib/recruiterVisibility.js');
 
+// Phase 7 Stage B (documented, narrow): the affiliate LIST (listRecruiterNetwork + its JSDoc) gains keyset paging and
+// the downline placement / counts; undo exactly that change — the list block taken back from `base`, the network-service
+// import, LIST_LIMIT_MAX and LIST_CURSOR_RE removed — before the byte comparison below. The list block must not write.
+const undoStageBList = (cur, base) => {
+  const a = "/**\n * The recruiter's own network for the parent selector", z = "/**\n * Walk the parent's ancestry";
+  const [ba, bz, ca, cz] = [base.indexOf(a), base.indexOf(z), cur.indexOf(a), cur.indexOf(z)];
+  if (ba < 0 || bz < ba || ca < 0 || cz < ca || /\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\(/.test(cur.slice(ca, cz))) return '';
+  let out = cur.slice(0, ca) + base.slice(ba, bz) + cur.slice(cz);
+  out = out.replace("import { getAffiliateCounts, getAffiliatePlacement } from './recruiterNetworkService.js';\n", '').replace(' LIST_LIMIT_MAX: 100,', '');
+  const k = out.indexOf('/** Phase 7 Stage B: keyset cursor');
+  if (k >= 0) { const e1 = out.indexOf('\n', k); const e2 = out.indexOf('\n', e1 + 1); if (/^export const LIST_CURSOR_RE = /.test(out.slice(e1 + 1, e2))) out = out.slice(0, k) + out.slice(e2 + 1); }
+  return out;
+};
+// Phase 7 Stage E (approved product rule — ownership N(R); documented, narrow): undo exactly the Stage E change of
+// the creation service before the byte comparison below — the header's "Parent" bullet, the step-3 comment, the
+// creation's networkIds line (the parent just passed the check), networkIdSet (now: the members of N(R) among the
+// ids, through the ancestry statement) and the ancestry region (from the "Walk the parent's ancestry" JSDoc to the
+// creation JSDoc: parentInNetwork — the nearest-link walk — and assertAncestryInNetwork). Each replaced region is
+// checked first: the expected functions only, no write, ONE tagged recruiter-ancestry statement, ONE throw site.
+const undoStageE = (cur, base) => {
+  const swap = (s, x, y) => (s !== null && s.split(x).length === 2 ? s.replace(x, y) : null);
+  let out = swap(cur, ' *   • Parent: none (root) or a member of THIS recruiter\'s network N(R) (Phase 7 Stage E: its\n'
+    + ' *     owner — the recruiter of the nearest linked affiliate at or above it — is this recruiter),\n'
+    + ' *     checked on the server inside the transaction (never trusted from the client).\n',
+  ' *   • Parent: none (root) or an affiliate already linked to THIS recruiter, checked on the\n'
+    + ' *     server inside the transaction (never trusted from the client), with its whole\n'
+    + ' *     ancestry verified to be acyclic and inside the same network.\n');
+  out = swap(out, '      // 3. Parent: none, or a member of THIS recruiter\'s network N(R) (nearest link = this recruiter).',
+    '      // 3. Parent: none, or a member of THIS recruiter\'s network (whole ancestry checked).');
+  out = swap(out, '        row: plain, networkIds: new Set(plain.parentId ? [plain.parentId] : []), replayed: false, // Stage E: the parent passed step 3',
+    '        row: plain, networkIds: await networkIdSet(tx, recruiterId, [plain.parentId]), replayed: false,');
+  if (out === null) return '';
+  const span = (s, a, z) => { const i = s.indexOf(a); const j = i >= 0 ? s.indexOf(z, i + a.length) : -1; return i >= 0 && j > i && s.indexOf(a, i + 1) < 0 ? [i, j] : null; };
+  const fns = (s) => [...s.matchAll(/^(?:export )?(?:async )?function (\w+)/gm)].map((m) => m[1]);
+  const writes = (s) => /\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\(|\$executeRaw/.test(s);
+  const cN = span(out, '/** Phase 7 Stage E: the members of N(R) among', '/** Plain identity fields');
+  const bN = span(base, '/** The ids of every affiliate linked to this recruiter (their network). */', '/** Plain identity fields');
+  if (!cN || !bN) return '';
+  const nBlock = out.slice(cN[0], cN[1]);
+  if (fns(nBlock).join() !== 'networkIdSet' || writes(nBlock) || !/await parentInNetwork\(db, recruiterId, id\)/.test(nBlock)) return '';
+  out = out.slice(0, cN[0]) + base.slice(bN[0], bN[1]) + out.slice(cN[1]);
+  const A0 = "/**\n * Walk the parent's ancestry", A1 = '\n/**\n * Recruiter: create an affiliate (inactive)';
+  const cA = span(out, A0, A1), bA = span(base, A0, A1);
+  if (!cA || !bA) return '';
+  const aBlock = out.slice(cA[0], cA[1]);
+  if (fns(aBlock).join() !== 'parentInNetwork,assertAncestryInNetwork' || writes(aBlock) || (aBlock.match(/\/\* recruiter-ancestry \*\//g) || []).length !== 1
+    || (aBlock.match(/throw /g) || []).length !== 1 || !/throw fail\('PARENT_NOT_IN_NETWORK'\)/.test(aBlock)) return '';
+  return out.slice(0, cA[0]) + base.slice(bA[0], bA[1]) + out.slice(cA[1]);
+};
+// Phase 7 Stage E (approved — ownership; documented, narrow): undo exactly the Stage E change of the reward service's
+// sync before the byte comparison — its header bullet, and the region from findAffiliateOwner's JSDoc to the hooks'
+// alias (findAffiliateOwner + syncRecruiterReward: the owner replaces the link lookup) taken back from `base`. The
+// replaced region is checked first: those two functions only, ONE tagged owner statement, the same locks in the
+// same order (affiliate lock before the cycle state, money lock before the reversal), the same cycle keys, 4 creates.
+const undoStageERewards = (cur, base) => {
+  const h0 = cur.indexOf(' *   • Phase 7 Stage E (product rule — OWNERSHIP):'), h1 = cur.indexOf(' * ─────', h0);
+  if (h0 < 0 || h1 < h0) return '';
+  let out = cur.slice(0, h0) + cur.slice(h1);
+  const A1 = '/**\n * Kept for the existing hooks';
+  const c0 = out.indexOf('/**\n * owner(affiliateId) (Phase 7 Stage E)'), c1 = out.indexOf(A1);
+  const b0 = base.indexOf('/**\n * The ONE state-based operation for an affiliate'), b1 = base.indexOf(A1);
+  if (c0 < 0 || c1 < c0 || b0 < 0 || b1 < b0) return '';
+  const r = out.slice(c0, c1);
+  const fnsOf = [...r.matchAll(/^(?:export )?(?:async )?function (\w+)/gm)].map((m) => m[1]).join();
+  const at = (x) => r.indexOf(x);
+  if (fnsOf !== 'findAffiliateOwner,syncRecruiterReward' || (r.match(/\/\* recruiter-affiliate-owner \*\//g) || []).length !== 1
+    || !(at('await lockAffiliateReward(tx, affiliateId);') > 0 && at('await lockAffiliateReward(tx, affiliateId);') < at('await cycleState(tx, affiliateId);'))
+    || !(at('await lockRecruiterMoney(tx, open.recruiterId);') > 0 && at('await lockRecruiterMoney(tx, open.recruiterId);') < at('type: REWARD_TYPES.REVERSAL'))
+    || !/idempotencyKey: reversalCycleKey\(affiliateId, open\.cycle\)/.test(r) || !/idempotencyKey: recruitRewardCycleKey\(affiliateId, nextCycle\)/.test(r)
+    || (r.match(/\.create\(/g) || []).length !== 4 || /\$executeRaw|update\(|delete\(/.test(r)) return '';
+  return out.slice(0, c0) + base.slice(b0, b1) + out.slice(c1);
+};
+// Phase 7 Stage F (approved clarification — the TOPMOST link wins; documented, narrow): undo exactly the Stage F text of
+// the creation service (header bullet, the network-service import, the step-3 comment, the JSDoc start of the ancestry
+// region — whose body undoStageE then takes back from the base after its own checks) so the Stage E / B undos apply.
+const undoStageFAffiliates = (cur) => {
+  const swaps = [
+    [' *   • Parent: none (root) or a member of THIS recruiter\'s network N(R) (Phase 7 Stage F: its\n'
+      + ' *     owner — the recruiter of the TOPMOST linked affiliate of its chain — is this recruiter; a\n'
+      + ' *     recruiter can never create under another recruiter\'s network, even below a nested legacy link\n'
+      + ' *     to itself), checked on the server inside the transaction (never trusted from the client). The\n'
+      + ' *     new affiliate is linked to that same recruiter, so creation always extends its ownership.\n',
+    ' *   • Parent: none (root) or a member of THIS recruiter\'s network N(R) (Phase 7 Stage E: its\n'
+      + ' *     owner — the recruiter of the nearest linked affiliate at or above it — is this recruiter),\n'
+      + ' *     checked on the server inside the transaction (never trusted from the client).\n'],
+    ["import { NETWORK_LIMITS, getAffiliateCounts, getAffiliatePlacement } from './recruiterNetworkService.js';",
+      "import { getAffiliateCounts, getAffiliatePlacement } from './recruiterNetworkService.js';"],
+    ['      // 3. Parent: none, or a member of THIS recruiter\'s network N(R) (Stage F: topmost link = this recruiter).',
+      '      // 3. Parent: none, or a member of THIS recruiter\'s network N(R) (nearest link = this recruiter).'],
+    ["/**\n * Walk the parent's WHOLE ancestry", "/**\n * Walk the parent's ancestry"],
+  ];
+  let out = cur;
+  for (const [x, y] of swaps) { if (out.split(x).length !== 2) return ''; out = out.replace(x, y); }
+  return out;
+};
+// Phase 7 Stage F (documented, narrow): undo exactly the Stage F text of the reward service before the Stage E undo — the
+// header bullet's first words and the owner JSDoc's first line (both regions are then taken back from the base by
+// undoStageERewards after its own checks), and the new READ-ONLY admin listRecruiterOwnershipConflicts block (checked
+// first: that function + its two constants only, ONE tagged conflicts statement, no write).
+const undoStageFRewards = (cur) => {
+  const swaps = [
+    [' *   • Phase 7 Stage E introduced OWNERSHIP; Phase 7 Stage F (approved clarification) fixed its', ' *   • Phase 7 Stage E (product rule — OWNERSHIP):'],
+    ['/**\n * owner(affiliateId) (Phase 7 Stage F — TOPMOST link wins)', '/**\n * owner(affiliateId) (Phase 7 Stage E)'],
+  ];
+  let out = cur;
+  for (const [x, y] of swaps) { if (out.split(x).length !== 2) return ''; out = out.replace(x, y); }
+  const a = out.indexOf('/** Phase 7 Stage F: at most this many conflicting link ids'), z = out.indexOf('/**\n * The ONE state-based operation for an affiliate');
+  if (a < 0 || z < a) return '';
+  const block = out.slice(a, z);
+  if ([...block.matchAll(/^export (?:const|async function) (\w+)/gm)].map((m) => m[1]).join() !== 'OWNERSHIP_CONFLICTS_LIMIT,listRecruiterOwnershipConflicts'
+    || (block.match(/\/\* recruiter-ownership-conflicts \*\//g) || []).length !== 1 || /\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\(|\$executeRaw/.test(block)) return '';
+  return out.slice(0, a) + out.slice(z);
+};
 let pass = 0, fail = 0;
 const ok = (n, c, extra = '') => { if (c) { pass++; console.log('  PASS ', n); } else { fail++; console.log('  FAIL ', n, extra); } };
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -71,7 +186,8 @@ const T0 = new Date('2026-11-14T10:00:00.000Z');
 const now = () => new Date(T0);
 const noLimit = () => null;
 const CODE_RE = /^([A-Za-z0-9_-]{16})\.([A-Za-z0-9_-]{43})$/;
-const NODE_KEYS = ['childrenCount', 'descendantsCount', 'id', 'identityStatus', 'level', 'name', 'orders', 'status', 'username'];
+// Phase 7 Stage B: + linkedToMe / progress / rewardState (additive)
+const NODE_KEYS = ['childrenCount', 'descendantsCount', 'id', 'identityStatus', 'level', 'linkedToMe', 'name', 'orders', 'progress', 'rewardState', 'status', 'username'];
 const STATS_KEYS = ['identity', 'levels', 'orders', 'rootId', 'totals'];
 const LEVEL_KEYS = ['active', 'affiliates', 'identity', 'inactive', 'level', 'orders'];
 
@@ -94,10 +210,38 @@ const adminCookie = (u = ADMIN) => `auth_token=${signToken(u)}`;
 const recruiterToken = (rec) => signToken({ recruiterId: rec.id, username: rec.username, type: 'recruiter' });
 const recruiterCookie = (rec) => `recruiter_token=${recruiterToken(rec)}`;
 
+// Every model call made through the returned db, with its FULL arguments (the fake's _log keeps only
+// `where`, so a relation select / include / _count would be invisible there). `at` = the fake's _log
+// length when the call was made, i.e. the index of the call's own log entry when the fake writes one.
+const snapArgs = (a) => { try { return JSON.parse(JSON.stringify(a ?? null, (k, x) => (typeof x === 'bigint' ? String(x) : x))); } catch { return a; } };
+const withCallLog = (raw, calls) => {
+  const db = new Proxy(raw, {
+    get(t, p) {
+      const v = t[p];
+      if (p === '$transaction') return (fn, ...rest) => t.$transaction(typeof fn === 'function' ? (tx) => fn(tx === t ? db : tx) : fn, ...rest);
+      if (typeof p !== 'string' || p.startsWith('_') || p.startsWith('$') || !v || typeof v !== 'object') return v;
+      return new Proxy(v, {
+        get(m, op) {
+          const f = m[op];
+          if (typeof f !== 'function') return f;
+          return (...args) => { calls.push({ at: t._log.length, model: p, op: String(op), args: snapArgs(args[0]) }); return f.apply(m, args); };
+        },
+      });
+    },
+  });
+  return db;
+};
+// A key naming order data: the affiliateOrders / orders relations (select, include, _count, a relation
+// filter, an orderBy on them) or an order counter column — never `orderBy` itself nor the recruiter's
+// canViewOrders flag.
+const orderKey = (k) => /order/i.test(k) && k !== 'orderBy' && k !== 'canViewOrders';
+const mentionsOrders = (v) => (Array.isArray(v) ? v.some(mentionsOrders) : !!v && typeof v === 'object' && Object.entries(v).some(([k, x]) => orderKey(k) || mentionsOrders(x)));
+
 /** One fake db (phase 5 + recovery) with recruiters A and B and every handler, route-wrapped. */
 function setup() {
   const hookBox = { fn: null };
-  const db = makeRecruiterFakeDb({ recovery: true, allowPasswordUpdate: true, hooks: { before: (m, o, a) => (hookBox.fn ? hookBox.fn(m, o, a) : undefined) } });
+  const calls = [];
+  const db = withCallLog(makeRecruiterFakeDb({ recovery: true, allowPasswordUpdate: true, hooks: { before: (m, o, a) => (hookBox.fn ? hookBox.fn(m, o, a) : undefined) } }), calls);
   const A = db._seed.recruiter({ username: 'perm.a', name: 'Recruteur A' });
   const B = db._seed.recruiter({ username: 'perm.b', name: 'Recruteur B' });
   const ad = adminRecruiterHandlers({ db, now });
@@ -109,7 +253,7 @@ function setup() {
   const ih = recruiterIdentityHandlers({ db, now, rateLimit: noLimit });
   const rv = activationRecoveryHandlers({ db, now, rateLimit: noLimit });
   return {
-    db, A, B, hookBox,
+    db, A, B, hookBox, calls,
     admin: { create: withAdminAuth(ad.create), setActive: withAdminAuth(ad.setActive), setPermissions: withAdminAuth(ad.setPermissions), list: withAdminAuth(ad.list) },
     me: withRecruiterAuth(rh.me),
     stats: withRecruiterAuth(nh.stats), nodes: withRecruiterAuth(nh.nodes),
@@ -123,9 +267,24 @@ const perm = (E, rec, body, { cookie = adminCookie(), raw } = {}) =>
   call(E.admin.setPermissions, req(`/api/admin/recruiters/${rec.id ?? rec}/permissions`, { method: 'PATCH', body, raw, cookie }), params(rec.id ?? rec));
 const recRow = (E, rec) => E.db._tables.recruiter.find((r) => r.id === (rec.id ?? rec));
 const permAudits = (E, rec) => E.db._tables.recruiterAuditLog.filter((a) => a.action === 'RECRUITER_PERMISSION_CHANGED' && (!rec || a.recruiterId === (rec.id ?? rec)));
-const orderQueries = (E, from = 0) => E.db._log.slice(from).filter((l) => l.model === 'affiliateOrder');
+// Every read of the orders table: an affiliateOrder model call, a raw statement whose SQL mentions
+// affiliate_orders (Phase 6 part 5b: the network statistics count the orders inside their SQL), OR
+// any other model call whose FULL args (seen by withCallLog: the fake's _log keeps only `where`)
+// mention orders — a relation select / include / _count / filter of affiliateOrders or orders —
+// OR an affiliateOrder call the fake refused before logging it. `from` is a mark of E.db._log.
+const orderQueries = (E, from = 0) => {
+  const log = E.db._log;
+  return [
+    ...log.slice(from).filter((l) => l.model === 'affiliateOrder' || (l.model === '$queryRaw' && /affiliate_orders/.test(l.sql ?? ''))),
+    ...E.calls.filter((c) => c.at >= from && c.model !== 'affiliateOrder' && mentionsOrders(c.args)),
+    ...E.calls.filter((c) => c.at >= from && c.model === 'affiliateOrder' && !(log[c.at]?.model === 'affiliateOrder' && log[c.at]?.op === c.op)),
+  ];
+};
 const snapshot = (E) => big({ r: E.db._tables.recruiter, a: E.db._tables.recruiterAuditLog.length });
-const stripOrders = (v) => JSON.parse(JSON.stringify(v, (k, x) => (k === 'orders' ? undefined : x)));
+// Phase 7 Stage B: the delivered-derived progress values (realDelivered, qualifiedIndividual, qualifiedGroup) are null
+// with the flag off — stripped with the orders for the "everything else identical" comparisons.
+const ORDER_DERIVED = new Set(['orders', 'realDelivered', 'qualifiedIndividual', 'qualifiedGroup']);
+const stripOrders = (v) => JSON.parse(JSON.stringify(v, (k, x) => (ORDER_DERIVED.has(k) ? undefined : x)));
 
 let uniq = 0;
 const aff = (E, rec, over = {}) => {
@@ -292,9 +451,13 @@ console.log('\n2. canViewOrders: no order query, orders null; tree / identity / 
     unplaced: () => nodesOf(E, A, { view: 'unplaced' }),
   };
   const on = {};
-  for (const [k, f] of Object.entries(views)) on[k] = await f();
+  const onReads = {};
+  for (const [k, f] of Object.entries(views)) { const mark = E.db._log.length; on[k] = await f(); onReads[k] = orderQueries(E, mark); }
   ok('flag on (default): every view 200 with order counts (real delivered counted at scope)', Object.values(on).every((r) => r.status === 200)
     && on.stats.body.stats.orders.real.delivered === 5 && on.stats.body.stats.orders.fake.total === 2 && on.unplaced.body.nodes.length === 2, big(on.stats.body.stats?.orders));
+  ok('flag on: the order-read counter sees every order read — each stats view ONE raw statement over affiliate_orders, each nodes view ONE affiliateOrder.groupBy (so the "off → 0" checks are not vacuous)',
+    Object.entries(onReads).every(([k, q]) => q.length === 1 && (k.startsWith('stats') ? q[0].model === '$queryRaw' : q[0].model === 'affiliateOrder' && q[0].op === 'groupBy')),
+    big(Object.fromEntries(Object.entries(onReads).map(([k, q]) => [k, q.map((l) => `${l.model}.${l.op}`)]))));
 
   const off = await perm(E, A, { canViewOrders: false });
   ok('admin turns canViewOrders off (200)', off.status === 200 && recRow(E, A).canViewOrders === false);
@@ -304,11 +467,11 @@ console.log('\n2. canViewOrders: no order query, orders null; tree / identity / 
     const oq = orderQueries(E, mark);
     if (k.startsWith('stats')) {
       const s = r.body.stats;
-      ok(`off → ${k}: 200, stats.orders null and every level orders null, keys unchanged, NO affiliateOrder query`,
+      ok(`off → ${k}: 200, stats.orders null and every level orders null, keys unchanged, NO order read (no affiliateOrder call, no raw SQL over affiliate_orders)`,
         r.status === 200 && s.orders === null && s.levels.length > 0 && s.levels.every((l) => l.orders === null && eq(keys(l), LEVEL_KEYS))
         && eq(keys(s), STATS_KEYS) && oq.length === 0, `${r.text.slice(0, 200)} q=${oq.length}`);
     } else {
-      ok(`off → nodes ${k}: 200, every node orders null, keys unchanged, NO affiliateOrder query`,
+      ok(`off → nodes ${k}: 200, every node orders null, keys unchanged, NO order read (no affiliateOrder call, no raw SQL over affiliate_orders)`,
         r.status === 200 && r.body.nodes.length > 0 && r.body.nodes.every((n) => n.orders === null && eq(keys(n), NODE_KEYS)) && oq.length === 0, `${r.text.slice(0, 200)} q=${oq.length}`);
     }
     ok(`off → ${k}: everything except orders identical to the flag-on response (tree, members, identity, totals, paging)`,
@@ -337,7 +500,7 @@ console.log('\n2. canViewOrders: no order query, orders null; tree / identity / 
   const mark = E.db._log.length;
   const sv = await NS.getNetworkStats(A.id, { db: E.db, includeOrders: false });
   const nv = await NS.getNetworkNodes(A.id, { db: E.db, parentId: r2.id, includeOrders: false });
-  ok('service: includeOrders:false → orders null (scope, levels, nodes) and no affiliateOrder call',
+  ok('service: includeOrders:false → orders null (scope, levels, nodes) and no order read (no affiliateOrder call, no raw SQL over affiliate_orders)',
     sv.orders === null && sv.levels.every((l) => l.orders === null) && nv.nodes.every((n) => n.orders === null) && orderQueries(E, mark).length === 0);
   const svOn = await NS.getNetworkStats(A.id, { db: E.db });
   ok('service: default (includeOrders omitted) still counts', svOn.orders && svOn.orders.real.delivered === 5);
@@ -347,8 +510,30 @@ console.log('\n2. canViewOrders: no order query, orders null; tree / identity / 
     && V.toRecruiterNetworkNodeView({ id: 'x' }).orders.real.delivered === 0);
   ok('static: both network handlers pass includeOrders: me.canViewOrders === true (re-read with the account per request)', (() => {
     const h = stripJs(read('src/lib/recruiterNetworkRouteHandlers.js'));
-    return (h.match(/includeOrders: me\.canViewOrders === true/g) || []).length === 2 && /requireActiveRecruiter\(decoded, \{ db \}\)/.test(h);
+    // Phase 7 Stage B: the nodes handler reads the flag ONCE (const includeOrders = me.canViewOrders === true) and passes it
+    // to the page AND to the progress decoration; stats keeps the inline form.
+    return (h.match(/includeOrders: me\.canViewOrders === true/g) || []).length === 1 && (h.match(/const includeOrders = me\.canViewOrders === true;/g) || []).length === 1
+      && (h.match(/\bincludeOrders,\n/g) || []).length === 1 && /withProgress\(me\.id, page\.nodes, \{ db, includeOrders \}\)/.test(h) && /requireActiveRecruiter\(decoded, \{ db \}\)/.test(h);
   })());
+  // The order-read counter is live for reads through a relation: each hostile call below counts as ONE
+  // order read (so the "off → 0" checks above would catch an include / select / _count of orders).
+  const relIds = { in: [r1.id, r2.id] };
+  const hostile = {
+    'affiliate.findMany include affiliateOrders': () => E.db.affiliate.findMany({ where: { id: relIds }, select: { id: true }, include: { affiliateOrders: true } }),
+    'affiliate.findMany select orders': () => E.db.affiliate.findMany({ where: { id: relIds }, select: { id: true, orders: { select: { status: true } } } }),
+    'affiliate.findMany _count affiliateOrders': () => E.db.affiliate.findMany({ where: { id: relIds }, select: { id: true, _count: { select: { affiliateOrders: true } } } }),
+    'recruiterAffiliateLink.findMany nested affiliate.affiliateOrders': () => E.db.recruiterAffiliateLink.findMany({ where: { recruiterId: A.id }, select: { affiliate: { select: { affiliateOrders: { select: { status: true } } } } } }),
+    'recruiterAffiliateLink.count filtered on orders': () => E.db.recruiterAffiliateLink.count({ where: { recruiterId: A.id, affiliate: { affiliateOrders: { some: { status: 'delivered' } } } } }),
+    'affiliateOrder.findMany (refused before the fake logs it)': () => E.db.affiliateOrder.findMany({ where: { affiliateId: r1.id }, select: { status: true } }),
+  };
+  const counted = [];
+  for (const [k, f] of Object.entries(hostile)) { const m = E.db._log.length; await Promise.resolve().then(f).catch(() => null); counted.push([k, orderQueries(E, m).length]); }
+  ok(`order-read counter self-check: ${counted.length} hostile reads (include / select / _count / relation filter of orders on affiliate or link, an affiliateOrder op the fake refuses unlogged) each count as exactly ONE order read`,
+    counted.every(([, n]) => n === 1), big(counted));
+  const bm = E.db._log.length;
+  await E.db.recruiter.findUnique({ where: { id: A.id }, select: { id: true, canViewOrders: true } });
+  await E.db.recruiterAffiliateLink.findMany({ where: { recruiterId: A.id }, orderBy: { createdAt: 'asc' }, select: { affiliateId: true } });
+  ok('… and is precise: reading the canViewOrders flag or using orderBy is not an order read', orderQueries(E, bm).length === 0 && E.calls.filter((c) => c.at >= bm).length === 2);
 }
 
 console.log('\n2b. canViewOrders off: reward history stays; no recruiter route exposes order counts');
@@ -535,6 +720,9 @@ console.log('\n4. Regression and scope');
 {
   const E = setup();
   const A = E.A;
+  // Determinism fix (Phase 7 run): the seeded row and the update could fall in the SAME millisecond, so
+  // updatedAt sometimes did not change (timing flake). Age the seeded timestamp first — the assertion is unchanged.
+  recRow(E, A).updatedAt = new Date(Date.now() - 60_000);
   const beforeRow = { ...recRow(E, A) };
   await perm(E, A, { canViewOrders: false, canCreateAffiliates: false });
   const afterRow = recRow(E, A);
@@ -548,7 +736,10 @@ console.log('\n4. Regression and scope');
 
   const prismaChanged = git(['diff', '--name-only', PART4_BASE, '--', 'prisma']).split('\n').filter(Boolean);
   const prismaNew = git(['ls-files', '--others', '--exclude-standard', '--', 'prisma']).split('\n').filter(Boolean);
-  ok('no schema or migration change in Part 4 (the permission columns already exist)', prismaChanged.length === 0 && prismaNew.length === 0, big({ prismaChanged, prismaNew }));
+  // Phase 7 (Reward B — the recruiter group reward, approved): exactly schema.prisma (pinned in recruiterSchema /
+  // recruiterAffiliates / recruiterWithdrawalProtection) and the one new migration 20261112; Part 4 itself changed none.
+  ok('no schema or migration change in Part 4 (the permission columns already exist); since then only the Phase 7 schema fields + migration 20261112',
+    eq(prismaChanged, ['prisma/schema.prisma']) && eq(prismaNew, ['prisma/migrations/20261112_recruiter_group_rewards/migration.sql']), big({ prismaChanged, prismaNew }));
   const changed = git(['diff', '--name-only', PART4_BASE, '--', 'src']).split('\n').filter(Boolean);
   const untracked = git(['ls-files', '--others', '--exclude-standard', '--', 'src']).split('\n').filter(Boolean);
   const allSrc = [...new Set([...changed, ...untracked])].sort();
@@ -558,15 +749,197 @@ console.log('\n4. Regression and scope');
     'src/app/recruiter/network/networkUi.jsx', 'src/app/recruiter/network/page.jsx', 'src/app/recruiter/network/stats/page.jsx', 'src/app/recruiter/page.jsx',
     'src/lib/recruiterNetworkRouteHandlers.js', 'src/lib/recruiterProfileView.js', 'src/lib/recruiterRouteHandlers.js', 'src/lib/recruiterVisibility.js',
     'src/lib/services/affiliateActivationService.js', 'src/lib/services/recruiterNetworkService.js', 'src/lib/services/recruiterService.js',
+    // Phase 6 part 5c (approved): the creation's ancestry check becomes one statement — ONLY
+    // assertAncestryInNetwork may differ (pinned just below).
+    'src/lib/services/recruiterAffiliateService.js',
+    // Phase 6 part 5d (approved): bounded keyset reconcile batches — ONLY the reconcile part of the reward
+    // service, the admin reconcile / save handlers and the admin rewards page loop (each pinned below).
+    'src/lib/services/recruiterRewardService.js', 'src/lib/recruiterRewardAdminHandlers.js', 'src/app/admin/recruiter-rewards/page.jsx',
+    // Phase 7 (Reward B — group reward, approved): the settings rules, the hooks (group sync after the individual one)
+    // and the wallet history (group rows) — each pinned below; the reward service / handlers / page / visibility above.
+    'src/lib/recruiterSettings.js', 'src/lib/recruiterRewardHooks.js', 'src/lib/services/recruiterWalletService.js',
+    // Phase 7 Stage B (approved): downline visibility / progress — the affiliate list handler, the progress summary
+    // (handler, service, route); the network service / handlers, visibility and the creation service's list above.
+    'src/lib/recruiterAffiliateRouteHandlers.js', 'src/lib/recruiterProgressHandlers.js', 'src/lib/services/recruiterProgressService.js',
+    'src/app/api/recruiter/progress/route.js',
+    // Phase 7 Stage C (approved, UI only): the recruiter pages (hub summary, the new affiliates list, wallet gross /
+    // reversed / group rows, 401-only login redirects, verification error, password guard, rate-limit label), their pure
+    // helpers (recruiterUiState.js, wallet/walletUi.js — unit-tested in recruiterDashboardUi.test.mjs) and the Landing
+    // Page Only Mode allowlist (/recruiter, /affiliate/activate). No service, route handler, schema or money logic.
+    'src/app/recruiter/affiliates/page.jsx', 'src/app/recruiter/errorLabels.js', 'src/app/recruiter/password/page.jsx',
+    'src/app/recruiter/recruiterUiState.js', 'src/app/recruiter/verification/page.jsx', 'src/app/recruiter/wallet/page.jsx',
+    'src/app/recruiter/wallet/walletUi.js', 'src/lib/landingMode.js',
+    // Phase 7 Stage F (approved clarification): an affiliate with children cannot be deleted — the deletion helper and the
+    // 409 mapping of the admin DELETE route and of the legacy controller (pinned in recruiterAffiliates.test.mjs).
+    'src/app/api/admin/affiliates/route.js', 'src/lib/affiliateDeletion.js', 'src/lib/controllers/affiliateController.js',
   ].sort()), big(allSrc));
   const untouched = [
     'src/lib/services/affiliateSystemService.js', 'src/lib/services/identityService.js', 'src/lib/identityStorage.js', 'src/lib/services/orderService.js',
-    'src/lib/services/recruiterRewardService.js', 'src/lib/recruiterRewardHooks.js', 'src/lib/services/recruiterWalletService.js', 'src/lib/services/recruiterIdentityService.js',
-    'src/lib/services/recruiterAffiliateService.js', 'src/lib/services/affiliateActivationRecoveryService.js', 'src/lib/middleware/withAdminAuth.js', 'src/lib/middleware/withRecruiterAuth.js',
+    'src/lib/services/recruiterIdentityService.js',
+    'src/lib/services/affiliateActivationRecoveryService.js', 'src/lib/middleware/withAdminAuth.js', 'src/lib/middleware/withRecruiterAuth.js',
     'src/app/api/affiliate/payout/route.js', 'src/app/api/admin/affiliate-payouts/route.js', 'src/app/api/admin/recruiters/[id]/route.js', 'src/app/api/admin/recruiters/route.js',
   ];
   const diffs = untouched.filter((f) => git(['show', `${PART4_BASE}:${f}`]) !== read(f));
-  ok('affiliate, KYC, order, reward, wallet, creation-service, recovery, auth and existing admin-route files are byte-identical to the Part 4 base', diffs.length === 0, diffs.join(','));
+  ok('affiliate, KYC, order, reward, wallet, recovery, auth and existing admin-route files are byte-identical to the Part 4 base', diffs.length === 0, diffs.join(','));
+  // Phase 7: the hooks differ ONLY by the group sync after each individual sync (import, 3 doc lines, the syncGroupOf helper,
+  // the `group` option of the 3 hooks, the individual result kept and returned unchanged).
+  {
+    const d = git(['diff', '--unified=0', PART4_BASE, '--', 'src/lib/recruiterRewardHooks.js']).split('\n').filter((l) => /^[-+]/.test(l) && !/^(\+\+\+|---) /.test(l));
+    const del = d.filter((l) => l[0] === '-').map((l) => l.slice(1).trim()), add = d.filter((l) => l[0] === '+').map((l) => l.slice(1).trim());
+    ok('Phase 7 hooks: only the import, the `group` option and the post-individual group sync changed (the individual result is still what each hook returns)',
+      eq(del, ["import { awardRecruiterRewardIfQualified } from './services/recruiterRewardService.js';",
+        'export async function onRecruiterOrderStatusCommitted(affiliateOrderId, { db = prisma, award = awardRecruiterRewardIfQualified } = {}) {', 'return await award(o.affiliateId, { db });',
+        'export async function onRecruiterIdentityApprovedCommitted(identityVerificationId, { db = prisma, award = awardRecruiterRewardIfQualified } = {}) {', 'return await award(v.affiliateId, { db });',
+        'export async function onRecruiterLinkedOrderSynced(orderId, { db = prisma, award = awardRecruiterRewardIfQualified } = {}) {', 'for (const id of ids) await award(id, { db });'])
+      && add.every((l) => /^(\*|\/\/|\/\*\*)/.test(l) || /group|syncGroupOf|syncRecruiterGroupRewardForAffiliate|^const r = await award\((o|v)\.affiliateId, \{ db \}\);$|^return r;$|^try \{$|^\} catch \(e\) \{$|^\}$|^console\.error\('\[recruiter-rewards\] group sync failed/.test(l)), big({ del, add }));
+  }
+  // Phase 7: the wallet service is byte-identical to the Part 4 base OUTSIDE getRecruiterWallet, except its settings import.
+  ok('Phase 7 wallet service: only getRecruiterWallet (group rows: version, group size, threshold) and the settings import changed', (() => {
+    const f = 'src/lib/services/recruiterWalletService.js';
+    const IMP_OLD = "import { parseMadToCents, normalizeRecruiterSettings } from '../recruiterSettings.js';";
+    const IMP_NEW = "import { parseMadToCents, normalizeRecruiterSettings, normalizeRecruiterGroupSettings, REWARD_TYPES } from '../recruiterSettings.js';";
+    const base = git(['show', `${PART4_BASE}:${f}`]).replace(IMP_OLD, IMP_NEW);
+    const cur = read(f);
+    const a = 'export async function getRecruiterWallet(', z = '\n/** Recruiter: save their bank details';
+    const [ba, bz, ca, cz] = [base.indexOf(a), base.indexOf(z), cur.indexOf(a), cur.indexOf(z)];
+    return ba > 0 && ca > 0 && bz > ba && cz > ca && base.slice(0, ba) === cur.slice(0, ca) && base.slice(bz) === cur.slice(cz)
+      && /GROUP_REWARD/.test(cur.slice(ca, cz)) && !/\.(create|update|updateMany|upsert|delete|deleteMany)\(/.test(cur.slice(ca, cz));
+  })());
+  // Phase 6 part 5c: the creation service is byte-identical to the Part 4 base EXCEPT the body of
+  // assertAncestryInNetwork (+ `//` comment lines above it): same prefix up to the function, same
+  // suffix from the recruiterCreateAffiliate JSDoc on, and the replaced region is that one function.
+  ok('creation service: byte-identical to the Part 4 base outside assertAncestryInNetwork (Phase 6 part 5c changes only that function and its // comment; Phase 7 Stage B: + the affiliate list, undone first — undoStageBList)', (() => {
+    const f = 'src/lib/services/recruiterAffiliateService.js';
+    const base = git(['show', `${PART4_BASE}:${f}`]);
+    const cur = undoStageBList(undoStageE(undoStageFAffiliates(read(f)), base), base); // Stage F, then Stage E, then Stage B undone
+    const head = 'async function assertAncestryInNetwork(';
+    const tail = '\n/**\n * Recruiter: create an affiliate (inactive)';
+    const bi = base.indexOf(head), bt = base.indexOf(tail);
+    if (bi < 0 || bt < bi || base.indexOf(head, bi + 1) >= 0 || base.indexOf(tail, bt + 1) >= 0) return false;
+    const pre = base.slice(0, bi), post = base.slice(bt);
+    if (!cur.startsWith(pre) || !cur.endsWith(post) || cur.length < pre.length + post.length) return false;
+    const mid = cur.slice(pre.length, cur.length - post.length);
+    const lines = mid.split('\n');
+    const fnAt = lines.findIndex((l) => l.startsWith(head));
+    return fnAt >= 0 && lines.slice(0, fnAt).every((l) => /^\/\/( |$)/.test(l)) && lines[fnAt] === 'async function assertAncestryInNetwork(tx, recruiterId, parentId) {'
+      && (mid.match(/\bfunction\b/g) || []).length === 1 && !/\bexport\b|\bimport\b/.test(mid) && /\n}\n$/.test(mid);
+  })());
+  // Phase 6 part 5d: the reward service is byte-identical to the Part 4 base EXCEPT: the settings import gains
+  // DEFAULT_MIN_DELIVERED_SALES and MIN_SALES_RANGE; the id chunking (CHUNK / chunks) and the two whole-scope
+  // batched readers (realDeliveredCounts, identityStatuses) are removed; and the reconcile tail (from its JSDoc to
+  // the end of the file) is replaced by exactly RECONCILE_BATCH + rewardCandidates / approvedAmong /
+  // withReconcileLease / reconcileRecruiterRewards. Everything else — settings, locks, cycleState, thresholdOfVersion,
+  // syncRecruiterReward, awardRecruiterRewardIfQualified — is unchanged byte for byte.
+  ok('reward service: byte-identical to the Part 4 base outside the Phase 6 part 5d reconcile change (sync, locks, settings untouched)', (() => {
+    const f = 'src/lib/services/recruiterRewardService.js';
+    let b = git(['show', `${PART4_BASE}:${f}`]);
+    const cur = undoStageERewards(undoStageFRewards(read(f)), b); // Stage F, then Stage E (ownership) undone first
+    const once = (s, x) => s.indexOf(x) >= 0 && s.indexOf(x) === s.lastIndexOf(x);
+    const IMP_OLD = '  DELIVERED_ORDER_STATUS, IDENTITY_APPROVED_STATUS, REWARD_TYPES, evaluateRecruitQualification,\n';
+    const IMP_NEW = '  DEFAULT_MIN_DELIVERED_SALES, DELIVERED_ORDER_STATUS, IDENTITY_APPROVED_STATUS, MIN_SALES_RANGE, REWARD_TYPES, evaluateRecruitQualification,\n';
+    const CHUNK = 'const CHUNK = 5000;\n';
+    const CHUNKS = 'const chunks = (arr) => { const out = []; for (let i = 0; i < arr.length; i += CHUNK) out.push(arr.slice(i, i + CHUNK)); return out; };\n';
+    if (![IMP_OLD, CHUNK, CHUNKS].every((x) => once(b, x))) return false;
+    b = b.replace(IMP_OLD, IMP_NEW).replace(CHUNK, '').replace(CHUNKS, '');
+    const r0 = b.indexOf("/** Real delivered orders (status 'delivered' AND isFake false) per affiliate, batched. */\n"), r1 = b.indexOf('/** Per-affiliate advisory lock');
+    if (r0 < 0 || r1 < r0) return false;
+    const removed = b.slice(r0, r1);
+    if (!eq([...removed.matchAll(/^async function (\w+)/gm)].map((m) => m[1]), ['realDeliveredCounts', 'identityStatuses'])) return false;
+    b = b.slice(0, r0) + b.slice(r1);
+    // Phase 7 (Reward B, approved): + 3 import lines of the group rules; the settings history / save region (from the
+    // history JSDoc to the per-affiliate lock) is replaced by exactly getCurrentRecruiterSettingsWithGroup /
+    // listRecruiterSettingsVersions / adminSaveRecruiterSettings (both reward types, same lock + retry); the group
+    // reward section is appended after reconcileRecruiterRewards. Locks, cycleState, thresholdOfVersion,
+    // syncRecruiterReward and awardRecruiterRewardIfQualified stay byte-identical.
+    const IMP_END = "  normalizeRecruiterSettings, recruitRewardCycleKey, reversalCycleKey, validateRecruiterSettingsInput,\n} from '../recruiterSettings.js';";
+    const IMP_P7 = "  normalizeRecruiterSettings, recruitRewardCycleKey, reversalCycleKey, validateRecruiterSettingsInput,\n  // Phase 7 (Reward B — the recruiter group reward)\n"
+      + '  groupRewardCycleKey, groupReversalCycleKey, groupRewardsOn, normalizeRecruiterGroupSettings, normalizeRecruiterSettingsWithGroup,\n'
+      + "  validateRecruiterGroupSettingsInput,\n} from '../recruiterSettings.js';";
+    if (!once(b, IMP_END)) return false;
+    b = b.replace(IMP_END, IMP_P7);
+    const S0 = '/** Every settings version, newest first (admin history). */', S1 = '/** Per-affiliate advisory lock';
+    const C0 = '/** Phase 7: the current settings of BOTH reward types (individual + group fields), or the defaults. */';
+    const [bs0, bs1, cs0, cs1] = [b.indexOf(S0), b.indexOf(S1), cur.indexOf(C0), cur.indexOf(S1)];
+    if (bs0 < 0 || bs1 < bs0 || cs0 < 0 || cs1 < cs0) return false;
+    const region = cur.slice(cs0, cs1);
+    if (!eq([...region.matchAll(/^export async function (\w+)/gm)].map((m) => m[1]), ['getCurrentRecruiterSettingsWithGroup', 'listRecruiterSettingsVersions', 'adminSaveRecruiterSettings'])
+      || !region.includes("await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('recruiter_settings_versions'))`") || !region.includes("action: 'RECRUITER_SETTINGS_CHANGED'")
+      || !region.includes('if (!isUnique(e) || attempt === 2) throw e;')) return false;
+    b = b.slice(0, bs0) + region + b.slice(bs1);
+    const bi = b.indexOf('/**\n * Reconcile every recruiter reward with the current state');
+    const ci = cur.indexOf('/** Phase 6 part 5d: affiliates scanned per reconcile batch');
+    if (bi < 0 || ci < 0 || b.slice(0, bi) !== cur.slice(0, ci)) return false;
+    const bTail = b.slice(bi), cTail = cur.slice(ci);
+    return eq([...bTail.matchAll(/^(?:export )?(?:async )?function (\w+)/gm)].map((m) => m[1]), ['reconcileRecruiterRewards'])
+      // Stage F: + candidatesOf (the rows of both candidate statements) and networkRewardCandidates (the wallet scope: roots of N(R))
+      && eq([...cTail.matchAll(/^(?:export )?(?:async )?function (\w+)/gm)].map((m) => m[1]), ['rewardCandidates', 'candidatesOf', 'networkRewardCandidates', 'approvedAmong', 'withReconcileLease', 'reconcileRecruiterRewards',
+        'lockRecruiterGroup', 'groupQualifiedIds', 'groupQualifiedCount', 'groupLedgerState', 'syncRecruiterGroupReward', 'syncRecruiterGroupRewardForAffiliate', 'anyGroupReward', 'groupPass'])
+      && eq([...cTail.matchAll(/^export (?:const|async function|function) (\w+)/gm)].map((m) => m[1]), ['RECONCILE_BATCH', 'reconcileRecruiterRewards',
+        'GROUP_REWARD_REASONS', 'GROUP_QUALIFIED_CHUNK', 'syncRecruiterGroupReward', 'syncRecruiterGroupRewardForAffiliate'])
+      && !/^import /m.test(cTail);
+  })());
+  // Phase 6 part 5d: the admin handlers and the admin rewards page lose EXACTLY the old single-call reconcile lines;
+  // every added line belongs to the batch / cursor / busy change (or is a comment).
+  const diffLines = (f) => {
+    const d = git(['diff', '--unified=0', PART4_BASE, '--', f]).split('\n').filter((l) => /^[-+]/.test(l) && !/^(\+\+\+|---) /.test(l));
+    return { del: d.filter((l) => l[0] === '-').map((l) => l.slice(1).trim()), add: d.filter((l) => l[0] === '+').map((l) => l.slice(1).trim()) };
+  };
+  const hd = diffLines('src/lib/recruiterRewardAdminHandlers.js');
+  // Phase 7: + 2 doc lines (overview / saveSettings, now both reward types) and the settings read of the overview
+  // (getCurrentRecruiterSettings → getCurrentRecruiterSettingsWithGroup, in the import and the call).
+  ok('admin reward handlers: only the reconcile lines changed (removed exactly the 2 doc lines + the 2 full-scope reconcile calls; added only batch / cursor / RECONCILE_BUSY lines) + the Phase 7 settings read of both reward types',
+    eq(hd.del, ['*   overview     GET  → current settings + history, ledger rows, balances per recruiter', '*   saveSettings POST { enabled, rewardAmountMad, minDeliveredSales } → next version, then',
+      '*                     awards every reward now due (future awards only — history unchanged)', "*   reconcile    POST { action: 'reconcile' } → awards every reward now due",
+      'adminSaveRecruiterSettings, getCurrentRecruiterSettings, listRecruiterSettingsVersions, reconcileRecruiterRewards,',
+      "try { return await reconcileRecruiterRewards({ db, now: now() }); } catch (e) { console.error('[recruiter-rewards] reconcile failed:', e?.code ?? 'ERROR'); return null; }",
+      'getCurrentRecruiterSettings({ db }), listRecruiterSettingsVersions({ db }), adminListRecruiterLedger({ db }), adminRecruiterBalances({ db }),',
+      'const result = await reconcileRecruiterRewards({ db, now: now() });'])
+    && hd.add.every((l) => /^(\*|\/\/)/.test(l) || /reconcileBatch|RECONCILE_BUSY|cursor/.test(l)
+      || l === 'adminSaveRecruiterSettings, getCurrentRecruiterSettingsWithGroup, listRecruiterSettingsVersions, reconcileRecruiterRewards,'
+      || l === 'getCurrentRecruiterSettingsWithGroup({ db }), listRecruiterSettingsVersions({ db }), adminListRecruiterLedger({ db }), adminRecruiterBalances({ db }),'), big(hd));
+  const pd = diffLines('src/app/admin/recruiter-rewards/page.jsx');
+  // Phase 7 (Reward B): + exactly these replaced lines — header comment, type labels, the settings form (now Reward A +
+  // Reward B sections), its state / load / save body, the subtitle, the history (both reward types) and the ledger's
+  // affiliate cell ("Groupe" for group rows).
+  const P7_PAGE_DEL = [
+    "* refuses anyone else). Reward settings (append-only versions), recheck, balances per",
+    "* recruiter and the reward ledger. Recruiter withdrawals are processed in the existing",
+    "const TYPE_LABEL = { RECRUIT_REWARD: \"Récompense\", REVERSAL: \"Annulation\", ADMIN_ADJUSTMENT: \"Ajustement\" };",
+    "const [form, setForm] = useState({ enabled: false, rewardAmountMad: \"0.00\", minDeliveredSales: \"10\" });",
+    "setForm({ enabled: s.enabled === true, rewardAmountMad: centsToInput(s.rewardAmountCents), minDeliveredSales: String(s.minDeliveredSales ?? 10) });",
+    "body: JSON.stringify({ enabled: form.enabled, rewardAmountMad: form.rewardAmountMad.trim(), minDeliveredSales: form.minDeliveredSales.trim() }),",
+    "{settings.enabled ? `activées, ${fmtMad(settings.rewardAmountCents)} par affilié, ${settings.minDeliveredSales} commande(s) réelle(s) livrée(s)` : \"désactivées\"}",
+    // Phase 7 Stage E (approved ownership rule, documented): the rule text names the recruiter's NETWORK (created + invited
+    // below them), no longer only the affiliates it created.
+    "<p>Un recruteur reçoit <strong>une récompense par affilié qu&apos;il a créé</strong> dès que cet affilié a <strong>les deux conditions</strong> :</p>",
+    "<form onSubmit={save} className=\"grid gap-4 sm:grid-cols-3 items-start\" data-settings-form>",
+    "<label className=\"flex items-center gap-2 text-sm font-medium text-gray-700 sm:col-span-3\">",
+    "<input type=\"checkbox\" checked={form.enabled} onChange={(e) => setForm((f) => ({ ...f, enabled: e.target.checked }))} className=\"w-4 h-4\" data-field=\"enabled\" />",
+    "Récompenses activées",
+    "</label>",
+    "<div className=\"space-y-1 min-w-0\">",
+    "<label htmlFor=\"rr-amount\" className=\"text-xs font-semibold text-gray-600\">Montant par affilié (MAD)</label>",
+    "<input id=\"rr-amount\" inputMode=\"decimal\" value={form.rewardAmountMad} onChange={(e) => setForm((f) => ({ ...f, rewardAmountMad: e.target.value }))}",
+    "className=\"w-full px-3 py-2 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:border-gray-400\" data-field=\"rewardAmountMad\" />",
+    "{fieldErrors.rewardAmountMad && <p className=\"text-xs text-red-600\" data-field-error=\"rewardAmountMad\">{FIELD_ERRORS[fieldErrors.rewardAmountMad] ?? \"Valeur invalide.\"}</p>}",
+    "</div>",
+    "<div className=\"space-y-1 min-w-0\">",
+    "<label htmlFor=\"rr-min\" className=\"text-xs font-semibold text-gray-600\">Commandes réelles livrées requises</label>",
+    "<input id=\"rr-min\" inputMode=\"numeric\" value={form.minDeliveredSales} onChange={(e) => setForm((f) => ({ ...f, minDeliveredSales: e.target.value }))}",
+    "className=\"w-full px-3 py-2 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:border-gray-400\" data-field=\"minDeliveredSales\" />",
+    "{fieldErrors.minDeliveredSales && <p className=\"text-xs text-red-600\" data-field-error=\"minDeliveredSales\">{FIELD_ERRORS[fieldErrors.minDeliveredSales] ?? \"Valeur invalide.\"}</p>}",
+    "</div>",
+    "<div className=\"sm:pt-5\">",
+    "<p className=\"text-sm text-gray-400\" data-empty=\"history\">Aucune version : récompenses désactivées, 0 MAD, 10 commandes (valeurs par défaut).</p>",
+    "{[\"Version\", \"Statut\", \"Montant\", \"Commandes requises\", \"Par\", \"Date\"].map((h) => <th key={h} className=\"text-right text-xs font-semibold text-gray-500 px-3 py-2 whitespace-nowrap\">{h}</th>)}",
+    "<td className=\"px-3 py-2 font-mono text-xs\">{l.affiliateUsername ? `@${l.affiliateUsername}` : \"—\"}</td>",
+  ];
+  const pdOld = pd.del.filter((l) => /reconcile|awarded|reversed|setReconcileMsg|setSaveMsg|const (res|body) = /.test(l));
+  ok('admin rewards page: only the save message and the reconcile button changed (they now loop one-batch requests with the cursor) + the exact Phase 7 settings / history / label lines',
+    pdOld.length === 8 && eq(pd.del.filter((l) => !pdOld.includes(l)), P7_PAGE_DEL)
+    && ['data-field="groupEnabled"', 'data-field="groupRewardAmountMad"', 'data-field="groupSize"', 'data-field="groupMinDeliveredSales"'].every((x) => pd.add.some((l) => l.includes(x)))
+    && pd.add.some((l) => l === 'const reconcileBatches = async (startCursor = null, start = null) => {') && pd.add.some((l) => /JSON\.stringify\(\{ action: "reconcile", \.\.\.\(cursor \? \{ cursor \} : \{\}\) \}\)/.test(l))
+    && pd.add.some((l) => l === 'if (!r.hasMore || !r.cursor || r.cursor === cursor) return total;'), big(pd));
   const dirs = git(['diff', '--name-only', PART4_BASE, '--', 'src/app/api/affiliate', 'src/app/api/admin/identity', 'src/app/api/recruiter', 'src/lib/middleware']).split('\n').filter(Boolean);
   ok('no file changed under the affiliate API, the admin identity API, the recruiter API or the middleware', dirs.length === 0, dirs.join(','));
   ok('the creation permission check stays in the service under the row lock, before the replay lookup (unchanged order)', (() => {

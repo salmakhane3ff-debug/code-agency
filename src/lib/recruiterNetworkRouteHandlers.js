@@ -10,7 +10,10 @@
  *   nodes  GET ?parentId=&cursor=&limit=&view=   → one page of the tree (roots, children of
  *                                                  one of their affiliates, or `unplaced`)
  * Every request re-checks the recruiter account (active); ownership of rootId / parentId is
- * enforced by the service (anything outside the network → 404 NOT_FOUND). Responses are
+ * enforced by the service (anything outside the network → 404 NOT_FOUND). Phase 7 Stage E: the
+ * network is N(R) (every affiliate whose owner — Stage F: the TOPMOST linked affiliate of its chain — is the
+ * recruiter; levels absolute everywhere; other recruiters' affiliates are never visible); each node
+ * carries linkedToMe (information only), its progress and rewardState. Responses are
  * built ONLY with recruiterVisibility.js. Phase 6 part 4: when the recruiter's canViewOrders is
  * off, no order query runs and every `orders` is null (the tree and identity counts stay).
  * ─────────────────────────────────────────────────────────────────────────────
@@ -20,6 +23,7 @@ import prisma from './prisma.js';
 import { rateLimit as defaultRateLimit } from './rateLimit.js';
 import { requireActiveRecruiter } from './services/recruiterService.js';
 import { getNetworkNodes, getNetworkStats } from './services/recruiterNetworkService.js';
+import { withProgress } from './services/recruiterProgressService.js';
 import {
   toRecruiterError as defaultToRecruiterError, toRecruiterNetworkNodeView, toRecruiterNetworkPathView, toRecruiterNetworkStatsView,
 } from './recruiterVisibility.js';
@@ -53,15 +57,19 @@ export function recruiterNetworkHandlers(deps = {}) {
       const cursor = q.get('cursor');
       const limit = q.get('limit');
       if ((cursor !== null && !INT_RE.test(cursor)) || (limit !== null && !INT_RE.test(limit))) throw invalid();
+      const includeOrders = me.canViewOrders === true;
       const page = await getNetworkNodes(me.id, {
         db, parentId: view ? null : q.get('parentId') || null, view,
         cursor: cursor === null ? 0 : Number(cursor), ...(limit === null ? {} : { limit: Number(limit) }),
-        includeOrders: me.canViewOrders === true,
+        includeOrders,
       });
+      // Phase 7 Stage B → E: progress of every node (delivered values null without canViewOrders) and the
+      // latest individual reward cycle of every node (all members are reward-eligible) — settings + ledger reads only.
+      const nodes = await withProgress(me.id, page.nodes, { db, includeOrders });
       return json({
         parent: page.parent ? toRecruiterNetworkPathView(page.parent) : null,
         path: page.path.map(toRecruiterNetworkPathView),
-        nodes: page.nodes.map(toRecruiterNetworkNodeView),
+        nodes: nodes.map(toRecruiterNetworkNodeView),
         total: Number.isInteger(page.total) ? page.total : 0,
         nextCursor: Number.isInteger(page.nextCursor) ? page.nextCursor : null,
       });

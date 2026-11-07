@@ -8,8 +8,12 @@
  * trigger, the recruiter row lock, atomic transactions with READ COMMITTED visibility).
  * Proves:
  *   • root / child / grandchild creation: inactive row, link, one audit row, exact view
- *   • parent only from the recruiter's own network (another network, unlinked, unknown →
- *     the same PARENT_NOT_IN_NETWORK), ancestry acyclic and inside the network
+ *   • parent only from the recruiter's own network (another network, unlinked without an owner,
+ *     unknown → the same PARENT_NOT_IN_NETWORK). Phase 7 Stage E (approved rule, documented pin
+ *     updates marked "Stage E"): the network is N(R) — the parent's OWNER (the recruiter of the
+ *     nearest linked affiliate at or above it) must be the recruiter: an affiliate invited below one
+ *     of its affiliates (admin-created, no link) is a valid parent, a nearer link to another recruiter
+ *     refuses, a parent cycle without a link runs into the 10,000 cap and is refused
  *   • no assignment of an existing affiliate (strict body, trigger, no update path)
  *   • the parent can never change after creation (no PUT/PATCH/DELETE, idempotency conflict)
  *   • idempotency and concurrency: replays, one creation per requestId, unique usernames /
@@ -18,6 +22,14 @@
  *   • validation (boundaries, exact allowlisted field codes), rate limit, error hygiene
  *   • cross-recruiter isolation of the list and of the tokens
  *   • the admin affiliate creation and the affiliate auth flow are unchanged
+ *   • Phase 6 part 5c: the ancestry check is ONE tagged `recruiter-ancestry` statement (run after
+ *     the recruiter row lock, in the creation transaction); Stage E: its verdict equals an oracle of
+ *     owner(parent) = R (≤ 10,000 nodes walked) on hand-built and randomized data, and every parent
+ *     the former per-ancestor loop (loaded from git) accepted is still accepted; a nearest link
+ *     10,000 nodes up passes, 10,001 fails; the number of database calls does not depend on the depth
+ * Phase 7 Stage F (approved clarification, pins marked "Stage F"): the parent must be owned by the recruiter
+ * under the TOPMOST-link rule (a parent cycle: the one recruiter of its links); the admin DELETE route and the
+ * legacy controller additionally map AFFILIATE_HAS_CHILDREN → 409 (exact pinned diff versus 7e111e1).
  * Run: node scripts/recruiterAffiliates.test.mjs
  * ────────────────────────────────────────────────────────────────────────────
  */
@@ -54,6 +66,9 @@ const T0 = new Date('2026-11-05T09:00:00.000Z');
 const now = () => new Date(T0);
 const noLimit = () => null;
 const VIEW_KEYS = ['createdAt', 'id', 'name', 'parentId', 'username'];
+// Phase 7 Stage B: a LIST item = the same five fields + activation status, identity status, level / parent in the
+// downline, linkedToMe (Stage E: directly recruited — information; the list holds N(R)), progress and the latest individual reward cycle (additive).
+const LIST_ITEM_KEYS = ['createdAt', 'id', 'identityStatus', 'level', 'linkedToMe', 'name', 'parent', 'parentId', 'progress', 'rewardState', 'status', 'username'];
 const RATE_KEY = ['commission', 'Rate'].join(''); // an admin-only field name, built from parts
 
 const recruiterToken = (id, username = 'x') => signToken({ recruiterId: id, username, type: 'recruiter' });
@@ -75,7 +90,8 @@ const call = async (handler, r) => {
 /** One fake db (phase 3) with two active recruiters A and B, and the route-shaped handlers. */
 function setup({ rateLimit = noLimit, failOnce = {}, newId, invalidateTeam } = {}) {
   const hookBox = { fn: null };
-  const db = makeRecruiterFakeDb({ phase3: true, failOnce, hooks: { before: (m, o, a) => (hookBox.fn ? hookBox.fn(m, o, a) : undefined) } });
+  // Phase 7 Stage B: phase5 — the list (GET) also reads the downline placement, identity / order counts, settings and ledger
+  const db = makeRecruiterFakeDb({ phase5: true, failOnce, hooks: { before: (m, o, a) => (hookBox.fn ? hookBox.fn(m, o, a) : undefined) } });
   const A = db._seed.recruiter({ username: 'rec.a', name: 'Recruteur A' });
   const B = db._seed.recruiter({ username: 'rec.b', name: 'Recruteur B' });
   const invalidated = [];
@@ -166,6 +182,19 @@ console.log('\n2. Parent: only from the recruiter\'s own network');
   ok('a malformed parent id → 400 INVALID_INPUT with fields.parentId INVALID_PARENT only', badFmt.status === 400 && eq(badFmt.body, { code: 'INVALID_INPUT', fields: { parentId: 'INVALID_PARENT' } }), badFmt.text);
   const bOwn = await post(E, E.B, mk({ parentId: b1.body.affiliate.id }));
   ok('recruiter B can use their own affiliate as parent (the check is per recruiter, not global)', bOwn.status === 201 && bOwn.body.affiliate.parentId === b1.body.affiliate.id, bOwn.text);
+  // Stage E: an affiliate invited below a recruiter's affiliate (admin-created, no link) is in its network N(R).
+  const a1 = await post(E, E.A, mk({ username: 'a.one' }));
+  const invited = E.db._seed.affiliate({ username: 'admin.child', name: 'Admin Child', parentId: a1.body.affiliate.id });
+  const invited2 = E.db._seed.affiliate({ username: 'admin.grand', name: 'Admin Grand', parentId: invited.id });
+  const underB = E.db._seed.affiliate({ username: 'admin.underb', name: 'Under B', parentId: b1.body.affiliate.id });
+  const viaInvited = await post(E, E.A, mk({ parentId: invited2.id }));
+  ok('Stage E: an admin-created affiliate two levels below A\'s affiliate (no link of its own) → a valid parent for A (201), its id shown',
+    viaInvited.status === 201 && viaInvited.body.affiliate.parentId === invited2.id, viaInvited.text);
+  const before2 = counts(E.db);
+  const bInvited = track(await post(E, E.A, mk({ parentId: underB.id })));
+  const aByB = track(await post(E, E.B, mk({ parentId: invited.id })));
+  ok('Stage E: … but an admin-created affiliate below B\'s is B\'s (A → PARENT_NOT_IN_NETWORK), and A\'s invited one is refused to B; nothing written',
+    eq(bInvited.body, { code: 'PARENT_NOT_IN_NETWORK' }) && eq(aByB.body, { code: 'PARENT_NOT_IN_NETWORK' }) && bInvited.text === other.text && eq(counts(E.db), before2), `${bInvited.text} ${aByB.text}`);
 }
 
 // ── 3. no assignment of an existing affiliate ────────────────────────────────
@@ -247,7 +276,7 @@ console.log('\n4. The parent can never change after creation');
 }
 
 // ── 5. self-parenting and cycles ─────────────────────────────────────────────
-console.log('\n5. Self-parenting and cycles are rejected');
+console.log('\n5. Self-parenting is rejected; cycles never loop (Stage F: decided by the topmost link / the cycle rule)');
 {
   const E0 = setup();
   const p = await post(E0, E0.A, mk({ username: 'self.par' }));
@@ -264,9 +293,19 @@ console.log('\n5. Self-parenting and cycles are rejected');
   E.db._tables.affiliate.find((a) => a.id === X.id).parentId = Y.id; // corrupt: X → Y → X
   E.db._seed.link({ affiliateId: X.id, recruiterId: E.A.id });
   E.db._seed.link({ affiliateId: Y.id, recruiterId: E.A.id });
-  const b1 = counts(E.db);
+  // Stage F: X ⇄ Y are both linked to A — a parent cycle whose links are all A's is owned by A, so X is in N(A) (the
+  // former loop refused the cycle; the cycle-safe walk ends after one lap).
   const cyc = track(await post(E, E.A, mk({ parentId: X.id })));
-  ok('a parent whose ancestry is a cycle (corrupt data X→Y→X, both linked) → PARENT_NOT_IN_NETWORK, nothing written', cyc.status === 400 && eq(cyc.body, { code: 'PARENT_NOT_IN_NETWORK' }) && eq(counts(E.db), b1), cyc.text);
+  ok('Stage F: a parent on a cycle (corrupt data X→Y→X) whose links are all A\'s → 201 (owned by A)', cyc.status === 201 && cyc.body.affiliate.parentId === X.id, cyc.text);
+  const U1 = E.db._seed.affiliate({ username: 'ucyc.1', name: 'U1' });
+  const U2 = E.db._seed.affiliate({ username: 'ucyc.2', name: 'U2', parentId: U1.id });
+  E.db._tables.affiliate.find((a) => a.id === U1.id).parentId = U2.id; // corrupt: U1 → U2 → U1, no link
+  const USelf = E.db._seed.affiliate({ username: 'uself', name: 'USelf' }); E.db._tables.affiliate.find((a) => a.id === USelf.id).parentId = USelf.id;
+  const b1 = counts(E.db);
+  const ucyc = track(await post(E, E.A, mk({ parentId: U2.id })));
+  const uself = track(await post(E, E.A, mk({ parentId: USelf.id })));
+  ok('Stage F: a parent on a cycle WITHOUT any link (and an unlinked self-parent) → PARENT_NOT_IN_NETWORK (no owner), nothing written',
+    eq(ucyc.body, { code: 'PARENT_NOT_IN_NETWORK' }) && eq(uself.body, { code: 'PARENT_NOT_IN_NETWORK' }) && eq(counts(E.db), b1), `${ucyc.text} ${uself.text}`);
 
   const Q = E.db._seed.affiliate({ username: 'foreign.q', name: 'Q' });
   E.db._seed.link({ affiliateId: Q.id, recruiterId: E.B.id });
@@ -277,12 +316,21 @@ console.log('\n5. Self-parenting and cycles are rejected');
   E.db._seed.link({ affiliateId: P2.id, recruiterId: E.A.id });
   const P3 = E.db._seed.affiliate({ username: 'dangling.p3', name: 'P3', parentId: randomUUID() });
   E.db._seed.link({ affiliateId: P3.id, recruiterId: E.A.id });
-  const b2 = counts(E.db);
   const mixed = track(await post(E, E.A, mk({ parentId: P.id })));
   const mixed2 = track(await post(E, E.A, mk({ parentId: P2.id })));
   const dangling = track(await post(E, E.A, mk({ parentId: P3.id })));
-  ok('an ancestry with a node of ANOTHER recruiter → PARENT_NOT_IN_NETWORK', mixed.status === 400 && eq(mixed.body, { code: 'PARENT_NOT_IN_NETWORK' }), mixed.text);
-  ok('an ancestry with an UNLINKED node or a dangling parent id → PARENT_NOT_IN_NETWORK', eq(mixed2.body, { code: 'PARENT_NOT_IN_NETWORK' }) && eq(dangling.body, { code: 'PARENT_NOT_IN_NETWORK' }));
+  // Stage F: the TOPMOST link decides — P's own (legacy) link to A sits inside B's network (Q is above it): B's member.
+  ok('Stage F: an A-linked (legacy) parent under ANOTHER recruiter\'s affiliate → PARENT_NOT_IN_NETWORK (the topmost link, B\'s, wins)', eq(mixed.body, { code: 'PARENT_NOT_IN_NETWORK' }), mixed.text);
+  ok('Stage E: an A-linked parent under an UNLINKED node or with a dangling parent id → 201', mixed2.status === 201 && dangling.status === 201, `${mixed2.text} ${dangling.text}`);
+  const Ui = E.db._seed.affiliate({ username: 'inv.under.q', name: 'Ui', parentId: Q.id });       // unlinked under B's Q → B's
+  const Ud = E.db._seed.affiliate({ username: 'inv.dangling', name: 'Ud', parentId: randomUUID() }); // unlinked, dangling parent → no owner
+  const Ue = E.db._seed.affiliate({ username: 'inv.empty', name: 'Ue', parentId: '' });             // unlinked, '' parent → no owner
+  const b2 = counts(E.db);
+  const r1 = track(await post(E, E.A, mk({ parentId: Ui.id })));
+  const r2 = track(await post(E, E.A, mk({ parentId: Ud.id })));
+  const r3 = track(await post(E, E.A, mk({ parentId: Ue.id })));
+  ok('Stage F: an UNLINKED parent whose topmost link is another recruiter\'s, or with no link above (dangling / \'\' parent) → PARENT_NOT_IN_NETWORK',
+    [r1, r2, r3].every((r) => eq(r.body, { code: 'PARENT_NOT_IN_NETWORK' })), [r1, r2, r3].map((r) => r.text).join(' '));
   ok('nothing written by the refused ancestry checks', eq(counts(E.db), b2));
 
   let prev = null;
@@ -513,7 +561,9 @@ console.log('\n10. The network list is scoped to the recruiter');
   ok('A sees exactly A\'s affiliates, newest first, with parentId inside the network', la.status === 200 && eq(la.body.affiliates.map((x) => x.username), ['list.a2', 'list.a1'])
     && la.body.affiliates[0].parentId === a1.body.affiliate.id && la.body.truncated === false && /no-store/.test(la.cache || ''), la.text);
   ok('B sees only B\'s affiliate (never A\'s, never the unlinked admin-made one)', eq(lb.body.affiliates.map((x) => x.username), ['list.b1']) && !lb.text.includes(a1.body.affiliate.id) && !lb.text.includes('list.admin'), lb.text);
-  ok('every item is exactly id, username, name, parentId, createdAt', [...la.body.affiliates, ...lb.body.affiliates].every((x) => eq(keys(x), VIEW_KEYS)) && !/password|phone|isActive|\$2[aby]\$/.test(la.text + lb.text));
+  ok('every item is exactly id, username, name, parentId, createdAt + the Stage B fields (status, identityStatus, level, parent, linkedToMe, progress, rewardState); the page adds total / nextCursor',
+    [...la.body.affiliates, ...lb.body.affiliates].every((x) => eq(keys(x), LIST_ITEM_KEYS)) && !/password|phone|isActive|\$2[aby]\$/.test(la.text + lb.text)
+    && eq(keys(la.body), ['affiliates', 'nextCursor', 'total', 'truncated']) && la.body.total === 2 && la.body.nextCursor === null);
   const qa = await get(E, E.A, 'FATIMA');
   const qb = await get(E, E.A, 'list.b1');
   const qn = await get(E, E.A, 'youss');
@@ -521,15 +571,24 @@ console.log('\n10. The network list is scoped to the recruiter');
   const longQ = await get(E, E.A, 'x'.repeat(500));
   ok('a long ?q= is accepted (truncated) and still scoped', longQ.status === 200 && longQ.body.affiliates.length === 0);
 
-  // corrupt data: an A-linked affiliate whose parent belongs to B → parentId projected as null
-  const odd = E.db._seed.affiliate({ username: 'odd.child', name: 'Odd', parentId: b1.body.affiliate.id });
+  // corrupt data: an A-linked root whose parent is an unlinked (admin-made, unowned) affiliate → parentId projected as null
+  const lone = E.db._seed.affiliate({ username: 'lone.admin', name: 'Lone' });
+  const odd = E.db._seed.affiliate({ username: 'odd.child', name: 'Odd', parentId: lone.id, createdAt: new Date(Date.now() + 99_000) }); // the newest
   E.db._seed.link({ affiliateId: odd.id, recruiterId: E.A.id, createdAt: new Date(T0.getTime() + 99_000) });
   const lo = await get(E, E.A);
-  ok('a parentId outside the recruiter\'s network is never shown (null)', lo.body.affiliates[0].username === 'odd.child' && lo.body.affiliates[0].parentId === null && !lo.text.includes(b1.body.affiliate.id), lo.text);
+  ok('a parentId outside the recruiter\'s network is never shown (null)', lo.body.affiliates[0].username === 'odd.child' && lo.body.affiliates[0].parentId === null && !lo.text.includes(lone.id), lo.text);
+  // Stage F: a legacy A link under B's affiliate belongs to B (topmost link): never in A's list, in B's list with its parent
+  const legacy = E.db._seed.affiliate({ username: 'legacy.child', name: 'Legacy', parentId: b1.body.affiliate.id });
+  E.db._seed.link({ affiliateId: legacy.id, recruiterId: E.A.id, createdAt: new Date(T0.getTime() + 98_000) });
+  const lo2 = await get(E, E.A); const lb2 = await get(E, E.B);
+  ok('Stage F: a legacy A link under B\'s affiliate is B\'s — absent from A\'s list, in B\'s list (parentId = B\'s affiliate, linkedToMe false)',
+    !lo2.text.includes(legacy.id) && lb2.body.affiliates.some((x) => x.id === legacy.id && x.parentId === b1.body.affiliate.id && x.linkedToMe === false), lb2.text.slice(0, 300));
 
   const M = setup();
+  // Stage E: the list = N(R), ordered by the AFFILIATE's createdAt (an invited member has no link row) — seeded
+  // equal to its link's createdAt, as the creation writes both in one transaction.
   for (let i = 0; i < 55; i++) {
-    const a = M.db._seed.affiliate({ username: `many.${i}`, name: `M${i}` });
+    const a = M.db._seed.affiliate({ username: `many.${i}`, name: `M${i}`, createdAt: new Date(T0.getTime() + i * 1000) });
     M.db._seed.link({ affiliateId: a.id, recruiterId: M.A.id, createdAt: new Date(T0.getTime() + i * 1000) });
   }
   const lm = await get(M, M.A);
@@ -600,8 +659,33 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
     p2 = checkUnchangedExceptPart2('63abd2d42577570cad31082901f18b8544a0b38f', ['src/lib/services/affiliateSystemService.js', 'src/app/api/admin/affiliates/route.js', 'src/app/api/affiliate',
       'src/lib/middleware/withAffiliateAuth.js', 'src/lib/middleware/withAdminAuth.js', 'src/lib/services/identityService.js', 'src/lib/services/affiliateService.js', 'src/lib/controllers/affiliateController.js', 'src/app/api/affiliate/route.js']);
   } catch (e) { p2 = { ok: false, error: `git error ${e.status}` }; }
-  ok('withAdminAuth, identity, the old affiliate service / controller and /api/affiliate/route.js are unchanged versus 63abd2d; affiliateSystemService, admin affiliates, the affiliate auth / me routes and withAffiliateAuth differ ONLY by the exact pinned Phase 6 part 2 diff',
-    p2.ok && p2.allowed.every((f) => ['src/lib/services/affiliateSystemService.js', 'src/app/api/admin/affiliates/route.js', 'src/app/api/affiliate/auth/route.js', 'src/app/api/affiliate/me/route.js', 'src/lib/middleware/withAffiliateAuth.js'].includes(f)), JSON.stringify(p2));
+  // Phase 7 Stage F (approved): the admin DELETE route and the legacy controller also map AFFILIATE_HAS_CHILDREN → 409.
+  // Their diff versus 7e111e1 (the commit the Part 2 allowance above was last verified on) must be EXACTLY these pinned
+  // lines (sha-256 of the +/- lines); with that, they are 7e111e1's files + the Stage F lines only.
+  const STAGE_F_BASE = '7e111e10df7c2413820f34a52fe200aebdefa72e';
+  const STAGE_F_PINS = {
+    'src/app/api/admin/affiliates/route.js': [
+      "-import { AFFILIATE_HAS_HISTORY } from '@/lib/affiliateDeletion';",
+      "+import { AFFILIATE_HAS_CHILDREN, AFFILIATE_HAS_HISTORY } from '@/lib/affiliateDeletion';",
+      '-    // Referenced by points/orders/payouts → clear 409, never the raw DB error.',
+      '-    if (err?.code === AFFILIATE_HAS_HISTORY) {',
+      '+    // Referenced by points/orders/payouts, or (Phase 7 Stage F) still has children → clear 409, never the raw DB error.',
+      '+    if (err?.code === AFFILIATE_HAS_HISTORY || err?.code === AFFILIATE_HAS_CHILDREN) {',
+    ],
+    'src/lib/controllers/affiliateController.js': [
+      "-import { AFFILIATE_HAS_HISTORY } from '../affiliateDeletion.js';",
+      "+import { AFFILIATE_HAS_CHILDREN, AFFILIATE_HAS_HISTORY } from '../affiliateDeletion.js';",
+      '-    if (err?.code === AFFILIATE_HAS_HISTORY) {',
+      '+    // Phase 7 Stage F: an affiliate with children is refused the same way (409 + message).',
+      '+    if (err?.code === AFFILIATE_HAS_HISTORY || err?.code === AFFILIATE_HAS_CHILDREN) {',
+    ],
+  };
+  const stageFDiff = (f) => { try { return execFileSync('git', ['diff', STAGE_F_BASE, '--', f], { cwd: ROOT, encoding: 'utf8' }).split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l)); } catch (e) { return [`git error ${e.status}`]; } };
+  const stageF = Object.keys(STAGE_F_PINS).filter((f) => eq(stageFDiff(f), STAGE_F_PINS[f]));
+  const p2Rest = p2.ok || (Array.isArray(p2.unexpected) && p2.unexpected.every((f) => stageF.includes(f)) && p2.mismatched.every((f) => stageF.includes(f)));
+  ok('withAdminAuth, identity, the old affiliate service / controller and /api/affiliate/route.js are unchanged versus 63abd2d; affiliateSystemService, admin affiliates, the affiliate auth / me routes and withAffiliateAuth differ ONLY by the exact pinned Phase 6 part 2 diff — Stage F: + exactly the pinned AFFILIATE_HAS_CHILDREN lines of the admin route and the legacy controller (versus 7e111e1)',
+    stageF.length === 2 && p2Rest && (p2.allowed ?? []).every((f) => ['src/lib/services/affiliateSystemService.js', 'src/app/api/admin/affiliates/route.js', 'src/app/api/affiliate/auth/route.js', 'src/app/api/affiliate/me/route.js', 'src/lib/middleware/withAffiliateAuth.js'].includes(f)),
+    JSON.stringify({ p2, stageF, diffs: Object.keys(STAGE_F_PINS).map(stageFDiff) }));
   // prisma/: the ONLY change since 63abd2d is the documented Phase 5 extension (docs/recruiter-system.md §6):
   // schema.prisma (AffiliatePayout owner + Recruiter bank fields) and the new migration 20261106.
   const gitOut = (args) => { try { return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim(); } catch (e) { return `git error ${e.status}`; } };
@@ -613,6 +697,8 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
     eq(prismaFiles, ['prisma/migrations/20261106_recruiter_rewards_withdrawals/migration.sql', 'prisma/migrations/20261107_affiliate_activation_codes/migration.sql',
       'prisma/migrations/20261108_affiliate_activation_recovery/migration.sql', 'prisma/migrations/20261109_account_token_version/migration.sql',
       'prisma/migrations/20261110_recruiter_reward_cycles/migration.sql', 'prisma/migrations/20261111_recruiter_identity_verifications/migration.sql',
+      // Phase 7 (Reward B — the recruiter group reward): exactly its migration 20261112.
+      'prisma/migrations/20261112_recruiter_group_rewards/migration.sql',
       'prisma/schema.prisma']), prismaFiles.join(','));
   const schemaDiff = gitOut(['diff', '63abd2d42577570cad31082901f18b8544a0b38f', '--', 'prisma/schema.prisma']).split('\n')
     .filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l)).map((l) => l[0] + l.slice(1).replace(/\s+/g, ' ').trim());
@@ -646,7 +732,9 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
     '+createdAt DateTime @default(now())', '+updatedAt DateTime @updatedAt',
     '+recruiter Recruiter @relation(fields: [recruiterId], references: [id], onDelete: Restrict)', '+', '+@@index([status, submittedAt])',
     '+@@map("recruiter_identity_verifications")', '+}', '+', '+identityVerification RecruiterIdentityVerification?'];
-  const p6 = [...P6_MODEL, ...P6R_MODEL, ...P62_FIELDS, ...P63A_FIELDS, ...P63C_MODEL];
+  // Phase 7 (Reward B, migration 20261112): RecruiterSettingsVersion + exactly the 4 group fields with their defaults (+ 4 comment lines).
+  const P7_FIELDS = ['+groupEnabled Boolean @default(false)', '+groupRewardAmountCents Int @default(0)', '+groupSize Int @default(10)', '+groupMinDeliveredSales Int @default(10)'];
+  const p6 = [...P6_MODEL, ...P6R_MODEL, ...P62_FIELDS, ...P63A_FIELDS, ...P63C_MODEL, ...P7_FIELDS];
   const addedAll = schemaDiff.filter((l) => l.startsWith('+') && !l.startsWith('+//'));
   const addedCode = [];
   for (const l of addedAll) { const i = p6.indexOf(l); if (i >= 0) p6.splice(i, 1); else addedCode.push(l); }
@@ -659,7 +747,9 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
       '+recruiter Recruiter? @relation(fields: [recruiterId], references: [id], onDelete: Restrict)', '+recruiterId String?', '+rib String?', '+status String @default("pending")'].sort())
     // comment lines: Phase 5 (4) + Phase 6 part 1 (6 + 6) + Phase 6 part 2 (2 on Affiliate.tokenVersion, 1 on Recruiter.tokenVersion)
     // + Phase 6 part 3a (3 on RecruiterRewardLedger.cycle) + Phase 6 part 3c (5 /// on the model, 1 on the back-relation)
-    && schemaDiff.filter((l) => l.startsWith('+//')).length === 4 + 6 + 6 + 3 + 3 + 6
+    // + Phase 7 (4 on the RecruiterSettingsVersion group fields)
+    && schemaDiff.filter((l) => l.startsWith('+//')).length === 4 + 6 + 6 + 3 + 3 + 6 + 4
+    && schemaDiff.includes('+// Reward B — group reward (Phase 7, migration 20261112): the amount (MAD cents) earned each time')
     && schemaDiff.includes('+// Identity verification (Phase 6 part 3c) — separate from the affiliate IdentityVerification.')
     && schemaDiff.includes('+// Reward / reversal cycle of the affiliate (Phase 6 part 3a): cycle n = one RECRUIT_REWARD and')
     && schemaDiff.includes('+// Session version (Phase 6 part 2): every token carries it; bumped on disable / enable /')
@@ -675,13 +765,410 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
   const models = new Set([...svc.matchAll(/\b(?:db|tx)\.(\$?\w+)/g)].map((m) => m[1]));
   ok('recruiterAffiliateService touches only affiliate, recruiterAffiliateLink, recruiterAuditLog, $transaction, $queryRaw', [...models].every((m) => ['affiliate', 'recruiterAffiliateLink', 'recruiterAuditLog', '$transaction', '$queryRaw'].includes(m)) && models.has('$queryRaw'), [...models].join(','));
   ok('the service never touches identity / CIN / orders / payouts / UGC / balances', !/identityVerification|cinFront|cinBack|affiliateOrder|payout|ugc|balance|commission|withdraw|rewardPoint/i.test(svc));
-  ok('the only raw SQL is the parameterised recruiter row lock (FOR NO KEY UPDATE)', (svc.match(/\$queryRaw/g) || []).length === 1 && /\$queryRaw`SELECT "isActive", "canCreateAffiliates" FROM "recruiters" WHERE "id" = \$\{recruiterId\} FOR NO KEY UPDATE`/.test(svc) && !/\$queryRawUnsafe|\$executeRaw/.test(svc));
+  // Phase 6 part 5c: the raw statements are tagged templates (bound parameters): the recruiter row lock
+  // (unchanged) and the ONE recursive ancestry statement — Stage E: its only interpolations are the
+  // parent id, the cap and the recruiter id (the nearest link's recruiter is compared in SQL) — plus,
+  // Stage E, ONE tagged `recruiter-affiliate-list` statement (the N(R) list; bound values only). No
+  // Prisma.raw / sql helper, no string building, no $queryRawUnsafe / $executeRaw.
+  const svcRaw = read('src/lib/services/recruiterAffiliateService.js');
+  const ancTpl = /tx\.\$queryRaw`\s*\/\* recruiter-ancestry \*\/([^`]*)`/.exec(svcRaw)?.[1] ?? null;
+  const listTpl = /db\.\$queryRaw`\s*\/\* recruiter-affiliate-list \*\/([^`]*)`/.exec(svcRaw)?.[1] ?? null;
+  ok('the only raw SQL: the parameterised recruiter row lock (FOR NO KEY UPDATE), the ONE tagged recruiter-ancestry statement (binds parentId, cap, recruiterId only) and (Stage E) the ONE tagged recruiter-affiliate-list statement (bound values only)',
+    (svc.match(/\$queryRaw/g) || []).length === 3 && /\$queryRaw`SELECT "isActive", "canCreateAffiliates" FROM "recruiters" WHERE "id" = \$\{recruiterId\} FOR NO KEY UPDATE`/.test(svc)
+    && (svcRaw.match(/\/\* recruiter-ancestry \*\//g) || []).length === 1 && ancTpl !== null
+    // Stage F: the owner rule reads the parent id twice (chain + the topmost walk) and compares the recruiter twice
+    && eq(ancTpl.match(/\$\{[^}]*\}/g), ['${parentId}', '${cap}', '${parentId}', '${recruiterId}', '${recruiterId}'])
+    && (svcRaw.match(/\/\* recruiter-affiliate-list \*\//g) || []).length === 1 && listTpl !== null
+    && (listTpl.match(/\$\{[^}]*\}/g) || []).every((x) => ['${recruiterId}', '${pattern}', '${afterMs}', '${afterId}', '${take}', '${cap}'].includes(x))
+    && !/\$queryRaw\s*\(|\$queryRawUnsafe|\$executeRaw|Prisma\.(raw|sql|join)/.test(svc), ancTpl ?? 'no recruiter-ancestry template');
 
   const walkAll = (dir) => readdirSync(join(ROOT, dir), { recursive: true }).map((f) => join(dir, String(f))).filter((f) => !f.split(sep).includes('generated') && statSync(join(ROOT, f)).isFile() && /\.(m?[jt]sx?)$/.test(f));
   const linkCreators = walkAll('src').filter((f) => /recruiterAffiliateLink\s*\.\s*create/.test(stripJs(read(f)))).map((f) => f.split(sep).join('/'));
   ok('recruiterAffiliateLink.create appears in src ONLY in recruiterAffiliateService.js', eq(linkCreators, ['src/lib/services/recruiterAffiliateService.js']), linkCreators.join(','));
   const affiliateAuth = read('src/app/api/affiliate/auth/route.js');
   ok('the affiliate login still answers by username OR phone and requires an active account (unchanged flow the uniqueness rules protect)', /loginAffiliate/.test(affiliateAuth) && /OR: \[\{ username: input \}, \{ phone: input \}\]/.test(asys) && /if \(!affiliate\.isActive\)/.test(asys));
+}
+
+// ── 14. Phase 6 part 5c: the ancestry check is ONE statement ─────────────────
+console.log('\n14. Phase 6 part 5c → Stage F: ONE recruiter-ancestry statement, verdict = owner(parent) (topmost link) is the recruiter (oracle); every parent the former loop accepted still accepted');
+{
+  const BASE = '7e111e10df7c2413820f34a52fe200aebdefa72e'; // the last commit with the per-ancestor loop
+  const SVC = 'src/lib/services/recruiterAffiliateService.js';
+  const ACT_URL = new URL('../src/lib/services/affiliateActivationService.js', import.meta.url).href;
+  const ACT_IMPORT = "import { issueActivationCode, unusablePasswordHash } from './affiliateActivationService.js';";
+  const FAST_HASH = `$2a$12$${'u'.repeat(53)}`;
+  const big = (v) => JSON.stringify(v, (k, x) => (typeof x === 'bigint' ? String(x) : x));
+  const errText = (e) => String(e?.stderr || e?.message || e).trim().split('\n')[0];
+  /**
+   * A service source → { mod } or { why } (a clear reason; never a skip). prisma is stubbed (db is
+   * always injected); the activation service is imported from src by absolute URL; with fastHash the
+   * unusable password hash (bcrypt cost 12, ~0.4 s — irrelevant to the ancestry verdict) is a constant.
+   */
+  const loadSvc = async (src, label, { fastHash = false } = {}) => {
+    let code = src.replace(/^import prisma from '\.\.\/prisma\.js';$/m, 'const prisma = null;');
+    // Phase 7 Stage B: the list imports the network service (placement / counts) — resolved from src by absolute URL.
+    code = code.replace("from './recruiterNetworkService.js';", `from '${new URL('../src/lib/services/recruiterNetworkService.js', import.meta.url).href}';`);
+    if (code === src) return { why: `${label} has no "import prisma from '../prisma.js';" line to stub` };
+    if (!code.includes(ACT_IMPORT)) return { why: `${label} has no "${ACT_IMPORT}" line to rewrite` };
+    code = code.replace(ACT_IMPORT, fastHash
+      ? `import { issueActivationCode } from '${ACT_URL}';\nconst unusablePasswordHash = async () => '${FAST_HASH}';`
+      : `import { issueActivationCode, unusablePasswordHash } from '${ACT_URL}';`);
+    try {
+      const mod = await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
+      return typeof mod.recruiterCreateAffiliate === 'function' ? { mod } : { why: `${label} does not export recruiterCreateAffiliate` };
+    } catch (e) { return { why: `importing ${label} failed: ${errText(e)}` }; }
+  };
+  const loadOld = async (base) => {
+    try { execFileSync('git', ['cat-file', '-e', `${base}^{commit}`], { cwd: ROOT, stdio: ['ignore', 'ignore', 'pipe'] }); } catch (e) {
+      return { why: `commit ${base} is not in this clone (a shallow or partial clone? fetch the history, e.g. git fetch --unshallow) — git: ${errText(e)}` };
+    }
+    let src;
+    try { src = execFileSync('git', ['show', `${base}:${SVC}`], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) {
+      return { why: `git show ${base.slice(0, 7)}:${SVC} failed — git: ${errText(e)}` };
+    }
+    if (!/seen\.size >= RECRUITER_AFFILIATE_LIMITS\.ANCESTRY_MAX/.test(src) || /recruiter-ancestry/.test(src)) return { why: `${SVC} at ${base.slice(0, 7)} is not the per-ancestor loop` };
+    return loadSvc(src, `${SVC} at ${base.slice(0, 7)}`, { fastHash: true });
+  };
+  const missing = await loadOld('0123456789abcdef0123456789abcdef01234567');
+  ok('the loader reports a missing commit with a clear message (no cryptic error, no skip)', !missing.mod && /^commit 0123456789abcdef0123456789abcdef01234567 is not in this clone \(a shallow or partial clone\?/.test(missing.why ?? ''), missing.why);
+  const oldL = await loadOld(BASE);
+  const OLD = oldL.mod ?? null;
+  if (!OLD) console.log(`  ERROR the Part 5c equivalence check cannot run: ${oldL.why}`);
+  ok(`the former per-ancestor implementation loads from commit ${BASE.slice(0, 7)} (git show)`, !!OLD, oldL.why ?? '');
+  // The CURRENT source, loaded the same way (fast hash) for the randomized batch; the hand-built
+  // cases and every other check below run the real module S.
+  const newL = await loadSvc(read(SVC), `the working-tree ${SVC}`, { fastHash: true });
+  const NEWF = newL.mod ?? null;
+  ok('the current service source loads the same way (for the randomized batch)', !!NEWF && /\/\* recruiter-ancestry \*\//.test(read(SVC)), newL.why ?? '');
+
+  /** A fresh phase-3 db with recruiters A and B and the dataset; one creation under parentId → 'CREATED' | error code. */
+  const verdict = async (create, data, parentId, { onDb } = {}) => {
+    const db = makeRecruiterFakeDb({ phase3: true });
+    const A = db._seed.recruiter({ username: 'anc.a', name: 'Recruteur A' });
+    const B = db._seed.recruiter({ username: 'anc.b', name: 'Recruteur B' });
+    const rid = { A: A.id, B: B.id };
+    data.affs.forEach((a, i) => db._seed.affiliate({ id: a.id, username: `seed.${i}`, name: `S${i}`, parentId: a.parentId }));
+    for (const l of data.links) db._seed.link({ affiliateId: l.id, recruiterId: rid[l.owner] });
+    let out;
+    try { await create(A.id, { username: 'anc.new', name: 'Nouveau', requestId: randomUUID(), parentId }, { db, now: now() }); out = 'CREATED'; } catch (e) { out = e?.code ?? `THROWN ${errText(e)}`; }
+    if (onDb) onDb(db, A);
+    return out;
+  };
+  // Dataset builders (ids are UUIDs: valid parentIds for the validator).
+  const node = (parentId = null) => ({ id: randomUUID(), parentId });
+  const chain = (len, top = null) => { const out = []; let p = top; for (let i = 0; i < len; i++) { const n = node(p); out.push(n); p = n.id; } return out; };
+  const linkAll = (affs, owner = 'A') => affs.map((a) => ({ id: a.id, owner }));
+  const bottom = (affs) => affs[affs.length - 1].id;
+  const cases = [];
+  const add = (name, expect, make) => cases.push({ name, expect, make });
+  // Stage F oracle, straight from the rule: walk up from the parent with a visited set (at most ANCESTRY_MAX distinct
+  // nodes, the parent included — a longer chain is refused); owner = the TOPMOST link's recruiter when the walk reaches
+  // a top, the one recruiter of every link met on a parent cycle (none when several); CREATED iff the owner is A.
+  const oracle = (data, parentId) => {
+    const byId = new Map(data.affs.map((a) => [a.id, a]));
+    const linkOf = new Map(data.links.map((l) => [l.id, l.owner]));
+    const seen = new Set(); const rids = [];
+    let cur = byId.get(parentId);
+    while (cur && !seen.has(cur.id)) {
+      if (seen.size === 10000) return 'PARENT_NOT_IN_NETWORK'; // more than ANCESTRY_MAX
+      seen.add(cur.id);
+      if (linkOf.has(cur.id)) rids.push(linkOf.get(cur.id));
+      cur = cur.parentId === null || cur.parentId === '' ? undefined : byId.get(cur.parentId);
+    }
+    const cycle = !!cur; // stopped on a revisit
+    const set = new Set(rids);
+    const owner = set.size === 1 ? rids[0] : set.size > 1 && !cycle ? rids[rids.length - 1] : null;
+    return owner === 'A' ? 'CREATED' : 'PARENT_NOT_IN_NETWORK';
+  };
+  const unlinkAll = () => [];
+  add('root parent', 'CREATED', () => { const c = chain(1); return { data: { affs: c, links: linkAll(c) }, parent: bottom(c) }; });
+  add('shallow chain (3 levels)', 'CREATED', () => { const c = chain(3); return { data: { affs: c, links: linkAll(c) }, parent: bottom(c) }; });
+  add('deep chain (300 levels)', 'CREATED', () => { const c = chain(300); return { data: { affs: c, links: linkAll(c) }, parent: bottom(c) }; });
+  add('wide network (1 root, 60 children, 60 grandchildren), parent = a grandchild', 'CREATED', () => {
+    const r = node(); const kids = Array.from({ length: 60 }, () => node(r.id)); const gk = kids.map((k) => node(k.id));
+    const affs = [r, ...kids, ...gk]; return { data: { affs, links: linkAll(affs) }, parent: gk[37].id };
+  });
+  // Stage F: the topmost link decides; a parent cycle whose links are all A's is A's.
+  add('Stage E: cycle X → Y → X (both linked)', 'CREATED', () => { const x = node(); const y = node(x.id); x.parentId = y.id; return { data: { affs: [x, y], links: linkAll([x, y]) }, parent: x.id }; });
+  add('Stage E: self-parent X → X (linked)', 'CREATED', () => { const x = node(); x.parentId = x.id; return { data: { affs: [x], links: linkAll([x]) }, parent: x.id }; });
+  add('Stage E: rho: a 5-level tail into a 3-cycle (all linked)', 'CREATED', () => {
+    const cyc = chain(3); cyc[0].parentId = cyc[2].id; const tail = chain(5, cyc[1].id); const affs = [...cyc, ...tail];
+    return { data: { affs, links: linkAll(affs) }, parent: bottom(tail) };
+  });
+  add('the parent itself linked to recruiter B', 'PARENT_NOT_IN_NETWORK', () => { const c = chain(1); return { data: { affs: c, links: linkAll(c, 'B') }, parent: bottom(c) }; });
+  add('Stage F: the top ancestor (level 1 of 6) linked to recruiter B, the rest to A (B\'s network)', 'PARENT_NOT_IN_NETWORK', () => {
+    const c = chain(6); return { data: { affs: c, links: [{ id: c[0].id, owner: 'B' }, ...linkAll(c.slice(1))] }, parent: bottom(c) };
+  });
+  add('Stage E: a middle ancestor linked to nobody', 'CREATED', () => { const c = chain(6); return { data: { affs: c, links: linkAll(c.filter((_, i) => i !== 2)) }, parent: bottom(c) }; });
+  add('Stage E: the parent linked to nobody, invited below A\'s affiliates', 'CREATED', () => { const c = chain(3); return { data: { affs: c, links: linkAll(c.slice(0, 2)) }, parent: bottom(c) }; });
+  add('Stage E: a dangling parentId mid-chain (no affiliate row, no link), the parent linked to A', 'CREATED', () => { const c = chain(4, randomUUID()); return { data: { affs: c, links: linkAll(c) }, parent: bottom(c) }; });
+  add('Stage E: a dangling parentId mid-chain that HAS a link to A (link row, no affiliate row)', 'CREATED', () => {
+    const ghost = randomUUID(); const c = chain(4, ghost); return { data: { affs: c, links: [...linkAll(c), { id: ghost, owner: 'A' }] }, parent: bottom(c) };
+  });
+  add('a parent id with no affiliate row at all (but a link to A)', 'PARENT_NOT_IN_NETWORK', () => { const ghost = randomUUID(); return { data: { affs: [], links: [{ id: ghost, owner: 'A' }] }, parent: ghost }; });
+  add("an ancestor whose parentId is '' (the former while (id) stops there)", 'CREATED', () => { const c = chain(5, ''); return { data: { affs: c, links: linkAll(c) }, parent: bottom(c) }; });
+  add("the parent itself has parentId ''", 'CREATED', () => { const c = chain(1, ''); return { data: { affs: c, links: linkAll(c) }, parent: bottom(c) }; });
+  add('Stage F: a 300-level chain whose top is linked to B, the rest to A (B\'s network)', 'PARENT_NOT_IN_NETWORK', () => { const c = chain(300); return { data: { affs: c, links: [{ id: c[0].id, owner: 'B' }, ...linkAll(c.slice(1))] }, parent: bottom(c) }; });
+  add('Stage E: a 300-level chain hanging off a 2-cycle (all linked)', 'CREATED', () => {
+    const cyc = chain(2); cyc[0].parentId = cyc[1].id; const c = chain(300, cyc[0].id); const affs = [...cyc, ...c]; return { data: { affs, links: linkAll(affs) }, parent: bottom(c) };
+  });
+  add('Stage E: a chain under an ancestor of B that sits ABOVE a node of A (B in the middle)', 'CREATED', () => {
+    const c = chain(5); return { data: { affs: c, links: c.map((a, i) => ({ id: a.id, owner: i === 1 ? 'B' : 'A' })) }, parent: bottom(c) };
+  });
+  // Stage F: unlinked parents — decided by the topmost link above them.
+  add('Stage F: an unlinked parent whose nearest link (2 levels up) is B\'s, with A above it (A\'s network)', 'CREATED', () => {
+    const c = chain(5); return { data: { affs: c, links: [{ id: c[0].id, owner: 'A' }, { id: c[2].id, owner: 'B' }] }, parent: bottom(c) };
+  });
+  add('Stage E: an unlinked chain of 300 below ONE A-linked root', 'CREATED', () => { const c = chain(301); return { data: { affs: c, links: [{ id: c[0].id, owner: 'A' }] }, parent: bottom(c) }; });
+  add('Stage E: an unlinked chain with no link at all', 'PARENT_NOT_IN_NETWORK', () => { const c = chain(5); return { data: { affs: c, links: unlinkAll() }, parent: bottom(c) }; });
+  add('Stage F: an unlinked parent on an unlinked 2-cycle (no link: no owner)', 'PARENT_NOT_IN_NETWORK', () => { const x = node(); const y = node(x.id); x.parentId = y.id; return { data: { affs: [x, y], links: [] }, parent: y.id }; });
+  add('Stage E: an unlinked self-parent', 'PARENT_NOT_IN_NETWORK', () => { const x = node(); x.parentId = x.id; return { data: { affs: [x], links: [] }, parent: x.id }; });
+  add('Stage E: an unlinked tail into an unlinked 3-cycle (rho without a link)', 'PARENT_NOT_IN_NETWORK', () => {
+    const cyc = chain(3); cyc[0].parentId = cyc[2].id; const tail = chain(4, cyc[1].id); return { data: { affs: [...cyc, ...tail], links: [] }, parent: bottom(tail) };
+  });
+  add('Stage E: an unlinked tail into a 3-cycle with ONE A-linked member', 'CREATED', () => {
+    const cyc = chain(3); cyc[0].parentId = cyc[2].id; const tail = chain(4, cyc[1].id); return { data: { affs: [...cyc, ...tail], links: [{ id: cyc[2].id, owner: 'A' }] }, parent: bottom(tail) };
+  });
+  add('Stage E: an unlinked parent whose chain ends at a dangling id (no link)', 'PARENT_NOT_IN_NETWORK', () => { const c = chain(3, randomUUID()); return { data: { affs: c, links: [] }, parent: bottom(c) }; });
+  add('Stage F: an unlinked parent below an A-linked ancestor whose own ancestor is B\'s (B\'s network)', 'PARENT_NOT_IN_NETWORK', () => {
+    const c = chain(4); return { data: { affs: c, links: [{ id: c[0].id, owner: 'B' }, { id: c[1].id, owner: 'A' }] }, parent: bottom(c) };
+  });
+  add('Stage F: an unlinked tail into a 2-cycle linked to A AND B (ambiguous: no owner — a conflict)', 'PARENT_NOT_IN_NETWORK', () => {
+    const cyc = chain(2); cyc[0].parentId = cyc[1].id; const tail = chain(3, cyc[0].id); return { data: { affs: [...cyc, ...tail], links: [{ id: cyc[0].id, owner: 'A' }, { id: cyc[1].id, owner: 'B' }] }, parent: bottom(tail) };
+  });
+  if (OLD) {
+    const res = [];
+    for (const k of cases) {
+      const { data, parent } = k.make();
+      res.push({ name: k.name, expect: k.expect, oracle: oracle(data, parent), old: await verdict(OLD.recruiterCreateAffiliate, data, parent), now: await verdict(S.recruiterCreateAffiliate, data, parent) });
+    }
+    for (const r of res) {
+      ok(`hand-built — ${r.name}: new statement = ${r.now} (expected ${r.expect}, oracle ${r.oracle}; former loop ${r.old})`,
+        r.now === r.expect && r.oracle === r.expect && (r.old !== 'CREATED' || r.now === 'CREATED'), big(r));
+    }
+
+    // Randomized: seeded datasets with trees, chains, cycles, self-parents, '' and dangling parents,
+    // nodes of A, of B or of nobody, links without an affiliate row.
+    const rand = (s) => () => { s = (s + 0x6D2B79F5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const rnd = rand(0x5c5c);
+    const pickOf = (xs) => xs[Math.floor(rnd() * xs.length)];
+    const RUNS = 400;
+    const tally = {}; const diffs = []; const lost = [];
+    for (let run = 0; run < RUNS; run++) {
+      const n = 1 + Math.floor(rnd() * 30);
+      const affs = Array.from({ length: n }, () => node());
+      const ghosts = Array.from({ length: 3 }, () => randomUUID());
+      affs.forEach((a, i) => {
+        const p = rnd();
+        a.parentId = p < 0.12 ? null : p < 0.17 ? '' : p < 0.82 ? (i ? affs[Math.floor(rnd() * i)].id : null) : p < 0.92 ? pickOf(affs).id : p < 0.96 ? a.id : pickOf(ghosts);
+      });
+      // Stage E: more unlinked and B nodes than before (60 % A / 15 % B / 25 % none), so both verdicts stay frequent
+      const links = [];
+      for (const a of affs) { const p = rnd(); if (p < 0.6) links.push({ id: a.id, owner: 'A' }); else if (p < 0.75) links.push({ id: a.id, owner: 'B' }); }
+      for (const g of ghosts) if (rnd() < 0.3) links.push({ id: g, owner: 'A' });
+      const parent = rnd() < 0.05 ? pickOf(ghosts) : pickOf(affs).id;
+      const data = { affs, links };
+      const want = oracle(data, parent);
+      const o = await verdict(OLD.recruiterCreateAffiliate, data, parent);
+      const w = await verdict(NEWF.recruiterCreateAffiliate, data, parent);
+      tally[w] = (tally[w] ?? 0) + 1;
+      if (w !== want) diffs.push({ run, oracle: want, now: w });
+      if (o === 'CREATED' && w !== 'CREATED') lost.push({ run, old: o, now: w });
+    }
+    ok(`randomized: new verdict = the owner oracle on ${RUNS} seeded datasets (${big(tally)})`, diffs.length === 0, big(diffs.slice(0, 5)));
+    ok('randomized: every parent the former loop accepted is still accepted (Stage F: the former loop required an all-A chain — still A\'s)', lost.length === 0, big(lost.slice(0, 5)));
+    ok('randomized: both verdicts occur often (≥ 20 % each) and no other outcome', (tally.CREATED ?? 0) >= RUNS * 0.2 && (tally.PARENT_NOT_IN_NETWORK ?? 0) >= RUNS * 0.2
+      && Object.keys(tally).every((k) => k === 'CREATED' || k === 'PARENT_NOT_IN_NETWORK'), big(tally));
+  }
+
+  // The 10,000-node limit, NEW implementation only (through the route). Stage F: the topmost link must be found, so
+  // the cap bounds the parent's WHOLE chain: one A-linked root and 9,999 unlinked affiliates below it → the bottom
+  // one's chain is 10,000 nodes → 201; one more level (linked or not) → 10,001 nodes → refused.
+  {
+    const E = setup();
+    const top = E.db._seed.affiliate({ username: 'lim.top', name: 'Top' }); E.db._seed.link({ affiliateId: top.id, recruiterId: E.A.id });
+    let prev = top.id;
+    for (let i = 1; i < 10000; i++) { const a = E.db._seed.affiliate({ username: `lim.${i}`, name: `L${i}`, parentId: prev }); prev = a.id; }
+    const atCap = await post(E, E.A, mk({ parentId: prev }));
+    ok('Stage F: an unlinked parent whose chain (topmost link A) is 10,000 nodes (ANCESTRY_MAX) → 201', atCap.status === 201 && atCap.body.affiliate.parentId === prev, atCap.text.slice(0, 200));
+    const deeper = E.db._seed.affiliate({ username: 'lim.over', name: 'Over', parentId: prev });
+    const b = counts(E.db);
+    const over = await post(E, E.A, mk({ parentId: deeper.id }));
+    ok('Stage F: … one more unlinked level (a chain of 10,001) → 400 { code: PARENT_NOT_IN_NETWORK } (the existing HTTP mapping), nothing written',
+      over.status === 400 && eq(over.body, { code: 'PARENT_NOT_IN_NETWORK' }) && eq(counts(E.db), b), over.text);
+    const own = await post(E, E.A, mk({ parentId: atCap.body.affiliate?.id }));
+    ok('Stage F: … and the A-linked affiliate created at depth 10,001 cannot be a parent either (its chain is 10,001 > ANCESTRY_MAX: the topmost link must be found within the cap)',
+      own.status === 400 && eq(own.body, { code: 'PARENT_NOT_IN_NETWORK' }), own.text.slice(0, 200));
+    ok('… each decided by ONE ancestry statement (no per-ancestor query)', E.db._log.filter((l) => l.model === '$queryRaw' && /recruiter-ancestry/.test(l.sql)).length === 3
+      && !E.db._log.some((l) => (l.model === 'recruiterAffiliateLink' || l.model === 'affiliate') && l.op === 'findUnique'));
+    ok('the service limit is still 10,000 (ANCESTRY_MAX)', S.RECRUITER_AFFILIATE_LIMITS?.ANCESTRY_MAX === 10000, String(S.RECRUITER_AFFILIATE_LIMITS?.ANCESTRY_MAX));
+  }
+
+  // Statement count of one creation: independent of the parent's depth (was + 2 per ancestor).
+  {
+    const E = setup();
+    const callsOf = (from) => E.db._log.slice(from).filter((l) => l.model !== '$transaction');
+    const m0 = E.db._log.length;
+    const root = await post(E, E.A, mk());
+    const rootCount = callsOf(m0).length;
+    const per = {};
+    for (const d of [1, 2, 10, 300]) {
+      let prev = null;
+      for (let i = 0; i < d; i++) { const a = E.db._seed.affiliate({ username: `dep${d}.${i}`, name: `D${i}`, parentId: prev }); E.db._seed.link({ affiliateId: a.id, recruiterId: E.A.id }); prev = a.id; }
+      const m = E.db._log.length;
+      const r = await post(E, E.A, mk({ parentId: prev }));
+      const q = callsOf(m);
+      per[d] = { status: r.status, n: q.length, anc: q.filter((l) => l.model === '$queryRaw' && /recruiter-ancestry/.test(l.sql)).length };
+    }
+    ok(`through the route, a creation under a parent at depth 1 / 2 / 10 / 300 makes the same number of database calls, ONE of them the ancestry statement (${big({ rootCount, per })})`,
+      root.status === 201 && Object.values(per).every((p) => p.status === 201 && p.n === per[1].n && p.anc === 1), big({ rootCount, per }));
+    // Service level, same harness for both implementations: the former loop made 2 calls per
+    // ancestor; the new service makes the former depth-1 count minus 2 at EVERY depth (Part 5c: − 1;
+    // Stage E: − 1 more — the parent passed the check, so its id is shown without re-reading its link).
+    const svcCount = async (create, d) => {
+      const db = makeRecruiterFakeDb({ phase3: true });
+      const A = db._seed.recruiter({ username: 'cnt.a', name: 'Recruteur A' });
+      let prev = null;
+      for (let i = 0; i < d; i++) { const a = db._seed.affiliate({ username: `cnt${d}.${i}`, name: `C${i}`, parentId: prev }); db._seed.link({ affiliateId: a.id, recruiterId: A.id }); prev = a.id; }
+      const m = db._log.length;
+      await create(A.id, mk({ parentId: prev }), { db, now: now() });
+      return db._log.slice(m).filter((l) => l.model !== '$transaction').length;
+    };
+    const newPer = {};
+    for (const d of [1, 2, 10, 300]) newPer[d] = await svcCount(S.recruiterCreateAffiliate, d);
+    if (OLD) {
+      const oldPer = {};
+      for (const d of [1, 2, 10]) oldPer[d] = await svcCount(OLD.recruiterCreateAffiliate, d);
+      ok(`service calls per creation — former loop ${big(oldPer)} (+ 2 per ancestor), new ${big(newPer)} (constant = former depth-1 count − 2)`,
+        oldPer[2] - oldPer[1] === 2 && oldPer[10] - oldPer[1] === 18 && Object.values(newPer).every((n) => n === oldPer[1] - 2), big({ oldPer, newPer }));
+    } else ok('service calls per creation are independent of the depth', Object.values(newPer).every((n) => n === newPer[1]), big(newPer));
+  }
+
+  // Order and transaction: the ancestry statement runs inside the creation transaction, after the
+  // recruiter row lock (held at that moment by that same open transaction), before any write.
+  {
+    const E = setup();
+    const c = chain(3);
+    c.forEach((a, i) => { E.db._seed.affiliate({ id: a.id, username: `ord.${i}`, name: `O${i}`, parentId: a.parentId }); E.db._seed.link({ affiliateId: a.id, recruiterId: E.A.id }); });
+    let atStmt = null;
+    E.hookBox.fn = (m, o, a) => {
+      if (m === '$queryRaw' && /recruiter-ancestry/.test(a?.sql ?? '')) {
+        const l = E.db._locks.get(E.A.id);
+        atStmt = { open: [...E.db._openTx], lockTx: l?.tx ?? null, values: a.values };
+      }
+    };
+    const m = E.db._log.length;
+    const r = await post(E, E.A, mk({ parentId: bottom(c) }));
+    E.hookBox.fn = null;
+    const log = E.db._log.slice(m);
+    const iBegin = log.findIndex((l) => l.model === '$transaction');
+    const iLock = log.findIndex((l) => l.model === '$queryRaw' && /FOR NO KEY UPDATE/.test(l.sql));
+    const iAnc = log.findIndex((l) => l.model === '$queryRaw' && /recruiter-ancestry/.test(l.sql));
+    const iWrite = log.findIndex((l) => /create|update|delete|upsert/.test(l.op));
+    ok('one transaction; order: begin → recruiter row lock → … → the ancestry statement → the first write',
+      r.status === 201 && log.filter((l) => l.model === '$transaction').length === 1 && iBegin >= 0 && iBegin < iLock && iLock < iAnc && iAnc < iWrite, big({ iBegin, iLock, iAnc, iWrite }));
+    ok('while the ancestry statement runs, exactly one transaction is open and it holds recruiter A\'s row lock; binds = [parentId, 10001, parentId, A, A] (Stage F)',
+      atStmt && atStmt.open.length === 1 && atStmt.lockTx === atStmt.open[0] && eq(atStmt.values, [bottom(c), 10001, bottom(c), E.A.id, E.A.id]), big(atStmt));
+
+    // The fake's own guards for this statement (the emulation is strict, not permissive).
+    const sql = log[iAnc].sql;
+    const strings = sql.split('$?');
+    const vals = [bottom(c), 10001, bottom(c), E.A.id, E.A.id]; // Stage F
+    const tryRaw = async (fn) => { try { return { rows: await fn() }; } catch (e) { return { err: errText(e) }; } };
+    const outside = await tryRaw(() => E.db.$queryRaw(strings, ...vals));
+    const noLock = await tryRaw(() => E.db.$transaction((tx) => tx.$queryRaw(strings, ...vals)));
+    const locked = await tryRaw(() => E.db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "isActive", "canCreateAffiliates" FROM "recruiters" WHERE "id" = ${E.A.id} FOR NO KEY UPDATE`;
+      return tx.$queryRaw(strings, ...vals);
+    }));
+    const lockedB = await tryRaw(() => E.db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "isActive", "canCreateAffiliates" FROM "recruiters" WHERE "id" = ${E.B.id} FOR NO KEY UPDATE`;
+      return tx.$queryRaw(strings, ...vals);
+    }));
+    const inLock = (s, v) => tryRaw(() => E.db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "isActive", "canCreateAffiliates" FROM "recruiters" WHERE "id" = ${E.A.id} FOR NO KEY UPDATE`;
+      return tx.$queryRaw(s, ...v);
+    }));
+    const drift = await inLock([strings[0].replace('WITH RECURSIVE', 'WITH RECURSIVE /* x */'), ...strings.slice(1)], vals);
+    const badCap = await inLock(strings, [bottom(c), 10000, bottom(c), E.A.id, E.A.id]);
+    const nullParent = await inLock(strings, [null, 10001, null, E.A.id, E.A.id]);
+    const otherRid = await inLock(strings, [bottom(c), 10001, bottom(c), E.B.id, E.B.id]); // B's lock is not held
+    const ghost = randomUUID();
+    const none = await inLock(strings, [ghost, 10001, ghost, E.A.id, E.A.id]);
+    ok('fake: the ancestry statement is refused outside a transaction, and inside one that does not hold THIS recruiter\'s row lock',
+      /inside the creation transaction/.test(outside.err ?? '') && /holds the recruiter row lock/.test(noLock.err ?? '') && /holds the recruiter row lock/.test(lockedB.err ?? ''), big({ outside, noLock, lockedB }));
+    // Stage F: the walk goes to the top: n = 3 (the whole chain), mine = its owner is A.
+    ok('fake: under the lock it answers ONE row { n, mine } — the 3-level linked chain → { n: 3, mine: true } (Stage F: the whole chain)',
+      eq(locked.rows, [{ n: 3, mine: true }]), big(locked));
+    ok('fake: no start row → { n: 0, mine: null } (count over nothing, no link)', eq(none.rows, [{ n: 0, mine: null }]), big(none));
+    ok('fake: drift guard (added text), cap ≠ 10001, a NULL parent id and a recruiter whose row lock is not held are all refused',
+      /recruiter-ancestry query changed/.test(drift.err ?? '') && /cap must be/.test(badCap.err ?? '') && /parent id as text/.test(nullParent.err ?? '') && /holds the recruiter row lock/.test(otherRid.err ?? ''),
+      big({ drift, badCap, nullParent, otherRid }));
+    // Emulation semantics on hand data (Stage F): the walk goes to the top (UNION: a cycle ends after one lap);
+    // mine = owner(parent) is A — the topmost link (another recruiter's → false), a cycle's one recruiter, NULL
+    // without any link; a '' parent ends the walk.
+    const E2 = setup();
+    const x = E2.db._seed.affiliate({ username: 'em.x', name: 'X' }); const y = E2.db._seed.affiliate({ username: 'em.y', name: 'Y', parentId: x.id });
+    E2.db._tables.affiliate.find((a) => a.id === x.id).parentId = y.id;
+    E2.db._seed.link({ affiliateId: x.id, recruiterId: E2.A.id }); E2.db._seed.link({ affiliateId: y.id, recruiterId: E2.A.id });
+    const f = E2.db._seed.affiliate({ username: 'em.f', name: 'F' }); E2.db._seed.link({ affiliateId: f.id, recruiterId: E2.B.id });
+    const g = E2.db._seed.affiliate({ username: 'em.g', name: 'G', parentId: f.id }); E2.db._seed.link({ affiliateId: g.id, recruiterId: E2.A.id });
+    const e = E2.db._seed.affiliate({ username: 'em.e', name: 'E', parentId: '' });
+    const h = E2.db._seed.affiliate({ username: 'em.h', name: 'H', parentId: f.id });                 // unlinked under B's f
+    const u = E2.db._seed.affiliate({ username: 'em.u', name: 'U' }); const v = E2.db._seed.affiliate({ username: 'em.v', name: 'V', parentId: u.id });
+    E2.db._tables.affiliate.find((a) => a.id === u.id).parentId = v.id;                              // unlinked u ⇄ v
+    const q2 = (pid) => tryRaw(() => E2.db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "isActive", "canCreateAffiliates" FROM "recruiters" WHERE "id" = ${E2.A.id} FOR NO KEY UPDATE`;
+      return tx.$queryRaw(strings, pid, 10001, pid, E2.A.id, E2.A.id);
+    }));
+    const [rc, rg, rh, ruv, re] = [await q2(x.id), await q2(g.id), await q2(h.id), await q2(u.id), await q2(e.id)];
+    ok("fake (Stage F): a member of an all-A cycle → n = 2, mine true; A's legacy g under B's f → n = 2, mine false (topmost f is B's); an unlinked node under B's → n = 2, mine false; an unlinked 2-cycle → n = 2, mine null; an unlinked '' parent → n = 1, mine null",
+      eq(rc.rows, [{ n: 2, mine: true }]) && eq(rg.rows, [{ n: 2, mine: false }]) && eq(rh.rows, [{ n: 2, mine: false }]) && eq(ruv.rows, [{ n: 2, mine: null }]) && eq(re.rows, [{ n: 1, mine: null }]),
+      big({ rc, rg, rh, ruv, re }));
+  }
+
+  // The error code and its HTTP mapping are unchanged.
+  const gitQ = (args) => { try { return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) { return `git error ${e.status}`; } };
+  // Phase 7 (Reward B): recruiterVisibility.js may differ from HEAD ONLY by added lines inside
+  // toRecruiterRewardHistoryView (the GROUP_REWARD / GROUP_REVERSAL branch) — nothing removed.
+  // Phase 7 Stage B (documented): + added lines inside the downline-progress helpers, the node view, the
+  // affiliate list item / progress summary projections, and ONE replaced line (the path view gains linkedToMe).
+  const visDiff = gitQ(['diff', '--unified=0', 'HEAD', '--', 'src/lib/recruiterVisibility.js']);
+  const visOnlyAllowed = (() => {
+    const lines = visDiff.split('\n').filter((l) => /^[-+]/.test(l) && !/^(\+\+\+|---) /.test(l));
+    if (!lines.length) return true;
+    const removed = lines.filter((l) => l[0] === '-');
+    // Stage E (documented): + the two doc-comment lines of toRecruiterNetworkAffiliateView (networkIds = the
+    // members of N(R), no longer "ids linked to this recruiter"), rewritten inside that comment.
+    if (!eq(removed, ["- * verification or any amount. `networkIds` = ids linked to this recruiter: a parentId outside",
+      "- * it is never shown (null). Filtering rows by recruiter is the caller's job.",
+      "-  return { id: str(entry?.id), username: str(entry?.username), name: str(entry?.name), level: level(entry?.level) };"])) return false;
+    const cur = read('src/lib/recruiterVisibility.js');
+    const region = (a, b) => { const i = cur.indexOf(a); const j = i >= 0 ? cur.indexOf(b, i + a.length) : -1; return i >= 0 && j > i ? cur.slice(i, j) : ''; };
+    const regions = [
+      region('export function toRecruiterRewardHistoryView(row) {', '\n}\n'),
+      region('// ── Phase 7 Stage B → E: network progress', '/**\n * Recruiter-facing node of their network tree'),
+      region('export function toRecruiterNetworkNodeView(node) {', '\n}\n'),
+      region('export function toRecruiterNetworkPathView(entry) {', '\n}\n'),
+      region('/**\n * Phase 7 Stage B → E: one affiliate of the recruiter', "// ── Phase 5: the recruiter's own rewards"),
+      region('/**\n * Recruiter-facing view of an affiliate of THEIR OWN network', 'export function toRecruiterNetworkAffiliateView(row, networkIds) {'),
+    ];
+    return /GROUP_REWARD/.test(regions[0]) && regions.every((r) => r.length > 0)
+      && lines.filter((l) => l[0] === '+').every((l) => regions.some((r) => r.includes(l.slice(1))));
+  })();
+  // Phase 7 Stage B (documented): recruiterAffiliateRouteHandlers.js changes ONLY its list handler (GET): the
+  // createAffiliate handler is byte-identical to HEAD; recruiterRouteHandlers.js is unchanged.
+  const createBody = (src) => { const i = src.indexOf('    createAffiliate: safe('); return i >= 0 ? src.slice(i) : null; };
+  const headHandlers = gitQ(['show', 'HEAD:src/lib/recruiterAffiliateRouteHandlers.js']);
+  ok('PARENT_NOT_IN_NETWORK → 400 in the route mapping; recruiterRouteHandlers.js unchanged versus HEAD; the createAffiliate handler unchanged (Stage B changes the list handler only); visibility: only the Phase 7 group-history branch and the Stage B downline projections added',
+    /PARENT_NOT_IN_NETWORK: 400/.test(read('src/lib/recruiterRouteHandlers.js'))
+    && gitQ(['diff', '--name-only', 'HEAD', '--', 'src/lib/recruiterRouteHandlers.js']).trim() === ''
+    && createBody(headHandlers) !== null && createBody(headHandlers) === createBody(read('src/lib/recruiterAffiliateRouteHandlers.js')) && visOnlyAllowed, visDiff.slice(0, 300));
+  ok('every refusal of the new check is PARENT_NOT_IN_NETWORK (one throw site in assertAncestryInNetwork; Stage E: the verdict comes from parentInNetwork)', (() => {
+    const s = stripJs(read(SVC));
+    const fn = s.slice(s.indexOf('async function assertAncestryInNetwork('), s.indexOf('export async function recruiterCreateAffiliate'));
+    return (fn.match(/throw /g) || []).length === 1 && /throw fail\('PARENT_NOT_IN_NETWORK'\)/.test(fn);
+  })());
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
