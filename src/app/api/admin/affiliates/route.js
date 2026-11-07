@@ -13,7 +13,7 @@ import {
   adminDeleteAffiliate,
 } from '@/lib/services/affiliateSystemService';
 import { withAdminAuth } from '@/lib/middleware/withAdminAuth';
-import { AFFILIATE_HAS_HISTORY } from '@/lib/affiliateDeletion';
+import { AFFILIATE_HAS_CHILDREN, AFFILIATE_HAS_HISTORY } from '@/lib/affiliateDeletion';
 
 async function getHandler() {
   try {
@@ -81,8 +81,8 @@ async function deleteHandler(req) {
 
     return Response.json({ ok: true, id: affiliateId });
   } catch (err) {
-    // Referenced by points/orders/payouts → clear 409, never the raw DB error.
-    if (err?.code === AFFILIATE_HAS_HISTORY) {
+    // Referenced by points/orders/payouts, or (Phase 7 Stage F) still has children → clear 409, never the raw DB error.
+    if (err?.code === AFFILIATE_HAS_HISTORY || err?.code === AFFILIATE_HAS_CHILDREN) {
       return Response.json({ error: err.message, code: err.code }, { status: 409 });
     }
     console.error('Admin affiliates DELETE error:', err);

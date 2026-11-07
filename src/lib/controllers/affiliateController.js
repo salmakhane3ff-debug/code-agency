@@ -20,7 +20,7 @@ import {
   getAffiliateStats,
 } from '../services/affiliateService.js';
 import { badRequest, notFound, serverError } from '../utils/apiResponse.js';
-import { AFFILIATE_HAS_HISTORY } from '../affiliateDeletion.js';
+import { AFFILIATE_HAS_CHILDREN, AFFILIATE_HAS_HISTORY } from '../affiliateDeletion.js';
 
 // ── GET /api/affiliate ────────────────────────────────────────────────────────
 
@@ -102,7 +102,8 @@ export async function deleteAffiliateHandler(req) {
 
     return Response.json({ message: 'Affiliate deleted', _id: affiliateId });
   } catch (err) {
-    if (err?.code === AFFILIATE_HAS_HISTORY) {
+    // Phase 7 Stage F: an affiliate with children is refused the same way (409 + message).
+    if (err?.code === AFFILIATE_HAS_HISTORY || err?.code === AFFILIATE_HAS_CHILDREN) {
       return Response.json({ error: err.message, code: err.code }, { status: 409 });
     }
     console.error('Affiliate DELETE error:', err);
