@@ -738,8 +738,10 @@ console.log('\n4. Regression and scope');
   const prismaNew = git(['ls-files', '--others', '--exclude-standard', '--', 'prisma']).split('\n').filter(Boolean);
   // Phase 7 (Reward B — the recruiter group reward, approved): exactly schema.prisma (pinned in recruiterSchema /
   // recruiterAffiliates / recruiterWithdrawalProtection) and the one new migration 20261112; Part 4 itself changed none.
+  // Committed or not: changed-since-base and untracked files are counted together (same answer before and after commit).
+  const prismaAll = [...new Set([...prismaChanged, ...prismaNew])].sort();
   ok('no schema or migration change in Part 4 (the permission columns already exist); since then only the Phase 7 schema fields + migration 20261112',
-    eq(prismaChanged, ['prisma/schema.prisma']) && eq(prismaNew, ['prisma/migrations/20261112_recruiter_group_rewards/migration.sql']), big({ prismaChanged, prismaNew }));
+    eq(prismaAll, ['prisma/migrations/20261112_recruiter_group_rewards/migration.sql', 'prisma/schema.prisma']), big({ prismaChanged, prismaNew }));
   const changed = git(['diff', '--name-only', PART4_BASE, '--', 'src']).split('\n').filter(Boolean);
   const untracked = git(['ls-files', '--others', '--exclude-standard', '--', 'src']).split('\n').filter(Boolean);
   const allSrc = [...new Set([...changed, ...untracked])].sort();
@@ -940,8 +942,14 @@ console.log('\n4. Regression and scope');
     && ['data-field="groupEnabled"', 'data-field="groupRewardAmountMad"', 'data-field="groupSize"', 'data-field="groupMinDeliveredSales"'].every((x) => pd.add.some((l) => l.includes(x)))
     && pd.add.some((l) => l === 'const reconcileBatches = async (startCursor = null, start = null) => {') && pd.add.some((l) => /JSON\.stringify\(\{ action: "reconcile", \.\.\.\(cursor \? \{ cursor \} : \{\}\) \}\)/.test(l))
     && pd.add.some((l) => l === 'if (!r.hasMore || !r.cursor || r.cursor === cursor) return total;'), big(pd));
-  const dirs = git(['diff', '--name-only', PART4_BASE, '--', 'src/app/api/affiliate', 'src/app/api/admin/identity', 'src/app/api/recruiter', 'src/lib/middleware']).split('\n').filter(Boolean);
-  ok('no file changed under the affiliate API, the admin identity API, the recruiter API or the middleware', dirs.length === 0, dirs.join(','));
+  // Committed or not (changed-since-base + untracked): the only addition is the approved Phase 7 progress route.
+  const guardedDirs = ['src/app/api/affiliate', 'src/app/api/admin/identity', 'src/app/api/recruiter', 'src/lib/middleware'];
+  const dirs = [...new Set([
+    ...git(['diff', '--name-only', PART4_BASE, '--', ...guardedDirs]).split('\n').filter(Boolean),
+    ...git(['ls-files', '--others', '--exclude-standard', '--', ...guardedDirs]).split('\n').filter(Boolean),
+  ])].sort();
+  ok('no file changed under the affiliate API, the admin identity API, the recruiter API or the middleware (only the new Phase 7 route src/app/api/recruiter/progress/route.js)',
+    eq(dirs, ['src/app/api/recruiter/progress/route.js']), dirs.join(','));
   ok('the creation permission check stays in the service under the row lock, before the replay lookup (unchanged order)', (() => {
     const s = stripJs(read('src/lib/services/recruiterAffiliateService.js'));
     const lock = s.indexOf('SELECT "isActive", "canCreateAffiliates" FROM "recruiters" WHERE "id" = ${recruiterId} FOR NO KEY UPDATE');
