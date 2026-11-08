@@ -1338,6 +1338,18 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
       ],
       run: networkChildrenPage,
     },
+    // Simplified dashboard (affiliate details view): ONE placed node's own card — the page / t / counts walk of
+    // the children page seeded with that node only (cap like the SQL); no row when the id does not exist.
+    'recruiter-network-node': {
+      roles: [['id', 'WHERE a."id" = ', '::text ), t AS'], F_TCAP, ['rid', 'x."recruiterId" = ', '::text) AS mine']],
+      fragments: [
+        'WITH RECURSIVE page AS ( SELECT a."id", a."username", a."name", a."isActive", a."createdAt" FROM "affiliates" a WHERE a."id" = $?::text ),',
+        ...F_PAGE_COUNTS,
+        'SELECT p."id", p."username", p."name", p."isActive", EXISTS (SELECT 1 FROM "recruiter_affiliate_links" x WHERE x."affiliateId" = p."id" AND x."recruiterId" = $?::text) AS mine, n.children, n.descendants',
+        'FROM page p LEFT JOIN counts n ON n.seed = p."id"',
+      ],
+      run: networkNodeCard,
+    },
     'recruiter-network-unplaced': {
       roles: [...F_ROOTS_ROLES, ...F_NET_ROLES(), ...F_CYC_ROLES(), ...F_LIMIT_ROLES],
       fragments: [
@@ -1603,6 +1615,15 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
   function networkChildrenPage({ scope, rid, size, start, cap }) {
     const M = fModel();
     return pageWithCounts(M, M.children(scope), start, size, cap, (p) => ({ mine: !!p && M.linkOf.get(p.id) === rid }));
+  }
+
+  // page: the affiliate whose id = $id (none → no row at all: no "(SELECT 1) one" here); t / counts as in the
+  // paged statements; mine = a link row to $r.
+  function networkNodeCard({ id, rid, cap }) {
+    const M = fModel();
+    const a = M.byId.get(id);
+    if (!a) return [];
+    return pageWithCounts(M, [a], 0, 1, cap, (p) => ({ mine: !!p && M.linkOf.get(p.id) === rid })).map(({ total: _total, ...r }) => r);
   }
 
   // un: the link rows JOIN cseed (by affiliateId), as (affiliateId, link createdAt); page: ORDER BY

@@ -9,9 +9,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { BarChart3, GitBranch, ListChecks, Network, RefreshCw } from "lucide-react";
+import { BarChart3, Network, RefreshCw, Users } from "lucide-react";
 import { toRecruiterError } from "@/lib/recruiterVisibility";
-import { CenteredNotice, PageHeader, Tabs } from "../_components/ui";
+import { CenteredNotice, PageHeader, ui } from "../_components/ui";
 import { recruiterErrorLabel } from "../errorLabels";
 import { NETWORK_INVITED_HINT, authAction, nodeBadges, permsFromMe, progressDisplay } from "../recruiterUiState";
 
@@ -89,24 +89,15 @@ export function PageNotice({ text }) {
   return <CenteredNotice hook="data-page-notice">{text}</CenteredNotice>;
 }
 
-const HEADER = {
-  tree: { Icon: Network, subtitle: "كل الأفلييت في شبكتك، فرعاً بفرع، مع حالتهم وتقدّمهم." },
-  stats: { Icon: BarChart3, subtitle: "أرقام شبكتك الحقيقية: الأعضاء، التحقق من البطاقة والطلبات، حسب المستوى." },
-};
-
-/** Page header (PageHeader of the app shell): back to the dashboard + switch between the tree, the statistics and the list. */
+/**
+ * Page header (PageHeader of the app shell): back to the dashboard + one link to the affiliates list
+ * (the tree view now lives there: /recruiter/affiliates?id=<root>).
+ */
 export function NetworkHeader({ title, current, root }) {
-  const q = root ? `?root=${encodeURIComponent(root)}` : "";
-  const head = HEADER[current] ?? HEADER.tree;
-  const tab = (key, href, label, Icon) => ({ key, href, label, Icon, attrs: { "data-tab": key, "aria-label": label, title: label } });
+  const href = root ? `/recruiter/affiliates?id=${encodeURIComponent(root)}` : "/recruiter/affiliates";
   return (
-    <PageHeader Icon={head.Icon} title={title} subtitle={head.subtitle}>
-      <Tabs label="أقسام الشبكة" current={current} items={[
-        tab("tree", `/recruiter/network${q}`, "الشجرة", GitBranch),
-        tab("stats", `/recruiter/network/stats${q}`, "الإحصائيات", BarChart3),
-        tab("list", "/recruiter/affiliates", "القائمة", ListChecks),
-      ]} />
-    </PageHeader>
+    <PageHeader Icon={current === "stats" ? BarChart3 : Network} title={title}
+      actions={<Link href={href} className={ui.btnSecondary} data-affiliates-link><Users className="w-4 h-4" aria-hidden="true" />عرض الأفلييت</Link>} />
   );
 }
 
@@ -115,13 +106,13 @@ export function Breadcrumb({ path, base }) {
   return (
     <nav aria-label="مسار الشبكة" data-breadcrumb className="text-sm min-w-0 max-w-full">
       <ol className="flex flex-wrap items-center gap-x-1.5 gap-y-1 min-w-0">
-        <li><Link href={base} className="inline-flex items-center min-h-11 font-bold text-violet-700 hover:underline" data-breadcrumb-home>شبكتي</Link></li>
+        <li><Link href={base} className="inline-flex items-center min-h-11 font-semibold text-violet-600 hover:underline" data-breadcrumb-home>شبكتي</Link></li>
         {path.map((p, i) => (
           <li key={p.id ?? i} className="flex items-center gap-1.5 min-w-0">
-            <span className="text-violet-300" aria-hidden="true">‹</span>
+            <span className="text-gray-300" aria-hidden="true">‹</span>
             {i === path.length - 1
-              ? <span className="font-bold text-slate-900 truncate max-w-[12rem]" aria-current="page">{p.name || p.username || "—"}</span>
-              : <Link href={`${base}?root=${encodeURIComponent(p.id)}`} className="block py-2.5 font-semibold text-violet-700 hover:underline truncate max-w-[10rem]" data-breadcrumb-item>{p.name || p.username || "—"}</Link>}
+              ? <span className="font-bold text-gray-900 truncate max-w-[12rem]" aria-current="page">{p.name || p.username || "—"}</span>
+              : <Link href={`${base}?root=${encodeURIComponent(p.id)}`} className="block py-2.5 font-semibold text-violet-600 hover:underline truncate max-w-[10rem]" data-breadcrumb-item>{p.name || p.username || "—"}</Link>}
           </li>
         ))}
       </ol>
@@ -131,12 +122,12 @@ export function Breadcrumb({ path, base }) {
 
 export function Chip({ tone = "slate", children, ...rest }) {
   const tones = {
-    green: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    red: "bg-red-50 text-red-700 border-red-200",
-    amber: "bg-amber-50 text-amber-800 border-amber-200",
-    slate: "bg-slate-50 text-slate-600 border-slate-200",
-    violet: "bg-violet-50 text-violet-700 border-violet-200",
-    sky: "bg-sky-50 text-sky-700 border-sky-200",
+    green: "bg-green-50 text-green-700 border-green-100",
+    red: "bg-red-50 text-red-600 border-red-100",
+    amber: "bg-amber-50 text-amber-700 border-amber-100",
+    slate: "bg-gray-100 text-gray-600 border-gray-200",
+    violet: "bg-violet-50 text-violet-600 border-violet-100",
+    sky: "bg-blue-50 text-blue-600 border-blue-100",
   };
   return <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-bold whitespace-nowrap ${tones[tone] ?? tones.slate}`} {...rest}>{children}</span>;
 }
@@ -145,11 +136,11 @@ export const identityTone = (s) => (s === "APPROVED" ? "green" : s === "PENDING"
 
 export function ErrorBox({ code, onRetry }) {
   return (
-    <div role="alert" data-error className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3">
+    <div role="alert" data-error className="rounded-xl border border-red-100 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3">
       <span className="min-w-0">{code === "NOT_FOUND" ? recruiterErrorLabel("NOT_FOUND") : recruiterErrorLabel(code)}</span>
       {onRetry && code !== "NOT_FOUND" && (
         <button type="button" onClick={onRetry} data-retry
-          className="shrink-0 inline-flex items-center gap-1.5 min-h-11 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100">
+          className="shrink-0 inline-flex items-center gap-1.5 min-h-10 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100">
           <RefreshCw className="w-4 h-4" aria-hidden="true" /> إعادة المحاولة
         </button>
       )}
@@ -158,22 +149,22 @@ export function ErrorBox({ code, onRetry }) {
 }
 
 export const Loading = ({ label = "جارٍ التحميل…" }) => (
-  <p className="flex items-center gap-2 text-sm text-slate-500 py-3" aria-live="polite" data-loading>
+  <p className="flex items-center gap-2 text-sm text-gray-500 py-3" aria-live="polite" data-loading>
     <span className="w-2 h-2 rounded-full bg-violet-400 animate-pulse" aria-hidden="true" />
     {label}
   </p>
 );
 
 /**
- * One figure of the network pages as a <dt>/<dd> pair (inside a <dl>), styled like the shell's StatTile;
- * `attrs` (data-* hooks) stay on the value (<dd>). Tones: violet (default), green (success), amber (warning).
+ * One figure of the network pages as a <dt>/<dd> pair (inside a <dl>), the shell's StatTile look;
+ * `attrs` (data-* hooks) stay on the value (<dd>). Tones: violet / slate (neutral gray, default look), green, amber.
  */
 export function FigureTile({ label, value, attrs = {}, tone = "violet" }) {
-  const bg = { violet: "bg-violet-50/70", green: "bg-emerald-50/70", amber: "bg-amber-50/80", slate: "bg-slate-50" }[tone] ?? "bg-violet-50/70";
+  const bg = { green: "bg-green-50", amber: "bg-amber-50" }[tone] ?? "bg-gray-50";
   return (
-    <div className={`rounded-2xl ${bg} border border-white px-4 py-3 min-w-0`}>
-      <dt className="text-xs font-semibold text-slate-500 leading-tight">{label}</dt>
-      <dd className="mt-1 text-xl font-extrabold text-slate-900 break-words" {...attrs}>{fmt(value)}</dd>
+    <div className={`rounded-xl ${bg} px-3.5 py-3 min-w-0`}>
+      <dt className="text-xs text-gray-500 leading-tight">{label}</dt>
+      <dd className="mt-1 text-lg font-bold text-gray-900 leading-none break-words" {...attrs}>{fmt(value)}</dd>
     </div>
   );
 }
@@ -182,7 +173,7 @@ export function FigureTile({ label, value, attrs = {}, tone = "violet" }) {
 export const ORDERS_HIDDEN_TEXT = "عرض أرقام الطلبات معطّل لحسابك من طرف الإدارة. باقي معلومات الشبكة تبقى متاحة.";
 export function OrdersHidden() {
   return (
-    <p className="text-xs leading-relaxed text-slate-700 bg-violet-50/50 border border-violet-100 rounded-2xl px-3.5 py-2.5" data-orders-hidden>{ORDERS_HIDDEN_TEXT}</p>
+    <p className={`${ui.panel} px-3.5 py-2.5 text-xs leading-relaxed text-gray-600`} data-orders-hidden>{ORDERS_HIDDEN_TEXT}</p>
   );
 }
 
@@ -196,13 +187,13 @@ export function ProgressBar({ progress }) {
   return (
     <div className="min-w-0 space-y-1" data-progress={p.threshold ? `${p.delivered}/${p.threshold}` : `${p.delivered}`}>
       <div className="flex items-center justify-between gap-2 text-[11px]">
-        <span className="text-slate-500">المبيعات الحقيقية المسلّمة</span>
-        <span className={`font-bold ${p.reached ? "text-emerald-700" : "text-slate-700"}`} data-progress-text><bdi dir="ltr">{p.ratio}</bdi> مبيعات</span>
+        <span className="text-gray-500">المبيعات الحقيقية المسلّمة</span>
+        <span className={`font-bold ${p.reached ? "text-green-700" : "text-gray-700"}`} data-progress-text><bdi dir="ltr">{p.ratio}</bdi> مبيعات</span>
       </div>
       {p.threshold && (
-        <div className="h-1.5 w-full rounded-full bg-violet-100 overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={p.threshold}
+        <div className="h-1.5 w-full rounded-full bg-gray-100 overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={p.threshold}
           aria-valuenow={Math.min(p.delivered, p.threshold)} aria-label="التقدّم نحو المكافأة">
-          <div className={`h-full rounded-full ${p.reached ? "bg-emerald-500" : "bg-gradient-to-l from-violet-500 to-indigo-500"}`} style={{ width: `${p.pct}%` }} />
+          <div className={`h-full rounded-full ${p.reached ? "bg-green-500" : "bg-violet-500"}`} style={{ width: `${p.pct}%` }} />
         </div>
       )}
     </div>

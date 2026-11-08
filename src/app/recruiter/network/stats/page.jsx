@@ -25,17 +25,10 @@ import {
   OrdersHidden, fmt, getJson, handleAuth, useRecruiterPerms,
 } from "../networkUi";
 import { createRequestGate, levelLabel } from "../../recruiterUiState";
-import { Card, CardTitle, EmptyState, LoadingBlock, ui } from "../../_components/ui";
+import { Card, EmptyState, LoadingBlock, Section, ui } from "../../_components/ui";
 
-/** One card of the page (shell Card + CardTitle with a lucide icon). */
-function Section({ title, Icon, children, ...rest }) {
-  return (
-    <Card className={`${ui.cardPad} space-y-4`} {...rest}>
-      <CardTitle Icon={Icon} title={title} />
-      {children}
-    </Card>
-  );
-}
+/** Body of a section (the kit's Section: white card + light title strip). */
+const BODY = "p-4 sm:p-5 space-y-4";
 
 function NetworkStats() {
   const router = useRouter();
@@ -69,7 +62,7 @@ function NetworkStats() {
   const title = root ? `إحصائيات شبكة ${current?.name || current?.username || "الأفلييت"}` : "إحصائيات شبكتي";
   const t = stats?.totals;
   return (
-    <div className="space-y-5 sm:space-y-6 min-w-0 [contain:inline-size]" data-recruiter-network-stats>
+    <div className="space-y-5 min-w-0 [contain:inline-size]" data-recruiter-network-stats>
       <NetworkHeader title={title} current="stats" root={root} />
       {root && (
         <div className={`${ui.card} px-4 sm:px-5 py-1 flex flex-wrap items-center justify-between gap-x-4`}>
@@ -89,8 +82,8 @@ function NetworkStats() {
         </Card>
       ) : (
         <>
-          <Section title="المجموع" Icon={Users} data-totals>
-            <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
+          <Section title="المجموع" Icon={Users} data-totals bodyClass={BODY}>
+            <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
               <FigureTile label="عدد الأفلييت" value={t.affiliates} attrs={{ "data-stats-total": "" }} />
               <FigureTile label={root ? "المباشرون تحت هذا الحساب" : "الأفلييت الرئيسيون (المستوى 1)"} value={t.direct} attrs={{ "data-stats-direct": "" }} />
               <FigureTile label="أعمق مستوى" value={t.maxLevel} attrs={{ "data-stats-max-level": "" }} />
@@ -100,23 +93,23 @@ function NetworkStats() {
             </dl>
           </Section>
 
-          <Section title="التحقق من البطاقة الوطنية" Icon={ShieldCheck} data-identity>
-            <dl className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
+          <Section title="التحقق من البطاقة الوطنية" Icon={ShieldCheck} data-identity bodyClass={BODY}>
+            <dl className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               {IDENTITY_KEYS.map((k) => <FigureTile key={k} label={IDENTITY_LABEL[k]} value={stats.identity[k]} attrs={{ "data-identity-count": k }}
                 tone={k === "APPROVED" ? "green" : k === "PENDING" ? "amber" : "slate"} />)}
             </dl>
           </Section>
 
           {!stats.orders ? (
-            <Section title="تتبّع الطلبات" Icon={Package} data-orders>
+            <Section title="تتبّع الطلبات" Icon={Package} data-orders bodyClass={BODY}>
               <OrdersHidden />
             </Section>
           ) : (
-          <Section title="تتبّع الطلبات" Icon={Package} data-orders>
-            <p className="text-xs leading-relaxed text-violet-800 bg-violet-50 border border-violet-200 rounded-2xl px-3.5 py-2.5" data-fake-note>
+          <Section title="تتبّع الطلبات" Icon={Package} data-orders bodyClass={BODY}>
+            <p className={`${ui.panel} px-3.5 py-2.5 text-xs leading-relaxed text-gray-600`} data-fake-note>
               الطلبات التجريبية تظهر منفصلة ولا تُحتسب أبداً ضمن الطلبات الحقيقية المسلّمة.
             </p>
-            <dl className="grid grid-cols-2 gap-2 sm:gap-3">
+            <dl className="grid grid-cols-2 gap-2.5">
               <FigureTile label="طلبات حقيقية مسلّمة" value={stats.orders.real.delivered} tone="green" attrs={{ "data-real-delivered": "" }} />
               <FigureTile label="طلبات حقيقية غير مسلّمة" value={stats.orders.real.total - stats.orders.real.delivered} tone="slate" attrs={{ "data-real-not-delivered": "" }} />
             </dl>
@@ -129,18 +122,18 @@ function NetworkStats() {
                     <th scope="col" className={ui.th}>{FAKE_LABEL}</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-violet-50">
+                <tbody className="divide-y divide-gray-100">
                   {ORDER_KEYS.map((k) => (
                     <tr key={k} data-order-row={k}>
                       <th scope="row" className={`${ui.td} text-start font-normal whitespace-nowrap`}>{ORDER_LABEL[k]}</th>
-                      <td className={`${ui.td} font-semibold ${k === "delivered" ? "text-emerald-700" : ""}`} data-real={k}>{fmt(stats.orders.real[k])}</td>
-                      <td className={`${ui.td} text-violet-700`} data-fake={k}>{fmt(stats.orders.fake[k])}</td>
+                      <td className={`${ui.td} font-semibold ${k === "delivered" ? "text-green-700" : ""}`} data-real={k}>{fmt(stats.orders.real[k])}</td>
+                      <td className={`${ui.td} text-gray-500`} data-fake={k}>{fmt(stats.orders.fake[k])}</td>
                     </tr>
                   ))}
-                  <tr className="bg-violet-50/60 font-bold">
-                    <th scope="row" className={`${ui.td} text-start text-slate-900`}>المجموع</th>
-                    <td className={`${ui.td} text-slate-900`} data-real="total">{fmt(stats.orders.real.total)}</td>
-                    <td className={`${ui.td} text-violet-700`} data-fake-total="">{fmt(stats.orders.fake.total)}</td>
+                  <tr className="bg-gray-50 font-bold">
+                    <th scope="row" className={`${ui.td} text-start text-gray-900`}>المجموع</th>
+                    <td className={`${ui.td} text-gray-900`} data-real="total">{fmt(stats.orders.real.total)}</td>
+                    <td className={`${ui.td} text-gray-500`} data-fake-total="">{fmt(stats.orders.fake.total)}</td>
                   </tr>
                 </tbody>
               </table>
@@ -148,7 +141,7 @@ function NetworkStats() {
           </Section>
           )}
 
-          <Section title="حسب المستوى" Icon={Layers} data-levels>
+          <Section title="حسب المستوى" Icon={Layers} data-levels bodyClass={BODY}>
             <p className={ui.hint} data-levels-note>
               المستويات نفسها في الشجرة والإحصائيات: المستوى 1 = الأفلييت الرئيسيون في شبكتك{root ? "، حتى داخل شبكة فرعية" : ""}.
             </p>
@@ -161,19 +154,19 @@ function NetworkStats() {
                     ))}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-violet-50">
+                <tbody className="divide-y divide-gray-100">
                   {stats.levels.map((l) => (
                     <tr key={l.level} data-level-row={l.level}>
-                      <th scope="row" className={`${ui.td} text-start font-bold text-violet-700 whitespace-nowrap`} data-level-label>{levelLabel(l.level)}</th>
-                      <td className={`${ui.td} font-semibold text-slate-900`} data-level-affiliates>{fmt(l.affiliates)}</td>
+                      <th scope="row" className={`${ui.td} text-start font-bold text-gray-900 whitespace-nowrap`} data-level-label>{levelLabel(l.level)}</th>
+                      <td className={`${ui.td} font-semibold text-gray-900`} data-level-affiliates>{fmt(l.affiliates)}</td>
                       <td className={ui.td}>{fmt(l.active)}</td>
                       <td className={ui.td}>{fmt(l.inactive)}</td>
                       {IDENTITY_KEYS.map((k) => <td key={k} className={ui.td}>{fmt(l.identity[k])}</td>)}
                       {l.orders && (
                         <>
-                          <td className={`${ui.td} font-semibold text-emerald-700`} data-level-real-delivered>{fmt(l.orders.real.delivered)}</td>
+                          <td className={`${ui.td} font-semibold text-green-700`} data-level-real-delivered>{fmt(l.orders.real.delivered)}</td>
                           <td className={ui.td}>{fmt(l.orders.real.total - l.orders.real.delivered)}</td>
-                          <td className={`${ui.td} text-violet-700`} data-level-fake>{fmt(l.orders.fake.total)}</td>
+                          <td className={`${ui.td} text-gray-500`} data-level-fake>{fmt(l.orders.fake.total)}</td>
                         </>
                       )}
                     </tr>

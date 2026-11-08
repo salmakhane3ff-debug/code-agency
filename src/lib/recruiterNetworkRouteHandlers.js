@@ -65,9 +65,14 @@ export function recruiterNetworkHandlers(deps = {}) {
       });
       // Phase 7 Stage B → E: progress of every node (delivered values null without canViewOrders) and the
       // latest individual reward cycle of every node (all members are reward-eligible) — settings + ledger reads only.
-      const nodes = await withProgress(me.id, page.nodes, { db, includeOrders });
+      // The scope's own card (first page of ?parentId= only) rides in the SAME progress read as the page's nodes
+      // (one settings read, one ledger read) and gets the same projection as a node.
+      const enriched = await withProgress(me.id, page.parentNode ? [page.parentNode, ...page.nodes] : page.nodes, { db, includeOrders });
+      const parentNode = page.parentNode ? enriched[0] : null;
+      const nodes = page.parentNode ? enriched.slice(1) : enriched;
       return json({
         parent: page.parent ? toRecruiterNetworkPathView(page.parent) : null,
+        parentNode: parentNode ? toRecruiterNetworkNodeView(parentNode) : null,
         path: page.path.map(toRecruiterNetworkPathView),
         nodes: nodes.map(toRecruiterNetworkNodeView),
         total: Number.isInteger(page.total) ? page.total : 0,

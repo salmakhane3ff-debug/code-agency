@@ -511,9 +511,9 @@ console.log('\n2. canViewOrders: no order query, orders null; tree / identity / 
   ok('static: both network handlers pass includeOrders: me.canViewOrders === true (re-read with the account per request)', (() => {
     const h = stripJs(read('src/lib/recruiterNetworkRouteHandlers.js'));
     // Phase 7 Stage B: the nodes handler reads the flag ONCE (const includeOrders = me.canViewOrders === true) and passes it
-    // to the page AND to the progress decoration; stats keeps the inline form.
+    // to the page AND to the progress decoration (the page's nodes + the scope's own card, one read); stats keeps the inline form.
     return (h.match(/includeOrders: me\.canViewOrders === true/g) || []).length === 1 && (h.match(/const includeOrders = me\.canViewOrders === true;/g) || []).length === 1
-      && (h.match(/\bincludeOrders,\n/g) || []).length === 1 && /withProgress\(me\.id, page\.nodes, \{ db, includeOrders \}\)/.test(h) && /requireActiveRecruiter\(decoded, \{ db \}\)/.test(h);
+      && (h.match(/\bincludeOrders,\n/g) || []).length === 1 && /withProgress\(me\.id, page\.parentNode \? \[page\.parentNode, \.\.\.page\.nodes\] : page\.nodes, \{ db, includeOrders \}\)/.test(h) && /requireActiveRecruiter\(decoded, \{ db \}\)/.test(h);
   })());
   // The order-read counter is live for reads through a relation: each hostile call below counts as ONE
   // order read (so the "off → 0" checks above would catch an include / select / _count of orders).
@@ -773,12 +773,15 @@ console.log('\n4. Regression and scope');
     'src/app/recruiter/wallet/walletUi.js', 'src/lib/landingMode.js',
     // Recruiter dashboard redesign (UI only): the dashboard's layout / navigation, cards and charts components (the
     // dashboard page and its pure helpers are listed above). No service, route handler, schema or money logic.
-    'src/app/recruiter/_components/DashboardCharts.jsx', 'src/app/recruiter/_components/DashboardWidgets.jsx',
+    'src/app/recruiter/_components/DashboardWidgets.jsx',
     'src/app/recruiter/_components/RecruiterShell.jsx',
     // Phase 2 (UI only — one recruiter app): the layout mounts the app shell (RecruiterAppShell) around every authenticated
     // recruiter page with the shared UI kit (ui.jsx); the activation code card is restyled with it. No service, route handler, schema or money logic.
     'src/app/recruiter/_components/RecruiterAppShell.jsx', 'src/app/recruiter/_components/ui.jsx', 'src/app/recruiter/layout.jsx',
     'src/app/recruiter/affiliates/ActivationCodeCard.jsx',
+    // Simplified dashboard (UI only): three sections + "المزيد" — the new profile page (read-only account view of
+    // GET /api/recruiter/me); the former dashboard charts component is gone.
+    'src/app/recruiter/profile/page.jsx',
     // Phase 7 Stage F (approved clarification): an affiliate with children cannot be deleted — the deletion helper and the
     // 409 mapping of the admin DELETE route and of the legacy controller (pinned in recruiterAffiliates.test.mjs).
     'src/app/api/admin/affiliates/route.js', 'src/lib/affiliateDeletion.js', 'src/lib/controllers/affiliateController.js',

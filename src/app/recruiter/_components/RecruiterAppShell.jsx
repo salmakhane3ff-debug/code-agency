@@ -25,7 +25,7 @@ import { GuideDialog } from "./DashboardWidgets";
 
 const SessionContext = createContext(null);
 
-/** { me, perms, publishSummary(summary) } — null outside the shell (public routes). */
+/** { me, perms, identity: { status } | null, identityFailed, publishSummary(summary) } — null outside the shell (public routes). */
 export function useRecruiterSession() {
   return useContext(SessionContext);
 }
@@ -98,7 +98,7 @@ function RecruiterSession({ children }) {
 
   const alerts = useMemo(() => dashboardAlerts({ me, perms, identity: identity.data, identityFailed: identity.failed, progress: summary }),
     [me, perms, identity, summary]);
-  const value = useMemo(() => ({ me, perms, publishSummary }), [me, perms, publishSummary]);
+  const value = useMemo(() => ({ me, perms, identity: identity.data, identityFailed: identity.failed, publishSummary }), [me, perms, identity, publishSummary]);
   const groupInfo = useMemo(() => (summary ? groupProgressDisplay(summary) : null), [summary]);
 
   return (

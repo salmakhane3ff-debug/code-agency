@@ -122,12 +122,12 @@ export default function RecruiterActivationPage() {
   if (notice) return <CenteredNotice>{notice}</CenteredNotice>;
 
   return (
-    <div className="space-y-5 sm:space-y-6 min-w-0" data-recruiter-activation>
+    <div className="space-y-5 min-w-0" data-recruiter-activation>
       <PageHeader Icon={KeyRound} title="تفعيل حسابات الأفلييت"
-        subtitle="هؤلاء الأفلييت لم يختاروا كلمة السر الخاصة بهم بعد. يمكنك إنشاء رمز تفعيل جديد إذا ضاع الرمز أو انتهت صلاحيته. الرمز الجديد يلغي الرمز السابق، ويظهر مرة واحدة فقط." />
+        subtitle="هؤلاء الأفلييت لم يختاروا كلمة السر الخاصة بهم بعد. الرمز الجديد يلغي الرمز السابق، ويظهر مرة واحدة فقط." />
 
       {permsUnknown && !state.loading && !state.error && (
-        <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3" data-perms-error>
+        <div role="alert" className="rounded-xl border border-red-100 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3" data-perms-error>
           <span className="min-w-0">تعذّر التحقق من صلاحياتك. {recruiterErrorLabel(null)}</span>
           <button type="button" onClick={load} data-retry
             className="shrink-0 inline-flex items-center gap-1.5 min-h-10 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100">
@@ -137,7 +137,7 @@ export default function RecruiterActivationPage() {
         </div>
       )}
       {!canCreate && !permsUnknown && (
-        <p className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" data-create-disabled>
+        <p className="rounded-xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-700" data-create-disabled>
           إنشاء رموز تفعيل جديدة معطّل لحسابك من طرف الإدارة. يمكن للأفلييت المعني طلب استرجاع التفعيل من الإدارة.
         </p>
       )}
@@ -145,7 +145,7 @@ export default function RecruiterActivationPage() {
       {state.loading ? (
         <LoadingBlock />
       ) : state.error ? (
-        <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3" data-error>
+        <div className="rounded-xl border border-red-100 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3" data-error>
           <p role="alert" className="min-w-0">{state.error}</p>
           <button type="button" onClick={load} data-retry
             className="shrink-0 inline-flex items-center gap-1.5 min-h-10 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100">
@@ -160,17 +160,17 @@ export default function RecruiterActivationPage() {
           </div>
         </Card>
       ) : (
-        <ul className="grid gap-4 xl:grid-cols-2 items-start min-w-0" data-pending-list>
+        <ul className="grid gap-3 lg:grid-cols-2 items-start min-w-0" data-pending-list>
           {state.list.map((p) => (
-            <li key={p.affiliate.id} className={`${ui.card} p-4 sm:p-5 space-y-4`} data-pending-row={p.affiliate.username ?? ""}>
+            <li key={p.affiliate.id} className={`${ui.card} ${ui.cardPad} space-y-4`} data-pending-row={p.affiliate.username ?? ""}>
               <div className="flex flex-wrap items-start justify-between gap-3 min-w-0">
                 <div className="flex items-center gap-3 min-w-0">
-                  <span className="grid place-items-center w-10 h-10 shrink-0 rounded-2xl bg-violet-50 text-violet-600" aria-hidden="true">
-                    <KeyRound className="w-5 h-5" />
+                  <span className="grid place-items-center w-9 h-9 shrink-0 rounded-xl bg-gray-100 text-gray-600" aria-hidden="true">
+                    <KeyRound className="w-[18px] h-[18px]" />
                   </span>
                   <div className="min-w-0">
-                    <p className="font-bold text-slate-900 truncate">{p.affiliate.name || "—"}</p>
-                    <p className="text-xs text-slate-500 truncate" dir="ltr">{p.affiliate.username}</p>
+                    <p className="text-sm font-bold text-gray-900 truncate">{p.affiliate.name || "—"}</p>
+                    <p className="text-xs text-gray-500 truncate" dir="ltr">{p.affiliate.username}</p>
                   </div>
                 </div>
                 <StateChip state={p.state} expiresAt={p.expiresAt} />

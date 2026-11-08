@@ -565,12 +565,15 @@ console.log('\n11. Affiliate commissions, points, balances and payouts untouched
     'src/app/recruiter/wallet/walletUi.js', 'src/lib/landingMode.js',
     // Recruiter dashboard redesign (UI only): the dashboard's layout / navigation, cards and charts components — no
     // commission / points / balance / payout / affiliate KYC file (the dashboard page and its helpers are listed above).
-    'src/app/recruiter/_components/DashboardCharts.jsx', 'src/app/recruiter/_components/DashboardWidgets.jsx',
+    'src/app/recruiter/_components/DashboardWidgets.jsx',
     'src/app/recruiter/_components/RecruiterShell.jsx',
     // Phase 2 (UI only — one recruiter app): the layout mounts the app shell (RecruiterAppShell) around every authenticated
     // recruiter page with the shared UI kit (ui.jsx); the activation code card is restyled with it. no commission / points / balance / payout / affiliate KYC file.
     'src/app/recruiter/_components/RecruiterAppShell.jsx', 'src/app/recruiter/_components/ui.jsx', 'src/app/recruiter/layout.jsx',
     'src/app/recruiter/affiliates/ActivationCodeCard.jsx',
+    // Simplified dashboard (UI only): three sections + "المزيد" — the new profile page (read-only account view of
+    // GET /api/recruiter/me); the former dashboard charts component is gone.
+    'src/app/recruiter/profile/page.jsx',
     // Phase 7 Stage F (approved clarification): an affiliate with children cannot be deleted — the deletion helper and the
     // 409 mapping of the admin DELETE route and of the legacy controller (no commission / points / balance / payout file).
     'src/app/api/admin/affiliates/route.js', 'src/lib/affiliateDeletion.js', 'src/lib/controllers/affiliateController.js',

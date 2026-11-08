@@ -467,6 +467,43 @@ async function childrenPage(db, recruiterId, parentId, size, start) {
 }
 
 /**
+ * The own card of ONE placed node of N(R) (already checked by nodePath): its activation flag, its children /
+ * descendants counts (ALL levels — the same walk and the same counting rule as childrenPage: a tree walk down
+ * `parentId`, each affiliate once, capped only by the defensive DEPTH_CAP) and whether it is linked to R.
+ * Read only, ONE statement. → { id, username, name, active, children, descendants, mine } | null
+ */
+async function nodeCard(db, recruiterId, id) {
+  const cap = NETWORK_LIMITS.DEPTH_CAP;
+  const rows = await db.$queryRaw`
+    /* recruiter-network-node */
+    WITH RECURSIVE page AS (
+      SELECT a."id", a."username", a."name", a."isActive", a."createdAt"
+      FROM "affiliates" a
+      WHERE a."id" = ${id}::text
+    ),
+    t AS (
+      SELECT p."id" AS seed, p."id", 0 AS depth FROM page p
+      UNION ALL
+      SELECT t.seed, ch."id", t.depth + 1
+      FROM t
+      CROSS JOIN LATERAL (SELECT a."id" FROM "affiliates" a WHERE a."parentId" = t."id" OFFSET 0) ch
+      WHERE t.depth < ${cap}::int
+    ),
+    counts AS (
+      SELECT t.seed, (count(*) FILTER (WHERE t.depth = 1))::int AS children, (count(*) - 1)::int AS descendants
+      FROM t GROUP BY t.seed
+    )
+    SELECT p."id", p."username", p."name", p."isActive",
+           EXISTS (SELECT 1 FROM "recruiter_affiliate_links" x
+                   WHERE x."affiliateId" = p."id" AND x."recruiterId" = ${recruiterId}::text) AS mine,
+           n.children, n.descendants
+    FROM page p
+    LEFT JOIN counts n ON n.seed = p."id"`;
+  const r = (Array.isArray(rows) ? rows : []).find((x) => typeof x?.id === 'string');
+  return r ? { ...pageNode(r), mine: r.mine === true } : null;
+}
+
+/**
  * One page of the UNPLACED members (Phase 7 Stage F: R's linked affiliates on a parent cycle whose
  * links are all R's — owned by R, never placed: cseed of the header), in link order (createdAt, then
  * affiliateId), with the total. → { total, nodes: [{ id, username, name }] }
@@ -1168,6 +1205,8 @@ export async function getNetworkStats(recruiterId, { db = prisma, rootId = null,
  * status, children / descendant counts, order counts and `linkedToMe` (linked to THIS recruiter).
  * `view: 'unplaced'` lists R's linked members on a parent cycle owned by R (malformed data). Paging, ordering
  * and counting run in PostgreSQL; `cursor` is the numeric offset.
+ * The first page of a scoped request also carries `parentNode`: the scope's OWN card (same shape as a node —
+ * activation, identity status, children / ALL-level descendants, its own order counts); null otherwise.
  * `includeOrders: false` (canViewOrders off, Phase 6 part 4): NO order query; every node's
  * `orders` is null.
  */
@@ -1179,7 +1218,7 @@ export async function getNetworkNodes(recruiterId, { db = prisma, parentId = nul
   const scoped = !unplaced && given(parentId);
   if (!members) {
     if (scoped) throw fail('NOT_FOUND');
-    return { parent: null, path: [], nodes: [], total: 0, nextCursor: null };
+    return { parent: null, parentNode: null, path: [], nodes: [], total: 0, nextCursor: null };
   }
   const path = scoped ? await nodePath(db, recruiterId, parentId) : [];
   const parent = scoped ? path[path.length - 1] : null;
@@ -1187,14 +1226,25 @@ export async function getNetworkNodes(recruiterId, { db = prisma, parentId = nul
   const page = unplaced
     ? await unplacedPage(db, recruiterId, size, offset)
     : scoped ? await childrenPage(db, recruiterId, parentId, size, offset) : await rootsPage(db, recruiterId, size, offset);
+  // The scope's OWN card (first page of a scoped request only): the details view of one affiliate.
+  const card = scoped && start === 0 ? await nodeCard(db, recruiterId, parentId) : null;
   const pageIds = page.nodes.map((n) => n.id);
+  const countIds = card ? [...pageIds, card.id] : pageIds;
   const [orders, identity] = await Promise.all([
-    includeOrders === true ? orderCounts(db, pageIds) : null,
-    identityStatuses(db, pageIds),
+    includeOrders === true ? orderCounts(db, countIds) : null,
+    identityStatuses(db, countIds),
   ]);
   const level = parent ? parent.level + 1 : 1;
   return {
     parent: parent ? { ...parent } : null,
+    parentNode: card ? {
+      id: card.id, username: card.username, name: card.name, level: parent.level,
+      status: card.active ? 'ACTIVE' : 'INACTIVE',
+      identityStatus: identity.get(card.id) ?? 'NONE',
+      childrenCount: card.children, descendantsCount: card.descendants,
+      orders: orders ? orders.get(card.id) ?? { real: emptyOrders(), fake: emptyOrders() } : null,
+      linkedToMe: card.mine === true,
+    } : null,
     path: path.map((p) => ({ ...p })),
     nodes: page.nodes.map((n) => ({
       id: n.id, username: n.username, name: n.name,

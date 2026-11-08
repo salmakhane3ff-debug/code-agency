@@ -77,7 +77,8 @@ export async function latestRewardStates(recruiterId, ids, { db = prisma } = {})
   const list = [...new Set((Array.isArray(ids) ? ids : []).filter((x) => typeof x === 'string'))];
   const out = new Map();
   if (!list.length) return out;
-  if (list.length > NETWORK_LIMITS.PAGE_MAX) throw fail('INVALID_INPUT');
+  // a page of at most PAGE_MAX nodes + the scope's own card (the network details view) — never more
+  if (list.length > NETWORK_LIMITS.PAGE_MAX + 1) throw fail('INVALID_INPUT');
   const rows = await db.recruiterRewardLedger.findMany({
     where: { recruiterId, affiliateId: { in: list }, type: { in: [REWARD_TYPES.RECRUIT_REWARD, REWARD_TYPES.REVERSAL] } },
     select: { affiliateId: true, type: true, cycle: true },

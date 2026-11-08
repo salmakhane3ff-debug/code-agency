@@ -66,22 +66,22 @@ export default function ActivationCodeCard({ activation }) {
   const doCopy = async (what, text) => { setCopied((await copyText(text)) ? what : "fail"); };
 
   return (
-    <div className="rounded-2xl border border-violet-200 bg-gradient-to-b from-violet-50 to-white p-4 sm:p-5 space-y-4 min-w-0" data-activation-card>
+    <div className={`${ui.panel} p-4 space-y-4 min-w-0`} data-activation-card>
       <div className="flex items-center gap-2.5 min-w-0">
-        <span className="grid place-items-center w-9 h-9 shrink-0 rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 text-white shadow-sm" aria-hidden="true">
-          <KeyRound className="w-5 h-5" />
+        <span className="grid place-items-center w-9 h-9 shrink-0 rounded-xl bg-violet-50 text-violet-600" aria-hidden="true">
+          <KeyRound className="w-[18px] h-[18px]" />
         </span>
-        <h3 className="text-base font-extrabold text-slate-900">رمز التفعيل</h3>
+        <h3 className="text-sm font-bold text-gray-700">رمز التفعيل</h3>
       </div>
 
-      <p className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 leading-relaxed" role="note" data-activation-warning>
+      <p className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3.5 py-2.5 leading-relaxed" role="note" data-activation-warning>
         يظهر هذا الرمز مرة واحدة فقط. أرسله للأفلييت بنفسك عبر واتساب أو أي وسيلة أخرى. لا تستعمله أنت ولا تشاركه مع أي شخص آخر.
         الأفلييت سيختار كلمة السر الخاصة به، ولن يتم تفعيل الحساب إلا بعد موافقة الإدارة.
       </p>
 
       <div className="min-w-0">
-        <p className="text-xs font-semibold text-slate-500 mb-1.5">الرمز</p>
-        <code dir="ltr" className="block w-full min-w-0 select-all break-all rounded-2xl border border-violet-200 bg-white px-3.5 py-2.5 font-mono text-sm text-left text-slate-900" data-activation-code>
+        <p className="text-xs font-semibold text-gray-500 mb-1.5">الرمز</p>
+        <code dir="ltr" className="block w-full min-w-0 select-all break-all rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 font-mono text-sm text-left text-gray-900" data-activation-code>
           {code}
         </code>
         <button type="button" onClick={() => doCopy("code", code)} data-copy-code className={`${ui.btnSecondary} mt-2`}>
@@ -91,8 +91,8 @@ export default function ActivationCodeCard({ activation }) {
       </div>
 
       <div className="min-w-0">
-        <p className="text-xs font-semibold text-slate-500 mb-1.5">رابط التفعيل</p>
-        <code dir="ltr" className="block w-full min-w-0 select-all break-all rounded-2xl border border-violet-200 bg-white px-3.5 py-2.5 font-mono text-xs text-left text-slate-700" data-activation-link>
+        <p className="text-xs font-semibold text-gray-500 mb-1.5">رابط التفعيل</p>
+        <code dir="ltr" className="block w-full min-w-0 select-all break-all rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 font-mono text-xs text-left text-gray-700" data-activation-link>
           {link}
         </code>
         <div className="mt-2 flex flex-wrap gap-2">
@@ -101,7 +101,7 @@ export default function ActivationCodeCard({ activation }) {
             نسخ الرابط
           </button>
           <a href={share} target="_blank" rel="noopener noreferrer" data-share-whatsapp
-            className="inline-flex items-center justify-center gap-2 min-h-11 rounded-2xl bg-green-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-green-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-300">
+            className="inline-flex items-center justify-center gap-2 min-h-11 rounded-xl bg-green-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-green-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-300">
             <MessageCircle className="w-4 h-4" aria-hidden="true" />
             مشاركة عبر واتساب
           </a>
@@ -109,7 +109,7 @@ export default function ActivationCodeCard({ activation }) {
       </div>
 
       {copied && (
-        <p className={`text-xs font-semibold ${copied === "fail" ? "text-red-700" : "text-emerald-700"}`} aria-live="polite" data-copy-status>
+        <p className={`text-xs font-semibold ${copied === "fail" ? "text-red-700" : "text-green-700"}`} aria-live="polite" data-copy-status>
           {copied === "fail" ? "تعذّر النسخ، انسخ النص يدوياً." : copied === "code" ? "تم نسخ الرمز." : "تم نسخ الرابط."}
         </p>
       )}

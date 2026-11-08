@@ -16,7 +16,7 @@
  * Run: node scripts/recruiterDashboardUi.test.mjs
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -144,12 +144,12 @@ console.log('\n1. Pure helpers (recruiterUiState.js / walletUi.js)');
     U.isPublicRecruiterPath('/recruiter/login') && U.isPublicRecruiterPath('/recruiter/login/') && U.isPublicRecruiterPath('/recruiter/login?next=x')
     && !U.isPublicRecruiterPath('/recruiter') && !U.isPublicRecruiterPath('/recruiter/loginx') && !U.isPublicRecruiterPath('/recruiter/wallet') && !U.isPublicRecruiterPath(undefined));
   const P = { canViewOrders: true, canCreateAffiliates: true };
-  ok('sectionForPath: every authenticated route highlights its menu entry',
-    eq(['/recruiter', '/recruiter/', '/recruiter/network', '/recruiter/network?root=a1', '/recruiter/network/stats', '/recruiter/affiliates', '/recruiter/affiliates/new',
-      '/recruiter/affiliates/activation', '/recruiter/wallet', '/recruiter/verification', '/recruiter/password'].map((x) => U.sectionForPath(x, P)),
-    ['home', 'home', 'network', 'network', 'orders', 'affiliates', 'add', 'activation', 'rewards', 'verification', 'password']));
-  ok('sectionForPath: a page whose own entry is hidden by a permission highlights its parent (stats → network, new → affiliates)',
-    U.sectionForPath('/recruiter/network/stats', { canViewOrders: false }) === 'network' && U.sectionForPath('/recruiter/affiliates/new', null) === 'affiliates'
+  ok('sectionForPath: three main sections + the "المزيد" entries; the old tree URL leads to الأفلييت',
+    eq(['/recruiter', '/recruiter/', '/recruiter/affiliates', '/recruiter/affiliates?id=a1', '/recruiter/network', '/recruiter/network?root=a1', '/recruiter/affiliates/new',
+      '/recruiter/wallet', '/recruiter/profile', '/recruiter/verification', '/recruiter/password', '/recruiter/affiliates/activation', '/recruiter/network/stats'].map((x) => U.sectionForPath(x, P)),
+    ['home', 'home', 'affiliates', 'affiliates', 'affiliates', 'affiliates', 'add', 'wallet', 'profile', 'verification', 'password', 'activation', 'stats']));
+  ok('sectionForPath: the creation page without the permission highlights الأفلييت; look-alike / unknown paths highlight nothing',
+    U.sectionForPath('/recruiter/affiliates/new', null) === 'affiliates' && U.sectionForPath('/recruiter/network/stats', { canViewOrders: false }) === 'stats'
     && U.sectionForPath('/recruiter/networkx', P) === null && U.sectionForPath('/recruiter/unknown', P) === null);
 }
 
@@ -196,7 +196,7 @@ console.log('\n4. Static assertions on the recruiter pages');
 {
   const PAGES = ['src/app/recruiter/page.jsx', 'src/app/recruiter/affiliates/page.jsx', 'src/app/recruiter/affiliates/new/page.jsx', 'src/app/recruiter/affiliates/activation/page.jsx',
     'src/app/recruiter/password/page.jsx', 'src/app/recruiter/verification/page.jsx', 'src/app/recruiter/wallet/page.jsx',
-    'src/app/recruiter/network/page.jsx', 'src/app/recruiter/network/stats/page.jsx'];
+    'src/app/recruiter/profile/page.jsx', 'src/app/recruiter/network/stats/page.jsx'];
   const src = Object.fromEntries(PAGES.map((f) => [f, stripJs(read(f))]));
   const ui = stripJs(read('src/app/recruiter/network/networkUi.jsx'));
   const BAD = [
@@ -211,56 +211,68 @@ console.log('\n4. Static assertions on the recruiter pages');
   ok('every recruiter page offers a retry for a failed load (data-retry / retry handler / ErrorBox onRetry)',
     PAGES.every((f) => /data-retry|onRetry=|data-identity-retry|data-gross-retry/.test(src[f])));
 
-  const net = src['src/app/recruiter/network/page.jsx'];
-  ok('network: stale answers discarded (request gates) and branches / pages de-duplicated (in-flight sets + mergeById)',
-    /topGate\.isCurrent\(token\)/.test(net) && /statsGate\.isCurrent\(token\)/.test(net) && /scopeGate\.isCurrent\(scope\)/.test(net)
-    && /branchInFlight\.current\.has\(id\)/.test(net) && (net.match(/mergeById\(/g) || []).length >= 4);
-  ok('network: a failed "load more" keeps the rows (moreError apart from the first-page error)', /moreError: r\.code/.test(net) && /top\.moreError && <ErrorBox/.test(net));
+  // Simplified dashboard: the tree page /recruiter/network is merged into the affiliates section (list → details →
+  // drill-down); the old URL redirects there (?root=X → ?id=X).
+  const net = src['src/app/recruiter/affiliates/page.jsx'];
+  const redirect = stripJs(read('src/app/recruiter/network/page.jsx'));
+  ok('affiliates (merged tree): stale answers discarded (request gate per load), one "load more" at a time, pages de-duplicated (mergeById)',
+    /if \(!gate\.isCurrent\(token\)\) return;/.test(net) && /if \(more && moreInFlight\.current\) return;/.test(net) && (net.match(/mergeById\(/g) || []).length >= 2);
+  ok('affiliates (merged tree): a failed "load more" keeps the rows (moreError apart from the first-page error, with its retry)',
+    /moreError: r\.code/.test(net) && /\{list\.moreError && <RetryError/.test(net));
+  ok('affiliates (merged tree): the details view reads ?id= with the node API (parentId) and its own card (parentNode); unlimited drill-down by ?id=',
+    /\/api\/recruiter\/network\/nodes/.test(net) && /\bparentId\b/.test(net) && /parentNode/.test(net) && /data-details/.test(net) && /data-children/.test(net) && /\?id=/.test(net));
+  ok('/recruiter/network now redirects to the affiliates section (?root=X → ?id=X), nothing else',
+    /router\.replace\(/.test(redirect) && /\/recruiter\/affiliates/.test(redirect) && /root/.test(redirect) && !/fetch\(|getJson\(/.test(redirect));
   ok('stats: stale answers discarded', /gate\.isCurrent\(token\)/.test(src['src/app/recruiter/network/stats/page.jsx']));
   const aff = src['src/app/recruiter/affiliates/page.jsx'];
   ok('affiliates page: debounced q, nextCursor "عرض المزيد", gate, mergeById, total, imports recruiterVisibility',
     /DEBOUNCE_MS/.test(aff) && /عرض المزيد/.test(aff) && /gate\.isCurrent\(token\)/.test(aff) && /mergeById\(l\.items, items\)/.test(aff) && /data-total/.test(aff)
     && /from "@\/lib\/recruiterVisibility"/.test(aff));
 
-  for (const f of ['src/app/recruiter/network/page.jsx', 'src/app/recruiter/network/stats/page.jsx', 'src/app/recruiter/affiliates/page.jsx']) {
+  for (const f of ['src/app/recruiter/network/stats/page.jsx', 'src/app/recruiter/affiliates/page.jsx']) {
     const code = src[f];
     const creates = [...code.matchAll(/href="\/recruiter\/affiliates\/new"/g)].map((m) => code.slice(Math.max(0, m.index - 220), m.index));
     ok(`${f}: every creation link (incl. the empty state) is behind canCreate (from /api/recruiter/me)`, creates.length >= 1 && creates.every((ctx) => /canCreate &&/.test(ctx)) && /useRecruiterPerms\(/.test(code), String(creates.length));
   }
   const hub = src['src/app/recruiter/page.jsx'];
-  // Dashboard redesign (UI only): the menu lives in RecruiterShell.jsx, the cards in DashboardWidgets.jsx.
+  // Simplified dashboard: the menu lives in RecruiterShell.jsx (3 sections + "المزيد"), the shell is mounted ONCE by the
+  // recruiter layout (RecruiterAppShell: session chrome, logout, guide); the dashboard is six KPI cards.
   const shell = stripJs(read('src/app/recruiter/_components/RecruiterShell.jsx'));
   const widgets = stripJs(read('src/app/recruiter/_components/DashboardWidgets.jsx'));
-  const charts = stripJs(read('src/app/recruiter/_components/DashboardCharts.jsx'));
-  // Phase 2: the shell is mounted ONCE by the recruiter layout (RecruiterAppShell: session chrome, logout, guide).
   const appShell = stripJs(read('src/app/recruiter/_components/RecruiterAppShell.jsx'));
   const layout = stripJs(read('src/app/recruiter/layout.jsx'));
   const hubAll = `${hub}\n${shell}\n${widgets}\n${appShell}`;
-  ok('hub: one menu entry per page (no duplicate /recruiter/network), affiliates list linked, activity log stays "قريباً"',
-    (shell.slice(shell.indexOf('export const SECTIONS = ['), shell.indexOf('];', shell.indexOf('export const SECTIONS = ['))).match(/href: "\/recruiter\/network"/g) || []).length === 1 && /href: "\/recruiter\/affiliates"/.test(shell) && /data-affiliates-link|hook="affiliates-link"/.test(widgets)
-    && /\{ id: "log", label: "سجل العمليات", Icon: History \}/.test(shell) && /قريباً/.test(shell) && /import RecruiterAppShell from "\.\/_components\/RecruiterAppShell"/.test(layout) && /<RecruiterAppShell>\{children\}<\/RecruiterAppShell>/.test(layout)
+  const sectionIds = (name) => [...shell.slice(shell.indexOf(`export const ${name} = [`), shell.indexOf('];', shell.indexOf(`export const ${name} = [`))).matchAll(/id: "([a-z]+)"/g)].map((m) => m[1]);
+  ok('simplified: exactly three main sections (dashboard, affiliates, wallet) and the "المزيد" group (profile, verification, password, activation, stats)',
+    eq(sectionIds('MAIN_SECTIONS'), ['home', 'affiliates', 'wallet']) && eq(sectionIds('MORE_SECTIONS'), ['profile', 'verification', 'password', 'activation', 'stats'])
+    && /href: "\/recruiter\/affiliates"/.test(shell) && /href: "\/recruiter\/wallet"/.test(shell) && /href: "\/recruiter\/profile"/.test(shell)
+    && /import RecruiterAppShell from "\.\/_components\/RecruiterAppShell"/.test(layout) && /<RecruiterAppShell>\{children\}<\/RecruiterAppShell>/.test(layout)
     && /import RecruiterShell from "\.\/RecruiterShell"/.test(appShell) && !/RecruiterShell/.test(hub.replace(/RecruiterAppShell/g, '')));
-  ok('hub: progress summary from /api/recruiter/progress (group q / size, awarded / reversed, gross / net, "غير مفعّلة"), KYC card from /api/recruiter/identity',
-    /\/api\/recruiter\/progress/.test(hub) && /toRecruiterProgressSummaryView/.test(hub) && /data-group-progress/.test(widgets) && /data-gross/.test(hub) && /hook="net"/.test(hub)
-    && /غير مفعّلة/.test(widgets) && /\/api\/recruiter\/identity/.test(hub) && /data-kyc-card/.test(widgets));
-  ok('hub: creation entries need an explicit canCreateAffiliates === true (menu filter + quick action behind `active && canCreate`)',
-    /const canCreate = perms\?\.canCreateAffiliates === true;/.test(hub) && /canCreateAffiliates !== true/.test(shell)
-    && /\{active && canCreate && <Action href="\/recruiter\/affiliates\/new"/.test(widgets) && (hubAll.match(/"\/recruiter\/affiliates\/new"/g) || []).length === 2);
-  ok('hub: order entries need an explicit canViewOrders === true (menu filter, KPI, chart)',
-    /const canViewOrders = perms\?\.canViewOrders === true;/.test(hub) && /canViewOrders !== true/.test(shell) && /if \(!canViewOrders\) body = <EmptyState/.test(hub));
-  ok('hub (redesign): only the existing read-only endpoints — me, progress, identity, network stats (no wallet read: it reconciles), logout',
-    eq([...new Set([...hubAll.matchAll(/"(\/api\/recruiter\/[a-z/]+)"/g)].map((m) => m[1]))].sort(),
-      ['/api/recruiter/auth', '/api/recruiter/identity', '/api/recruiter/me', '/api/recruiter/network/stats', '/api/recruiter/progress'])
-    && !/\/api\/recruiter\/wallet/.test(hubAll) && /toRecruiterNetworkStatsView/.test(hub));
-  ok('hub (redesign): nothing invented — no random / hard-coded trend, no fetch outside the page, charts only from the stats helpers',
-    !/Math\.random|\+\d+%|trend/i.test(`${hubAll}\n${charts}`) && !/fetch\(/.test(`${shell}\n${widgets}\n${charts}`)
-    && /orderStatusSeries\(stats\.data\.orders\)/.test(hub) && /levelSeries\(stats\.data\.levels\)/.test(hub)
-    && /dynamic\(\(\) => import\("\.\/_components\/DashboardCharts"\)[^;]*ssr: false/.test(hub));
-  ok('hub (redesign): empty states and retries — progress / stats errors retry, no data → empty state',
-    /hook="progress"/.test(hub) && /hook="stats"/.test(hub) && /data-progress-empty/.test(hub) && /لا توجد طلبات حقيقية بعد في شبكتك/.test(hub) && /لا يوجد أفلييت في شبكتك بعد/.test(hub));
-  ok('hub (redesign): the mobile drawer is a modal dialog with Escape, a close button and the same permission-filtered menu',
-    /role="dialog" aria-modal="true" aria-label="القائمة الرئيسية"/.test(shell) && /e\.key === "Escape"/.test(shell) && /aria-label="إغلاق القائمة"/.test(shell)
-    && (shell.match(/<Nav perms=\{perms\}/g) || []).length === 2 && /data-menu-open/.test(shell) && /data-logout/.test(shell));
+  ok('simplified dashboard: six KPI cards — whole network, direct, real orders, delivered, total earned, available balance',
+    ['network-total', 'network-direct', 'orders-total', 'orders-delivered', 'earned', 'available'].every((h) => hub.includes(`hook="${h}"`))
+    && (hub.match(/<StatCard\b/g) || []).length === 6 && /s\.totals\.affiliates/.test(hub) && /s\.totals\.direct/.test(hub)
+    && /num\(real\[k\]\)/.test(hub) && /orderValue\("total"\)/.test(hub) && /orderValue\("delivered"\)/.test(hub)
+    && /fmtMadCents\(t\.earnedCents\)/.test(hub) && /fmtMadCents\(available\)/.test(hub) && /const available = t \? t\.availableCents : null;/.test(hub));
+  ok('simplified dashboard: data only from me, the network statistics and the wallet (the ledger figures; logout and the guide live in the shell)',
+    eq([...new Set([...hub.matchAll(/"(\/api\/recruiter\/[a-z/]+)"/g)].map((m) => m[1]))].sort(), ['/api/recruiter/me', '/api/recruiter/network/stats', '/api/recruiter/wallet'])
+    && /toRecruiterNetworkStatsView/.test(hub) && /toRecruiterWalletView/.test(hub)
+    && eq([...new Set([...appShell.matchAll(/"(\/api\/recruiter\/[a-z/]+)"/g)].map((m) => m[1]))].sort(), ['/api/recruiter/auth', '/api/recruiter/identity', '/api/recruiter/me', '/api/recruiter/progress']));
+  ok('simplified dashboard: nothing invented — no random / hard-coded trend / chart; no fetch in the shell or the guide',
+    !/Math\.random|\+\d+%|trend|recharts|next\/dynamic/i.test(hubAll) && !/fetch\(/.test(`${shell}\n${widgets}`) && !existsSync(join(ROOT, 'src/app/recruiter/_components/DashboardCharts.jsx')));
+  ok('creation needs an explicit canCreateAffiliates === true (sidebar button and the centre "+" of the bottom bar)',
+    /export const canCreateFrom = \(perms\) => perms\?\.canCreateAffiliates === true;/.test(shell) && (shell.match(/\{canCreateFrom\(perms\) && \(/g) || []).length === 2
+    && (shell.match(/"\/recruiter\/affiliates\/new"/g) || []).length === 2);
+  ok('order figures need an explicit canViewOrders === true ("—", never 0)',
+    /const canViewOrders = perms\?\.canViewOrders === true;/.test(hub) && /const orderValue = \(k\) => \(!canViewOrders \? "—"/.test(hub));
+  ok('simplified dashboard: errors retry (me / stats / wallet), the identity hint comes from the shell (no extra request)',
+    /hook="me"/.test(hub) && /hook="stats"/.test(hub) && /hook="wallet"/.test(hub) && /session\?\.identity/.test(hub) && /data-kyc-hint/.test(hub)
+    && /identity: identity\.data, identityFailed: identity\.failed/.test(appShell));
+  ok('mobile: the affiliate bottom bar (md:hidden, fixed, rounded-t-[28px], violet active pill) + the "المزيد" sheet (modal dialog, Escape, focus trap, logout tile)',
+    /md:hidden fixed bottom-0 inset-x-0 z-\[60\] bg-white border-t border-gray-100 rounded-t-\[28px\]/.test(shell) && /bg-violet-100 text-violet-600/.test(shell)
+    && /role="dialog" aria-modal="true" aria-label="المزيد" data-more-sheet/.test(shell) && /e\.key === "Escape"/.test(shell) && /useModal\(open, onClose, panelRef\)/.test(shell)
+    && /data-section="logout"/.test(shell) && /data-logout/.test(shell) && /grid grid-cols-3 gap-3/.test(shell));
+  ok('desktop: the light sidebar (md+) with the affiliate gray-900 active state',
+    /hidden md:block w-60 lg:w-64 shrink-0 bg-white border-l border-gray-100/.test(shell) && /on \? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"/.test(shell));
 
   // Phase 2 (one recruiter app): every authenticated page renders inside the layout's shell with the shared UI kit.
   const AUTH_PAGES = PAGES; // the 9 authenticated recruiter pages above (dashboard included)
@@ -270,7 +282,7 @@ console.log('\n4. Static assertions on the recruiter pages');
     Object.entries(raw).filter(([, c]) => /<main\b|min-h-screen|<header\b/.test(c)).map(([f]) => f).join(', '));
   ok('phase 2: every sub-page builds its title with the shared PageHeader (directly or through NetworkHeader)',
     AUTH_PAGES.filter((f) => f !== 'src/app/recruiter/page.jsx').every((f) => /<PageHeader\b|<NetworkHeader\b/.test(raw[f]) && /_components\/ui"/.test(read(f)))
-    && /<PageHeader\b/.test(raw['src/app/recruiter/network/networkUi.jsx']) && /<Tabs\b/.test(raw['src/app/recruiter/network/networkUi.jsx']));
+    && /<PageHeader\b/.test(raw['src/app/recruiter/network/networkUi.jsx']));
   ok('phase 2: the shell is mounted once by the layout, never by a page; the login page stays outside it',
     AUTH_PAGES.every((f) => !/<RecruiterShell\b|<RecruiterAppShell\b/.test(raw[f])) && /if \(isPublicRecruiterPath\(pathname\)\) return children;/.test(appShell)
     && !/RecruiterShell|RecruiterAppShell|_components/.test(read('src/app/recruiter/login/page.jsx')));

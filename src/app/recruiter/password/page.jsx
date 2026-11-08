@@ -17,7 +17,7 @@ import { CheckCircle2, Eye, EyeOff, KeyRound, Lock } from "lucide-react";
 import { toRecruiterError } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel, recruiterFieldErrorLabel } from "../errorLabels";
 import { authAction } from "../recruiterUiState";
-import { Card, CenteredNotice, LoadingBlock, PageHeader, RetryError, ui } from "../_components/ui";
+import { CenteredNotice, LoadingBlock, PageHeader, RetryError, Section, ui } from "../_components/ui";
 
 const MIN = 8;
 const MAX = 128;
@@ -144,23 +144,23 @@ export default function RecruiterPasswordPage() {
   }
 
   return (
-    <div className="space-y-5 sm:space-y-6 min-w-0" data-recruiter-password>
-      <PageHeader Icon={KeyRound} title="تغيير كلمة السر" subtitle="حماية حسابك: غيّر كلمة السر الخاصة بك." />
+    <div className="space-y-5 min-w-0" data-recruiter-password>
+      <PageHeader Icon={KeyRound} title="تغيير كلمة السر" />
 
       <div className="max-w-2xl space-y-4 min-w-0">
-        <p className="text-sm text-slate-600 leading-relaxed">
-          بعد تغيير كلمة السر، سيتم تسجيل الخروج من جميع الأجهزة الأخرى، وتبقى متصلاً على هذا الجهاز.
-        </p>
-
         {done && (
-          <p role="status" className="flex items-start gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800" data-password-success>
+          <p role="status" className="flex items-start gap-2 rounded-xl border border-green-100 bg-green-50 p-4 text-sm text-green-700" data-password-success>
             <CheckCircle2 className="w-5 h-5 shrink-0" aria-hidden="true" />
             <span className="min-w-0">تم تغيير كلمة السر. تم تسجيل الخروج من جميع الأجهزة الأخرى.</span>
           </p>
         )}
 
-        <Card className={ui.cardPad}>
+        <Section Icon={Lock} title="كلمة السر">
           <form onSubmit={submit} noValidate className="space-y-4 min-w-0">
+            <p className={ui.hint}>
+              بعد تغيير كلمة السر، سيتم تسجيل الخروج من جميع الأجهزة الأخرى، وتبقى متصلاً على هذا الجهاز.
+            </p>
+
             <div>
               <label htmlFor="currentPassword" className={ui.label}>كلمة السر الحالية</label>
               <input id="currentPassword" type={show ? "text" : "password"} autoComplete="current-password" dir="ltr"
@@ -176,7 +176,7 @@ export default function RecruiterPasswordPage() {
                   value={form.newPassword} onChange={(e) => set("newPassword", e.target.value)} maxLength={MAX}
                   className={`${ui.input} min-w-0`} data-new-password />
                 <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "إخفاء كلمة السر" : "إظهار كلمة السر"}
-                  className="shrink-0 grid place-items-center min-h-11 w-11 rounded-2xl border border-violet-200 bg-white text-violet-700 hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300" data-toggle-password>
+                  className="shrink-0 grid place-items-center min-h-11 w-11 rounded-xl border border-gray-200 bg-white text-gray-600 hover:border-gray-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300" data-toggle-password>
                   {show ? <EyeOff className="w-4 h-4" aria-hidden="true" /> : <Eye className="w-4 h-4" aria-hidden="true" />}
                 </button>
               </div>
@@ -193,14 +193,14 @@ export default function RecruiterPasswordPage() {
             </div>
 
             {fieldErrors.body && <p className="text-xs text-red-700" data-field-error="body">{fieldMessage("body")}</p>}
-            {error && <p role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-2xl px-3 py-2" data-password-error>{error}</p>}
+            {error && <p role="alert" className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl px-3 py-2" data-password-error>{error}</p>}
 
             <button type="submit" disabled={busy} data-password-submit className={`${ui.btnPrimary} w-full`}>
               <Lock className="w-4 h-4" aria-hidden="true" />
               {busy ? "جارٍ الحفظ…" : "تغيير كلمة السر"}
             </button>
           </form>
-        </Card>
+        </Section>
       </div>
     </div>
   );

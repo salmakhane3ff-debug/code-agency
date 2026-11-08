@@ -50,17 +50,17 @@ function CinPicker({ side, label, file, preview, error, disabled, onPick }) {
     <div className="min-w-0 space-y-1.5" data-cin-side={side}>
       <label htmlFor={inputId} className={ui.label}>{label}</label>
       <label htmlFor={inputId}
-        className={`flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed px-3 py-4 text-center cursor-pointer min-h-[9rem] focus-within:ring-2 focus-within:ring-violet-300 ${error ? "border-red-400 bg-red-50/40" : "border-violet-200 bg-violet-50/40 hover:bg-violet-50"} ${disabled ? "opacity-60 cursor-not-allowed" : ""}`}>
+        className={`flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-3 py-4 text-center cursor-pointer min-h-[9rem] focus-within:ring-2 focus-within:ring-violet-300 ${error ? "border-red-300 bg-red-50/40" : "border-gray-200 bg-gray-50 hover:border-gray-300"} ${disabled ? "opacity-60 cursor-not-allowed" : ""}`}>
         {preview ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={preview} alt={label} className="max-h-40 w-auto max-w-full rounded-xl object-contain" data-cin-preview={side} />
         ) : (
           <>
-            <Upload className="w-6 h-6 text-violet-400" aria-hidden="true" />
-            <span className="text-xs text-slate-500">اختر صورة (JPG أو PNG أو WEBP، 5 ميغابايت على الأكثر)</span>
+            <Upload className="w-6 h-6 text-gray-400" aria-hidden="true" />
+            <span className="text-xs text-gray-500">اختر صورة (JPG أو PNG أو WEBP، 5 ميغابايت على الأكثر)</span>
           </>
         )}
-        {file && <span className="text-xs text-slate-600 break-all" dir="ltr">{file.name}</span>}
+        {file && <span className="text-xs text-gray-600 break-all" dir="ltr">{file.name}</span>}
       </label>
       <input id={inputId} type="file" accept={ACCEPT} className="sr-only" disabled={disabled}
         onChange={(e) => onPick(e.target.files?.[0] ?? null)} data-cin-input={side} />
@@ -186,20 +186,20 @@ export default function RecruiterVerificationPage() {
   const fieldMsg = (side) => (fieldErrors[side] ? recruiterFieldErrorLabel(side, fieldErrors[side]) : "");
 
   return (
-    <div className="space-y-5 sm:space-y-6 min-w-0" data-recruiter-verification>
-      <PageHeader Icon={ShieldCheck} title="التحقق من الهوية" subtitle="صورتا البطاقة الوطنية (الوجه الأمامي والخلفي) وحالة مراجعتها." />
+    <div className="space-y-5 min-w-0" data-recruiter-verification>
+      <PageHeader Icon={ShieldCheck} title="التحقق من الهوية" />
 
-      <div className="max-w-3xl space-y-4 sm:space-y-5 min-w-0">
-        <p className="text-sm text-slate-600 leading-relaxed">
+      <div className="max-w-3xl space-y-4 min-w-0">
+        <p className={ui.hint}>
           لطلب سحب أرباحك، يجب أن تتحقق الإدارة من هويتك عبر صورتي البطاقة الوطنية (الوجه الأمامي والخلفي).
           الصور محفوظة بشكل خاص ولا يطّلع عليها إلا المسؤولون.
         </p>
 
         {loading && !identity && (
-          <p className="flex items-center gap-2 text-sm text-slate-500" aria-live="polite" data-loading><Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> جارٍ التحميل…</p>
+          <p className="flex items-center gap-2 text-sm text-gray-500" aria-live="polite" data-loading><Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> جارٍ التحميل…</p>
         )}
         {loadError && (
-          <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center gap-3 justify-between" data-error>
+          <div role="alert" className="rounded-xl border border-red-100 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center gap-3 justify-between" data-error>
             <span className="min-w-0">{loadError}</span>
             <button type="button" onClick={load} data-retry
               className="shrink-0 inline-flex items-center gap-1.5 min-h-10 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100">
@@ -211,21 +211,21 @@ export default function RecruiterVerificationPage() {
         {identity && (
           <Card className={`${ui.cardPad} space-y-3`} aria-labelledby="st-title" data-identity-status={identity.status}>
             <CardTitle Icon={IdCard} id="st-title" title="حالة التحقق" />
-            <Badge tone={st.tone} className="text-sm px-3">
+            <Badge tone={st.tone}>
               <st.Icon className="w-4 h-4 shrink-0" aria-hidden="true" /> {st.label}
             </Badge>
             {identity.submittedAt && <p className={ui.hint}>تاريخ الإرسال: {fmtDate(identity.submittedAt)}</p>}
             {identity.status === "PENDING" && (
-              <p className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-identity-pending>وثائقك قيد المراجعة من طرف الإدارة. لا يمكن طلب السحب قبل قبولها.</p>
+              <p className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-700" data-identity-pending>وثائقك قيد المراجعة من طرف الإدارة. لا يمكن طلب السحب قبل قبولها.</p>
             )}
             {identity.status === "APPROVED" && (
-              <p className="text-sm text-emerald-800 flex items-start gap-2" data-identity-approved>
+              <p className="text-sm text-green-700 flex items-start gap-2" data-identity-approved>
                 <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
                 <span className="min-w-0">تم قبول هويتك{identity.reviewedAt ? ` بتاريخ ${fmtDate(identity.reviewedAt)}` : ""}. يمكنك الآن طلب السحب من صفحة أرباحي.</span>
               </p>
             )}
             {identity.status === "REJECTED" && (
-              <div className="rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 space-y-1" data-identity-rejected>
+              <div className="rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700 space-y-1" data-identity-rejected>
                 <p className="font-semibold">تم رفض التحقق. أرسل صوراً جديدة وواضحة للبطاقة.</p>
                 {identity.rejectionReason && (
                   <p className="break-words" data-rejection-reason>السبب: <bdi>{identity.rejectionReason}</bdi></p>
@@ -260,10 +260,10 @@ export default function RecruiterVerificationPage() {
 
         {/* Stage C: outside the form, so it stays visible when the refreshed status hides the form
             (e.g. IDENTITY_SUBMISSION_NOT_ALLOWED: already pending or approved meanwhile). */}
-        {error && <p role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-2xl px-3 py-2" data-identity-error>{error}</p>}
+        {error && <p role="alert" className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl px-3 py-2" data-identity-error>{error}</p>}
 
         {success && (
-          <p role="status" className="flex items-start gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800" data-identity-success>
+          <p role="status" className="flex items-start gap-2 rounded-xl border border-green-100 bg-green-50 p-4 text-sm text-green-700" data-identity-success>
             <CheckCircle2 className="w-5 h-5 shrink-0" aria-hidden="true" />
             <span className="min-w-0">{success}</span>
           </p>

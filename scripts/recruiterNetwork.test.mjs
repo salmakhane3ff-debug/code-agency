@@ -70,7 +70,7 @@ const ORDER_KEYS = ['cancelled', 'confirmed', 'delivered', 'other', 'pending', '
 // Stage B: + linkedToMe / progress / rewardState on nodes, + linkedToMe on breadcrumb entries (additive)
 const NODE_KEYS = ['childrenCount', 'descendantsCount', 'id', 'identityStatus', 'level', 'linkedToMe', 'name', 'orders', 'progress', 'rewardState', 'status', 'username'];
 const PATH_KEYS = ['id', 'level', 'linkedToMe', 'name', 'username'];
-const PAGE_KEYS = ['nextCursor', 'nodes', 'parent', 'path', 'total'];
+const PAGE_KEYS = ['nextCursor', 'nodes', 'parent', 'parentNode', 'path', 'total'];
 const STATS_KEYS = ['identity', 'levels', 'orders', 'rootId', 'totals'];
 const TOTAL_KEYS = ['active', 'affiliates', 'direct', 'inactive', 'maxLevel', 'unplaced'];
 const LEVEL_KEYS = ['active', 'affiliates', 'identity', 'inactive', 'level', 'orders'];
@@ -213,8 +213,9 @@ console.log('\n1. Unlimited depth (3, 10, 20, 200 levels)');
   const ids4 = chain(E4, E4.A, 4);
   const { queries: qs4 } = await measure(E4, () => stats(E4, E4.A));
   const { queries: qn4 } = await measure(E4, () => nodes(E4, E4.A, { parentId: ids4[2] }));
-  // Stage B: nodes = recruiter + count + ancestry + children + orders + identity + settings + ledger (progress) = 8 (was 6)
-  ok(`query count is independent of the depth: stats ${qs4} (4 levels) = ${qs} (200 levels) = 3; nodes ${qn4} = ${qn} = 8`, qs === 3 && qs4 === 3 && qn === 8 && qn4 === 8, `stats ${qs4}/${qs} nodes ${qn4}/${qn}`);
+  // Stage B: nodes = recruiter + count + ancestry + children + orders + identity + settings + ledger (progress) = 8 (was 6);
+  // simplified dashboard: + the scope's own card (ONE statement; its orders / identity / progress ride in the page's reads) = 9
+  ok(`query count is independent of the depth: stats ${qs4} (4 levels) = ${qs} (200 levels) = 3; nodes ${qn4} = ${qn} = 9`, qs === 3 && qs4 === 3 && qn === 9 && qn4 === 9, `stats ${qs4}/${qs} nodes ${qn4}/${qn}`);
 }
 
 // ── 2. several roots, several recruiters, ownership ──────────────────────────
@@ -260,7 +261,7 @@ console.log('\n2. Several roots and recruiters: each sees only their own network
   const empty = setup();
   const en = track(await nodes(empty, empty.A)); const es = track(await stats(empty, empty.A));
   ok('an empty network → 200 with no nodes and zero statistics (no levels)',
-    en.status === 200 && eq(en.body, { parent: null, path: [], nodes: [], total: 0, nextCursor: null })
+    en.status === 200 && eq(en.body, { parent: null, parentNode: null, path: [], nodes: [], total: 0, nextCursor: null })
     && es.status === 200 && es.body.stats.totals.affiliates === 0 && eq(es.body.stats.levels, []) && es.body.stats.orders.real.total === 0);
 }
 
@@ -477,7 +478,7 @@ console.log('\n7. Exact output keys; no sensitive field anywhere');
     && eq(keys(s.body.stats.orders), ['fake', 'real']) && eq(keys(s.body.stats.orders.real), ORDER_KEYS) && eq(keys(s.body.stats.orders.fake), ORDER_KEYS)
     && s.body.stats.levels.every((l) => eq(keys(l), LEVEL_KEYS) && eq(keys(l.identity), ID_KEYS) && eq(keys(l.orders.real), ORDER_KEYS) && eq(keys(l.orders.fake), ORDER_KEYS)));
   ok('nodes: exact keys of the page, the parent, the breadcrumb and every node',
-    eq(keys(p.body), PAGE_KEYS) && eq(keys(p.body.parent), PATH_KEYS) && p.body.path.every((x) => eq(keys(x), PATH_KEYS))
+    eq(keys(p.body), PAGE_KEYS) && eq(keys(p.body.parent), PATH_KEYS) && p.body.path.every((x) => eq(keys(x), PATH_KEYS)) && eq(keys(p.body.parentNode), NODE_KEYS)
     && p.body.nodes.every((n) => eq(keys(n), NODE_KEYS) && eq(keys(n.orders), ['fake', 'real']) && eq(keys(n.orders.real), ORDER_KEYS)));
   const json = JSON.stringify([s.body, p.body]);
   ok('no password / phone / clientName / clientPhone / amount / cin* / isFake / isActive / rejectionReason key or value',
@@ -579,9 +580,10 @@ console.log('\n9. Read-only and static checks');
   // Stage B: the downline walks are capped by DEPTH_CAP (the legacy tree statement keeps members + 1)
   ok('the network SQL is parameterised (no string concatenation into the query) and bounded (every downward walk: depth < DEPTH_CAP; legacy tree: members + 1)',
     /\$queryRaw`/.test(svc) && !/\$queryRawUnsafe/.test(svc) && /WHERE t\.depth < \$\{bound\}::int/.test(svc) && /const bound = members \+ 1/.test(svc)
-    // Stage F: 4 page / stats walks (t) + 3 N(R) walks (net: unplaced, downline, progress-qualified); 6 functions bind the cap
-    && (svc.match(/WHERE t\.depth < \$\{cap\}::int/g) || []).length === 4 && (svc.match(/WHERE n\.depth < \$\{cap\}::int/g) || []).length === 3
-    && (svc.match(/const cap = NETWORK_LIMITS\.DEPTH_CAP;/g) || []).length === 6);
+    // Stage F: 4 page / stats walks (t) + 3 N(R) walks (net: unplaced, downline, progress-qualified); 6 functions bind the cap;
+    // simplified dashboard: + the node card walk (t) = 5 t-walks, 7 functions
+    && (svc.match(/WHERE t\.depth < \$\{cap\}::int/g) || []).length === 5 && (svc.match(/WHERE n\.depth < \$\{cap\}::int/g) || []).length === 3
+    && (svc.match(/const cap = NETWORK_LIMITS\.DEPTH_CAP;/g) || []).length === 7);
 }
 
 // ── 10. projections with hostile input ───────────────────────────────────────
@@ -643,10 +645,12 @@ const spyRaw = (db, seen) => new Proxy(db, {
   await S.getNetworkNodes(E.A.id, { db: spy, view: 'unplaced' });
   await S.getNetworkNodes(E.A.id, { db: spy, view: 'unplaced', cursor: 5 });
   // Stage B: path → ancestry; page → roots (whole network) / children (parentId)
-  ok('each request runs its tagged statements: stats-orders | ancestry + stats | ancestry + children | roots | unplaced | unplaced',
+  ok('each request runs its tagged statements: stats-orders | ancestry + stats | ancestry + children + node (first page of a scope) | roots | unplaced | unplaced',
     eq(seen.map((s) => s.tag), ['recruiter-network-stats-orders', 'recruiter-network-ancestry', 'recruiter-network-stats', 'recruiter-network-ancestry',
-      'recruiter-network-children', 'recruiter-network-roots', 'recruiter-network-unplaced', 'recruiter-network-unplaced']), seen.map((s) => s.tag).join(','));
-  const [statsO, pathR, statsSub, , kids, emptyPage, unpl, emptyUnpl] = seen.map((s) => s.rows);
+      'recruiter-network-children', 'recruiter-network-node', 'recruiter-network-roots', 'recruiter-network-unplaced', 'recruiter-network-unplaced']), seen.map((s) => s.tag).join(','));
+  const [statsO, pathR, statsSub, , kids, nodeRow, emptyPage, unpl, emptyUnpl] = seen.map((s) => s.rows);
+  ok('node card rows { id, username, name, isActive, mine, children, descendants } (no total; the scope itself, linked to R)',
+    eq(nodeRow, [{ id: r.id, username: r.username, name: r.name, isActive: E.db._tables.affiliate.find((a) => a.id === r.id).isActive, mine: true, children: 1, descendants: 1 }]), JSON.stringify(nodeRow));
   const bag = (list) => list.map((v) => JSON.stringify(v)).sort();
   // Stage F (was Stage B's 'k' + 'w' rows): ONE 'u' row — the unplaced members (R's links on a parent cycle owned by R:
   // X ⇄ Y = 2; 0 for a sub-network); sub-network levels absolute (c = level 2)
@@ -862,8 +866,8 @@ const spyRaw = (db, seen) => new Proxy(db, {
     return out;
   };
   const raws = [...read('src/lib/services/recruiterNetworkService.js').matchAll(/\$queryRaw`([\s\S]*?)`/g)].map((m) => m[1]);
-  ok('the service holds exactly the 9 tagged raw statements (tree, ancestry, roots, children, unplaced, stats-orders, stats, downline, progress-qualified — Stage B)',
-    eq(raws.map((s) => /\/\* ([\w-]+) \*\//.exec(s)?.[1]), ['recruiter-network-tree', 'recruiter-network-ancestry', 'recruiter-network-roots', 'recruiter-network-children', 'recruiter-network-unplaced',
+  ok('the service holds exactly the 10 tagged raw statements (tree, ancestry, roots, children, node card, unplaced, stats-orders, stats, downline, progress-qualified — Stage B + the details view)',
+    eq(raws.map((s) => /\/\* ([\w-]+) \*\//.exec(s)?.[1]), ['recruiter-network-tree', 'recruiter-network-ancestry', 'recruiter-network-roots', 'recruiter-network-children', 'recruiter-network-node', 'recruiter-network-unplaced',
       'recruiter-network-stats-orders', 'recruiter-network-stats', 'recruiter-network-downline', 'recruiter-progress-qualified']), raws.map((s) => /\/\* ([\w-]+) \*\//.exec(s)?.[1]).join(','));
   const found = raws.flatMap((s) => violations(s).map((v) => `${/\/\* ([\w-]+) \*\//.exec(s)?.[1]}: ${v}`));
   ok('every double-quoted identifier of the raw SQL is an allowlisted table / column (affiliates: id, parentId, username, name, isActive, createdAt; links: affiliateId, recruiterId, createdAt; identity: affiliateId, status; orders: affiliateId, status, isFake; alias "linkedAt") — and no *, no unquoted column, no other table',
@@ -983,7 +987,7 @@ const spyRaw = (db, seen) => new Proxy(db, {
   }
   ok('zero members, service (orders on and off): rootId / parentId → NOT_FOUND after the member count only (no path / page / stats statement)',
     svcNF.every((v) => v.a === 'NOT_FOUND' && v.b === 'NOT_FOUND' && eq(v.ops, ['recruiterAffiliateLink.count', 'recruiterAffiliateLink.count'])), JSON.stringify(svcNF.slice(0, 2)));
-  const EMPTY_PAGE = { parent: null, path: [], nodes: [], total: 0, nextCursor: null };
+  const EMPTY_PAGE = { parent: null, parentNode: null, path: [], nodes: [], total: 0, nextCursor: null };
   const zeroTotals = { affiliates: 0, direct: 0, active: 0, inactive: 0, maxLevel: 0, unplaced: 0 };
   const results = [];
   for (const includeOrders of [true, false]) {
@@ -1091,6 +1095,14 @@ console.log('\n12. Part 5b equivalence: the former in-memory implementation and 
     const normNew = (r) => {
       if (!r.ok) return r;
       const v = JSON.parse(JSON.stringify(r.ok));
+      // simplified dashboard: the scope's own card is new (the old service has none) — checked for consistency with
+      // the page it rides on (children = the page total; a complete first page sums to its descendants), then dropped
+      if ('parentNode' in v) {
+        const pn = v.parentNode;
+        if (pn !== null && !(pn.childrenCount === v.total && v.parent && pn.id === v.parent.id && pn.level === v.parent.level
+          && (v.nextCursor !== null || pn.descendantsCount === v.nodes.reduce((n, x) => n + 1 + x.descendantsCount, 0)))) cardIssues.push(JSON.stringify({ pn, total: v.total }).slice(0, 200));
+        delete v.parentNode;
+      }
       if (Array.isArray(v.nodes)) { for (const x of [...v.nodes, ...v.path, ...(v.parent ? [v.parent] : [])]) delete x.linkedToMe; }
       if (Array.isArray(v.levels) && v.rootId !== null && v.levels.length) {
         const shift = Math.min(...v.levels.map((l) => l.level)) - 1;
@@ -1100,6 +1112,7 @@ console.log('\n12. Part 5b equivalence: the former in-memory implementation and 
       return { ok: v };
     };
     const mismatches = [];
+    const cardIssues = [];
     const DATASETS = 24;
     for (let seed = 1; seed <= DATASETS; seed++) {
       const rnd = rand(seed * 7919);
@@ -1160,7 +1173,49 @@ console.log('\n12. Part 5b equivalence: the former in-memory implementation and 
     ok(`old = new on ${DATASETS} seeded random networks with D(R) == linked(R) (cycles, self-parents, orphan / unlinked parents, createdAt and link ties, mixed-case ids, odd statuses): `
       + `${checked} results identical (${withUnplaced} whole networks with unplaced members, ${notFound} NOT_FOUND, ${emptyPages} empty pages) — stats (whole, every rootId), roots / children / unplaced pages, orders on and off`,
     mismatches.length === 0 && checked > 5000 && withUnplaced > 0 && notFound > 0 && emptyPages > 0, mismatches.slice(0, 3).join('\n'));
+  ok('details view: on every random network, every scoped first page carries the scope\'s own card — children = the page total, a complete page sums (1 + descendants) to its descendants',
+    cardIssues.length === 0, cardIssues.slice(0, 3).join('\n'));
   }
+}
+
+// ── 12. Simplified dashboard: the details view's own card (parentNode) ─────────
+console.log('\n12. parentNode: the selected affiliate\'s own card — ALL-level downline, own orders, first page only');
+{
+  const E = setup();
+  // X with 3 children; child c1 has a 4-level chain below it and a second branch; c2 has 2 children → downline 3 + 5 + 2 = 10
+  const X = aff(E, E.A);
+  const [c1, c2, c3] = [aff(E, E.A, { parentId: X.id }), aff(E, E.A, { parentId: X.id }), aff(E, E.A, { parentId: X.id })];
+  const deep = chain(E, E.A, 4, c1.id); // ids
+  aff(E, E.A, { parentId: c1.id });
+  aff(E, E.A, { parentId: c2.id }); aff(E, E.A, { parentId: c2.id });
+  E.db._seed.order({ affiliateId: X.id, status: 'delivered' }); E.db._seed.order({ affiliateId: X.id, status: 'pending' });
+  E.db._seed.order({ affiliateId: X.id, status: 'delivered', isFake: true });
+  E.db._seed.order({ affiliateId: c1.id, status: 'delivered' }); E.db._seed.order({ affiliateId: deep[3], status: 'delivered' });
+  E.db._seed.identity({ affiliateId: X.id, status: 'APPROVED' });
+  const r = await nodes(E, E.A, { parentId: X.id });
+  const pn = r.body.parentNode;
+  const st = (await stats(E, E.A, X.id)).body.stats;
+  ok('parentNode = X itself: level 1, 3 direct children (= the page total = stats direct), 10 descendants over ALL levels (= stats totals.affiliates)',
+    r.status === 200 && pn.id === X.id && pn.level === 1 && pn.childrenCount === 3 && r.body.total === 3 && st.totals.direct === 3
+    && pn.descendantsCount === 10 && st.totals.affiliates === 10, JSON.stringify({ pn, total: r.body.total, st: st.totals }));
+  ok('parentNode orders are X\'s OWN orders only (2 real: 1 delivered + 1 pending; 1 test order apart) — never its downline\'s',
+    pn.orders.real.total === 2 && pn.orders.real.delivered === 1 && pn.orders.fake.total === 1 && st.orders.real.delivered === 2, JSON.stringify(pn.orders));
+  ok('parentNode carries status, identity status, linkedToMe, progress and reward state like every node', pn.status === 'ACTIVE' || pn.status === 'INACTIVE'
+    && pn.identityStatus === 'APPROVED' && pn.linkedToMe === true && typeof pn.progress === 'object' && typeof pn.rewardState === 'object');
+  ok('each affiliate counted once: the children cards sum to the downline (Σ (1 + descendants) = 10)',
+    r.body.nodes.reduce((n, c) => n + 1 + c.descendantsCount, 0) === 10 && eq(r.body.nodes.map((c) => c.id).sort(), [c1.id, c2.id, c3.id].sort()));
+  const deeper = await nodes(E, E.A, { parentId: deep[1] });
+  ok('a deeper node: its level, its own (chain) downline', deeper.body.parentNode.level === 4 && deeper.body.parentNode.childrenCount === 1 && deeper.body.parentNode.descendantsCount === 2);
+  ok('no parentNode on the roots page, on a later page (cursor > 0) or on the unplaced view',
+    (await nodes(E, E.A)).body.parentNode === null && (await nodes(E, E.A, { parentId: X.id, cursor: 2 })).body.parentNode === null
+    && (await nodes(E, E.A, { view: 'unplaced' })).body.parentNode === null);
+  const other = await nodes(E, E.B, { parentId: X.id });
+  ok('another recruiter asking for X → 404 NOT_FOUND (no card leaks)', other.status === 404 && other.text === '{"code":"NOT_FOUND"}');
+  const NO = E.db._seed.recruiter({ username: 'net.nocard', name: 'Sans commandes', canViewOrders: false });
+  const Y = aff(E, NO); aff(E, NO, { parentId: Y.id });
+  E.db._seed.order({ affiliateId: Y.id, status: 'delivered' });
+  const ny = await nodes(E, NO, { parentId: Y.id });
+  ok('canViewOrders off → parentNode.orders null (never zero-filled), counts still there', ny.status === 200 && ny.body.parentNode.orders === null && ny.body.parentNode.childrenCount === 1, JSON.stringify(ny.body.parentNode));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

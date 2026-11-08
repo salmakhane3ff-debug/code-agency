@@ -1,182 +1,442 @@
 "use client";
 /**
- * /recruiter/affiliates — the recruiter's affiliates list (Affiliate Recruiter System, Phase 7
- * Stage C). Arabic, RTL, READ ONLY.
- *
- *   • GET /api/recruiter/affiliates?q=&cursor=&limit=  → the recruiter's network N(R) (Phase 7 Stage E:
- *     its own affiliates and those invited below them), newest first, keyset paged (nextCursor),
- *     `total` matching q; per item: status, identity status, absolute level, parent in the network
- *     (or null), "مدعو عبر الشبكة" when not created directly (information), progress and the latest
- *     reward cycle
- *   • GET /api/recruiter/me                            → canCreateAffiliates (creation buttons)
- * Search is debounced; a stale answer (the search changed meanwhile) is discarded; "عرض المزيد"
- * appends the next page without duplicates and its failure keeps the rows already shown.
- * Progress counts appear only when the server sends them (canViewOrders) — never as zeros.
- * Built only from recruiterVisibility.js projections.
- * Phase 2 (UI only): rendered inside the recruiter app shell with the shared ui.jsx primitives.
+ * /recruiter/affiliates — الأفلييت: the recruiter's network in ONE simple card experience (the former flat list and
+ * the former tree /recruiter/network merged). Arabic, RTL, READ ONLY. Three modes, all in the URL (back / refresh /
+ * direct links work; navigation is client-side, never a full reload):
+ *   • list     (no query)  GET /api/recruiter/network/nodes?cursor=          → the TOP-LEVEL affiliates of the network
+ *                          (+ on demand ?view=unplaced: members on a parent cycle, malformed data)
+ *   • search   (?q=)       GET /api/recruiter/affiliates?q=&cursor=          → the whole network, by name / username
+ *   • details  (?id=X)     GET /api/recruiter/network/nodes?parentId=X&cursor= → X's own card (parentNode, first page),
+ *                          its breadcrumb (path) and its children; every child opens its own details (unlimited depth).
+ *                          Anything outside the recruiter's network → 404 NOT_FOUND → a "not in your network" state.
+ *   • GET /api/recruiter/me (useRecruiterPerms) → canCreateAffiliates (the creation buttons only).
+ * The search is debounced; a stale answer (mode / affiliate / search changed meanwhile) is discarded (request gate);
+ * "عرض المزيد" appends the next page without duplicates (mergeById) and its failure keeps the rows already shown.
+ * Order figures appear only when the server sends them (canViewOrders) — otherwise "—", never zeros.
+ * Built only from recruiterVisibility.js projections. Rendered inside the recruiter app shell (no own header / <main>).
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { ListChecks, Search, UserPlus, Users } from "lucide-react";
-import { toRecruiterAffiliateListItemView } from "@/lib/recruiterVisibility";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ChevronLeft, Network, Search, TriangleAlert, UserPlus, Users } from "lucide-react";
+import { toRecruiterAffiliateListItemView, toRecruiterNetworkNodeView, toRecruiterNetworkPathView } from "@/lib/recruiterVisibility";
 import {
-  IDENTITY_LABEL, Loading, NodeBadges, ProgressBar, STATUS_LABEL, fmt, getJson, handleAuth, identityTone,
-  useRecruiterPerms,
+  IDENTITY_LABEL, ORDERS_HIDDEN_TEXT, STATUS_LABEL, fmt, getJson, handleAuth, identityTone, useRecruiterPerms,
 } from "../network/networkUi";
-import { NETWORK_INVITED_LABEL, createRequestGate, levelLabel, mergeById } from "../recruiterUiState";
+import { createRequestGate, levelLabel, mergeById, nodeBadges, progressDisplay } from "../recruiterUiState";
+import { recruiterErrorLabel } from "../errorLabels";
 import { Badge, Card, CenteredNotice, EmptyState, LoadingBlock, PageHeader, RetryError, ui } from "../_components/ui";
 
-const PAGE = 25;
+const BASE = "/recruiter/affiliates";
+const NODES_PAGE = 50;
+const SEARCH_PAGE = 25;
 const QUERY_MAX = 40;
 const DEBOUNCE_MS = 300;
-const listUrl = (q, cursor) => {
-  const p = new URLSearchParams({ limit: String(PAGE) });
-  if (q) p.set("q", q);
-  if (cursor) p.set("cursor", cursor);
-  return `/api/recruiter/affiliates?${p.toString()}`;
+
+const detailsHref = (id) => `${BASE}?id=${encodeURIComponent(id)}`;
+const nameOf = (a) => a?.name || a?.username || "—";
+const num = (v) => (Number.isInteger(v) ? fmt(v) : "—");
+const arr = (v) => (Array.isArray(v) ? v : []);
+const nodesUrl = (params) => `/api/recruiter/network/nodes?${new URLSearchParams(params).toString()}`;
+const pickNodes = (b) => arr(b?.nodes).map(toRecruiterNetworkNodeView);
+
+/** The three paged sources: url(arg, cursor) and pick(body) → { items, nextCursor, head }. */
+const SOURCES = {
+  nodes: {
+    url: (parentId, cursor) => nodesUrl({ limit: String(NODES_PAGE), cursor: String(cursor ?? 0), ...(parentId ? { parentId } : {}) }),
+    pick: (b) => ({
+      items: pickNodes(b),
+      nextCursor: Number.isInteger(b?.nextCursor) ? b.nextCursor : null,
+      head: { node: b?.parentNode ? toRecruiterNetworkNodeView(b.parentNode) : null, path: arr(b?.path).map(toRecruiterNetworkPathView) },
+    }),
+  },
+  unplaced: {
+    url: (_arg, cursor) => nodesUrl({ view: "unplaced", limit: String(NODES_PAGE), cursor: String(cursor ?? 0) }),
+    pick: (b) => ({ items: pickNodes(b), nextCursor: Number.isInteger(b?.nextCursor) ? b.nextCursor : null, head: null }),
+  },
+  search: {
+    url: (q, cursor) => {
+      const p = new URLSearchParams({ limit: String(SEARCH_PAGE) });
+      if (q) p.set("q", q);
+      if (cursor) p.set("cursor", cursor);
+      return `/api/recruiter/affiliates?${p.toString()}`;
+    },
+    pick: (b) => ({
+      items: arr(b?.affiliates).map((x) => toRecruiterAffiliateListItemView(x, new Set())).filter((x) => typeof x.id === "string"),
+      nextCursor: typeof b?.nextCursor === "string" ? b.nextCursor : null,
+      head: null,
+    }),
+  },
 };
 
-function ParentLine({ parent }) {
-  if (!parent) return <span className="text-xs text-slate-500" data-parent="none">بدون أب داخل شبكتك (حساب رئيسي)</span>;
+const EMPTY = { key: null, items: [], total: 0, nextCursor: null, head: null, loading: true, error: null, moreError: null };
+
+/**
+ * One paged list of `kind` for `arg`: first page (replaces) or next page (appends, de-duplicated). A response of an
+ * older request / another key is discarded; one "load more" at a time; a failed "load more" keeps the rows.
+ */
+function usePagedList(kind, arg, enabled, fail) {
+  const key = `${kind}:${arg}`;
+  const [list, setList] = useState(EMPTY);
+  const gate = useRef(createRequestGate()).current;
+  const moreInFlight = useRef(false);
+
+  const load = useCallback(async (cursor = null) => {
+    const more = cursor !== null;
+    if (more && moreInFlight.current) return;
+    const token = gate.begin();
+    moreInFlight.current = more;
+    setList((l) => (more ? { ...l, loading: true, moreError: null } : { ...EMPTY, key }));
+    const r = await getJson(SOURCES[kind].url(arg, cursor));
+    if (!gate.isCurrent(token)) return; // the mode / affiliate / search changed meanwhile: stale answer
+    moreInFlight.current = false;
+    if (fail(r)) return;
+    if (!r.ok) {
+      setList((l) => (more ? { ...l, loading: false, moreError: r.code } : { ...EMPTY, key, loading: false, error: r.code }));
+      return;
+    }
+    const { items, nextCursor, head } = SOURCES[kind].pick(r.body);
+    setList((l) => ({
+      key,
+      items: more ? mergeById(l.items, items) : mergeById([], items),
+      total: Number.isInteger(r.body?.total) ? r.body.total : 0,
+      nextCursor,
+      head: more ? l.head : head, // details: X's own card (parentNode) only comes with the first page — kept
+      loading: false, error: null, moreError: null,
+    }));
+  }, [key, kind, arg, fail, gate]);
+
+  useEffect(() => {
+    if (enabled) { load(null); return; }
+    gate.invalidate();
+    moreInFlight.current = false;
+  }, [enabled, load, gate]);
+
+  return { list: list.key === key ? list : { ...EMPTY, key }, load };
+}
+
+function StatusBadges({ a }) {
   return (
-    <span className="text-xs text-slate-600 min-w-0 truncate" data-parent={parent.id}>
-      الأب: <b>{parent.name || parent.username || "—"}</b>
-      {parent.username && <>{" "}<bdi className="text-slate-400" dir="ltr">@{parent.username}</bdi></>}
-      {!parent.linkedToMe && <span className="text-slate-500" data-parent-invited> · {NETWORK_INVITED_LABEL}</span>}
-    </span>
+    <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+      <Badge tone={a.status === "ACTIVE" ? "green" : a.status === "INACTIVE" ? "red" : "slate"} data-affiliate-status={a.status ?? ""}>
+        {STATUS_LABEL[a.status] ?? "غير محدد"}
+      </Badge>
+      <Badge tone={identityTone(a.identityStatus)} data-affiliate-identity={a.identityStatus}>
+        البطاقة الوطنية: {IDENTITY_LABEL[a.identityStatus]}
+      </Badge>
+    </div>
   );
 }
 
-function AffiliateCard({ a }) {
+/** "x / T" real delivered sales of one affiliate — nothing when the count is withheld (canViewOrders off). */
+function DeliveredLine({ progress }) {
+  const p = progressDisplay(progress);
+  if (!p) return null;
   return (
-    <li className={`${ui.panel} p-4 space-y-3 min-w-0`} data-affiliate-id={a.id} data-affiliate-level={a.level ?? ""}>
+    <p className="text-xs text-gray-500" data-progress={p.threshold ? `${p.delivered}/${p.threshold}` : `${p.delivered}`}>
+      المبيعات المسلّمة: <b className={p.reached ? "text-green-700" : "text-gray-800"}><bdi dir="ltr">{p.ratio}</bdi></b>
+    </p>
+  );
+}
+
+/** The four figures of a network card: direct, whole downline, orders, delivered ("—" when orders are withheld). */
+function miniFigures(a) {
+  const real = a.orders?.real ?? null;
+  return [
+    ["direct", "المباشرون", num(a.childrenCount)],
+    ["network", "الشبكة (كل المستويات)", num(a.descendantsCount)],
+    ["orders", "الطلبات", real ? num(real.total) : "—"],
+    ["delivered", "المسلّمة", real ? num(real.delivered) : "—"],
+  ];
+}
+
+/**
+ * THE affiliate card (list, search results, details children, unplaced members): name, @username, level, activation
+ * + identity badges, then either the 4 mini figures (network nodes) or the delivered progress (search items, which
+ * carry no counts). With `href` the whole card is a link (≥ 44 px) with a chevron at the end.
+ */
+function AffiliateCard({ a, href, figures }) {
+  const body = (
+    <>
+      <div className="@container min-w-0 flex-1 space-y-2.5">
+        <div className="flex items-start gap-2 min-w-0">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold text-gray-900 truncate" data-affiliate-name>{a.name || "—"}</p>
+            <p className="text-xs text-gray-500 truncate" data-affiliate-username>
+              {a.username ? <bdi dir="ltr">@{a.username}</bdi> : "—"}
+            </p>
+          </div>
+          <Badge tone="violet" data-level-badge>{levelLabel(a.level)}</Badge>
+        </div>
+        <StatusBadges a={a} />
+        {figures ? (
+          <dl className="grid grid-cols-2 @sm:grid-cols-4 gap-1.5 min-w-0">
+            {miniFigures(a).map(([k, label, value]) => (
+              <div key={k} className="flex flex-col-reverse rounded-lg bg-gray-50 px-2.5 py-1.5 min-w-0" data-mini={k}>
+                <dt className="text-[11px] text-gray-500 leading-tight">{label}</dt>
+                <dd className={`text-sm font-bold leading-tight ${k === "delivered" && value !== "—" ? "text-green-700" : "text-gray-900"}`}>{value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : <DeliveredLine progress={a.progress} />}
+      </div>
+      {href && <ChevronLeft className="w-5 h-5 shrink-0 self-center text-gray-300 group-hover:text-gray-500" aria-hidden="true" />}
+    </>
+  );
+  const cls = "flex items-stretch gap-2 min-h-11 w-full rounded-2xl border border-gray-100 bg-white p-3.5 min-w-0";
+  return href ? (
+    <Link href={href} data-affiliate-card={a.id} aria-label={`${nameOf(a)} — التفاصيل`}
+      className={`group ${cls} transition-colors hover:border-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300`}>
+      {body}
+    </Link>
+  ) : <div data-affiliate-card={a.id} className={cls}>{body}</div>;
+}
+
+/** Cards of one paged list + its empty state, errors (first page / "load more") and "عرض المزيد". */
+function PagedCards({ list, load, empty, figures = true, linkable = () => true }) {
+  return (
+    <div className="space-y-3 min-w-0">
+      {list.error ? (
+        <RetryError code={list.error} onRetry={() => load(null)} />
+      ) : list.items.length > 0 ? (
+        <ul className="grid gap-2.5 lg:grid-cols-2 min-w-0">
+          {list.items.map((a) => (
+            <li key={a.id} className="min-w-0">
+              <AffiliateCard a={a} figures={figures} href={linkable(a) ? detailsHref(a.id) : null} />
+            </li>
+          ))}
+        </ul>
+      ) : list.loading ? <LoadingBlock /> : <div data-empty>{empty}</div>}
+      {list.moreError && <RetryError code={list.moreError} onRetry={() => load(list.nextCursor)} />}
+      {!list.error && !list.moreError && list.nextCursor !== null && list.items.length > 0 && (
+        <div className="flex justify-center">
+          <button type="button" onClick={() => load(list.nextCursor)} disabled={list.loading} aria-busy={list.loading || undefined} data-load-more
+            className={`${ui.btnSecondary} w-full sm:w-auto`}>{list.loading ? "جارٍ التحميل…" : "عرض المزيد"}</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A small gray section title with the total (data-total) at the end. */
+function ListTitle({ title, list, totalLabel = "المجموع" }) {
+  return (
+    <div className="flex items-center justify-between gap-3 min-w-0">
+      <h2 className="text-sm font-bold text-gray-700 min-w-0 truncate">{title}</h2>
+      {!list.error && !(list.loading && list.items.length === 0) && (
+        <p className="shrink-0 text-xs text-gray-500" data-total>{totalLabel}: <b className="text-gray-900">{fmt(list.total)}</b></p>
+      )}
+    </div>
+  );
+}
+
+/** Breadcrumb from the API `path` (ancestors … X); a long path shows the first, "…" and the last two. */
+function Crumbs({ path }) {
+  const current = path[path.length - 1];
+  const shown = path.length > 4 ? [path[0], null, ...path.slice(-2)] : path;
+  return (
+    <nav aria-label="مسار الشبكة" data-breadcrumb className="min-w-0 max-w-full text-sm">
+      <ol className="flex flex-wrap items-center gap-x-1 min-w-0">
+        <li><Link href={BASE} className="block py-3 px-1 font-semibold text-violet-600 hover:underline" data-breadcrumb-home>الأفلييت</Link></li>
+        {shown.map((p, i) => (
+          <li key={p?.id ?? `gap-${i}`} className="flex items-center gap-1 min-w-0">
+            <ChevronLeft className="w-3.5 h-3.5 shrink-0 text-gray-300" aria-hidden="true" />
+            {!p ? <span className="text-gray-400" aria-hidden="true">…</span>
+              : p === current ? <span className="block max-w-[10rem] truncate font-bold text-gray-900" aria-current="page">{nameOf(p)}</span>
+                : <Link href={detailsHref(p.id)} className="block max-w-[9rem] truncate py-3 px-1 font-semibold text-violet-600 hover:underline" data-breadcrumb-item>{nameOf(p)}</Link>}
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
+}
+
+/** X's own card: identity line + 5 compact figures (direct, downline, orders, delivered, status). */
+function DetailsCard({ node }) {
+  const p = progressDisplay(node.progress);
+  const badges = nodeBadges(node);
+  return (
+    <Card className={`${ui.cardPad} space-y-4`} data-details-card={node.id}>
       <div className="flex items-start gap-3 min-w-0">
-        <span className="grid place-items-center w-10 h-10 shrink-0 rounded-2xl bg-white border border-violet-100 text-violet-600" aria-hidden="true">
-          <Users className="w-5 h-5" />
+        <span className="grid place-items-center w-11 h-11 shrink-0 rounded-xl bg-violet-50 text-violet-600 font-bold" aria-hidden="true">
+          {nameOf(node).slice(0, 1).toUpperCase()}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="font-bold text-sm text-slate-900 truncate" data-affiliate-name>{a.name || "—"}</p>
-          <p className="text-xs text-slate-500 truncate" dir="ltr" data-affiliate-username>{a.username || "—"}</p>
+          <p className="font-bold text-gray-900 truncate" data-affiliate-name>{node.name || "—"}</p>
+          <p className="text-xs text-gray-500 truncate" data-affiliate-username>{node.username ? <bdi dir="ltr">@{node.username}</bdi> : "—"}</p>
         </div>
-        <Badge tone="violet" data-level-badge>{levelLabel(a.level)}</Badge>
+        <Badge tone="violet" data-level-badge>{levelLabel(node.level)}</Badge>
       </div>
-      <div className="flex flex-wrap items-center gap-1.5 min-w-0">
-        <Badge tone={a.status === "ACTIVE" ? "green" : a.status === "INACTIVE" ? "red" : "slate"} data-affiliate-status={a.status ?? ""}>
-          {STATUS_LABEL[a.status] ?? "غير محدد"}
-        </Badge>
-        <Badge tone={identityTone(a.identityStatus)} data-affiliate-identity={a.identityStatus}>
-          البطاقة الوطنية: {IDENTITY_LABEL[a.identityStatus]}
-        </Badge>
+      <dl className="grid grid-cols-2 sm:grid-cols-4 gap-2 min-w-0">
+        {miniFigures(node).map(([k, label, value]) => (
+          <div key={k} className="rounded-xl bg-gray-50 px-3.5 py-3 min-w-0" data-details-figure={k}>
+            <dt className="text-xs text-gray-500 leading-tight">{label}</dt>
+            <dd className={`mt-1 text-lg font-bold leading-none ${k === "delivered" && value !== "—" ? "text-green-700" : "text-gray-900"}`}>{value}</dd>
+          </div>
+        ))}
+        <div className="col-span-2 sm:col-span-4 rounded-xl bg-gray-50 px-3.5 py-3 min-w-0" data-details-figure="status">
+          <dt className="text-xs text-gray-500 leading-tight">الحالة</dt>
+          <dd className="mt-2"><StatusBadges a={node} /></dd>
+        </div>
+      </dl>
+      {!node.orders && <p className={ui.hint} data-orders-hidden>{ORDERS_HIDDEN_TEXT}</p>}
+      {(p || badges.length > 0) && (
+        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+          {p && <DeliveredLine progress={node.progress} />}
+          {badges.map((b) => <Badge key={b.key} tone={b.tone} data-badge={b.key}>{b.label}</Badge>)}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** Details mode (?id=X): back, breadcrumb, X's card, then "شبكة <name>" = X's children (each opens its own details). */
+function Details({ list, load }) {
+  const node = list.head?.node ?? null;
+  const path = list.head?.path ?? [];
+  const parent = path.length >= 2 ? path[path.length - 2] : null;
+  const back = parent ? { href: detailsHref(parent.id), label: `الرجوع إلى ${nameOf(parent)}` } : { href: BASE, label: "الرجوع لقائمة الأفلييت" };
+  const name = node ? nameOf(node) : path.length ? nameOf(path[path.length - 1]) : "";
+
+  if (list.error === "NOT_FOUND") {
+    return (
+      <div className="space-y-5 min-w-0" data-details data-not-found>
+        <PageHeader Icon={Users} title="غير موجود في شبكتك" back={{ href: BASE, label: "الرجوع لقائمة الأفلييت" }} />
+        <EmptyState Icon={Users} text={recruiterErrorLabel("NOT_FOUND")}>
+          <Link href={BASE} className={`${ui.btnSecondary} mt-1`} data-back-list>الرجوع لقائمة الأفلييت</Link>
+        </EmptyState>
       </div>
-      <div className="flex min-w-0"><ParentLine parent={a.parent} /></div>
-      <NodeBadges node={a} />
-      <ProgressBar progress={a.progress} />
-    </li>
+    );
+  }
+  const headLoading = list.loading && !list.head;
+  return (
+    <div className="space-y-5 min-w-0" data-details>
+      <PageHeader Icon={Users} title={name || "تفاصيل الأفلييت"} back={back} />
+      {path.length > 0 && <Crumbs path={path} />}
+      {list.error ? <RetryError code={list.error} onRetry={() => load(null)} />
+        : headLoading ? <LoadingBlock />
+          : (
+            <>
+              {node && <DetailsCard node={node} />}
+              <section className="space-y-3 min-w-0" aria-label={`شبكة ${name}`} data-children>
+                <ListTitle title={<><Network className="inline w-4 h-4 me-1.5 text-gray-400 align-[-2px]" aria-hidden="true" />شبكة {name}</>} list={list} />
+                <PagedCards list={list} load={load} empty={<EmptyState Icon={Network} text="لا يوجد أفلييت تحت هذا الحساب." />} />
+              </section>
+            </>
+          )}
+    </div>
+  );
+}
+
+function AffiliatesView() {
+  const router = useRouter();
+  const params = useSearchParams();
+  const id = params.get("id") || "";
+  const urlQ = (params.get("q") || "").trim().slice(0, QUERY_MAX);
+  const mode = id ? "details" : urlQ ? "search" : "list";
+  const [notice, setNotice] = useState("");
+  const [query, setQuery] = useState(urlQ);
+  const [showUnplaced, setShowUnplaced] = useState(false);
+  const fail = useCallback((r) => handleAuth(r, router, setNotice), [router]);
+  const { permsError, retryPerms, canCreate } = useRecruiterPerms(router, setNotice);
+  const { list, load } = usePagedList(mode === "search" ? "search" : "nodes", mode === "details" ? id : urlQ, true, fail);
+  const unplaced = usePagedList("unplaced", "", showUnplaced && mode === "list", fail);
+
+  // Debounced search → the URL (?q=, replaced: no history entry per keystroke); the empty query applies at once.
+  const timer = useRef(null);
+  const pushedQ = useRef(urlQ);
+  const onSearch = (value) => {
+    setQuery(value);
+    clearTimeout(timer.current);
+    const next = value.trim().slice(0, QUERY_MAX);
+    timer.current = setTimeout(() => {
+      if (next === pushedQ.current) return;
+      pushedQ.current = next;
+      router.replace(next ? `${BASE}?q=${encodeURIComponent(next)}` : BASE, { scroll: false });
+    }, next ? DEBOUNCE_MS : 0);
+  };
+  // The URL changed by navigation (back, breadcrumb, a link): the search box follows it.
+  useEffect(() => {
+    if (urlQ === pushedQ.current) return;
+    pushedQ.current = urlQ;
+    clearTimeout(timer.current);
+    setQuery(urlQ);
+  }, [urlQ]);
+  useEffect(() => {
+    const t = timer;
+    return () => clearTimeout(t.current);
+  }, []);
+
+  if (notice) return <CenteredNotice>{notice}</CenteredNotice>;
+
+  return (
+    <div className="space-y-5 min-w-0" data-recruiter-affiliates data-mode={mode}>
+      {mode === "details" ? <Details list={list} load={load} /> : (
+        <>
+          <PageHeader Icon={Users} title="الأفلييت" subtitle="كل الأفلييت في شبكتك." back={null} actions={canCreate && (
+            <Link href="/recruiter/affiliates/new" data-create-link className={ui.btnPrimary}>
+              <UserPlus className="w-4 h-4" aria-hidden="true" />
+              إنشاء أفلييت
+            </Link>
+          )}>
+            <div className="relative min-w-0">
+              <Search className="w-4 h-4 text-gray-400 absolute top-1/2 -translate-y-1/2 start-3.5 pointer-events-none" aria-hidden="true" />
+              <label htmlFor="aff-search" className="sr-only">بحث</label>
+              <input id="aff-search" type="search" value={query} maxLength={QUERY_MAX} onChange={(e) => onSearch(e.target.value)}
+                placeholder="ابحث بالاسم أو اسم المستخدم" autoComplete="off" data-search className={`${ui.input} ps-10`} />
+            </div>
+          </PageHeader>
+
+          {permsError && <RetryError code={permsError} onRetry={retryPerms} />}
+
+          <section className="space-y-3 min-w-0" aria-label={mode === "search" ? "نتائج البحث" : "الأفلييت الرئيسيون"} data-affiliates-list>
+            <ListTitle title={mode === "search" ? "نتائج البحث" : "الأفلييت الرئيسيون"} totalLabel={mode === "search" ? "النتائج" : "المجموع"} list={list} />
+            {mode === "search" ? (
+              <PagedCards list={list} load={load} figures={false} linkable={(a) => a.level !== null}
+                empty={<EmptyState Icon={Search} text="لا توجد نتائج لهذا البحث." />} />
+            ) : (
+              <PagedCards list={list} load={load} empty={(
+                <EmptyState Icon={Users} text="لا يوجد أفلييت في شبكتك بعد">
+                  {canCreate && (
+                    <Link href="/recruiter/affiliates/new" className={`${ui.btnPrimary} mt-1`} data-empty-create>
+                      <UserPlus className="w-4 h-4" aria-hidden="true" />
+                      إنشاء أفلييت
+                    </Link>
+                  )}
+                </EmptyState>
+              )} />
+            )}
+          </section>
+
+          {mode === "list" && (showUnplaced ? (
+            <section className="space-y-3 min-w-0" aria-label="أعضاء بدون موقع في الشجرة" data-unplaced data-unplaced-list>
+              <div className="flex items-center justify-between gap-3 min-w-0">
+                <h2 className="flex items-center gap-1.5 text-sm font-bold text-gray-700 min-w-0">
+                  <TriangleAlert className="w-4 h-4 shrink-0 text-amber-500" aria-hidden="true" />
+                  <span className="min-w-0">أعضاء بدون موقع صالح في الشجرة (بيانات غير متناسقة)</span>
+                </h2>
+                <button type="button" onClick={() => setShowUnplaced(false)} className={`shrink-0 text-xs ${ui.link} min-h-11 px-1`} data-unplaced-hide>إخفاء</button>
+              </div>
+              <PagedCards list={unplaced.list} load={unplaced.load} figures={false} linkable={() => false}
+                empty={<EmptyState Icon={Users} text="لا يوجد أعضاء بدون موقع في الشجرة." />} />
+            </section>
+          ) : (
+            <button type="button" onClick={() => setShowUnplaced(true)} data-unplaced-show
+              className="inline-flex items-center gap-1.5 min-h-11 text-xs font-semibold text-gray-500 hover:text-gray-800">
+              <TriangleAlert className="w-4 h-4 text-amber-500" aria-hidden="true" />
+              عرض الأعضاء بدون موقع في الشجرة
+            </button>
+          ))}
+        </>
+      )}
+    </div>
   );
 }
 
 export default function RecruiterAffiliatesPage() {
-  const router = useRouter();
-  const [notice, setNotice] = useState("");
-  const [query, setQuery] = useState("");
-  const [list, setList] = useState({ items: [], total: 0, nextCursor: null, loading: true, error: null, moreError: null, q: "" });
-  const gate = useRef(createRequestGate()).current;
-  const moreInFlight = useRef(false);
-  const { permsError, retryPerms, canCreate } = useRecruiterPerms(router, setNotice);
-
-  /** First page of `q` (replaces the list) or the next page (appends, de-duplicated). */
-  const load = useCallback(async (q, cursor = null) => {
-    if (cursor && moreInFlight.current) return;
-    const token = gate.begin();
-    moreInFlight.current = !!cursor;
-    setList((l) => (cursor ? { ...l, loading: true, moreError: null } : { ...l, loading: true, error: null, moreError: null }));
-    const r = await getJson(listUrl(q, cursor));
-    if (!gate.isCurrent(token)) return; // the search changed meanwhile: stale answer
-    moreInFlight.current = false;
-    if (handleAuth(r, router, setNotice)) return;
-    if (!r.ok) {
-      setList((l) => (cursor ? { ...l, loading: false, moreError: r.code } : { ...l, items: [], loading: false, error: r.code, q }));
-      return;
-    }
-    const items = (Array.isArray(r.body?.affiliates) ? r.body.affiliates : []).map((x) => toRecruiterAffiliateListItemView(x, new Set()))
-      .filter((x) => typeof x.id === "string");
-    setList((l) => ({
-      items: cursor ? mergeById(l.items, items) : mergeById([], items),
-      total: Number.isInteger(r.body?.total) ? r.body.total : 0,
-      nextCursor: typeof r.body?.nextCursor === "string" ? r.body.nextCursor : null,
-      loading: false, error: null, moreError: null, q,
-    }));
-  }, [gate, router]);
-
-  // Debounced search (first page); the empty query loads at once.
-  useEffect(() => {
-    const q = query.trim().slice(0, QUERY_MAX);
-    const t = setTimeout(() => { load(q); }, q ? DEBOUNCE_MS : 0);
-    return () => clearTimeout(t);
-  }, [query, load]);
-
-  if (notice) return <CenteredNotice>{notice}</CenteredNotice>;
-
-  const searching = list.q !== "";
   return (
-    <div className="space-y-5 sm:space-y-6 min-w-0" data-recruiter-affiliates>
-      <PageHeader Icon={ListChecks} title="قائمة الأفلييت ديالي"
-        subtitle="كل الأفلييت في شبكتك (الذين أنشأتهم والمدعوون عبرهم — تُحتسب عنهم جميعاً المكافآت)، مع تقدّم كل واحد. المستويات مطلقة، نفسها في الشجرة والإحصائيات.">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3 min-w-0">
-          <div className="relative min-w-0 flex-1">
-            <Search className="w-4 h-4 text-violet-400 absolute top-1/2 -translate-y-1/2 start-3.5 pointer-events-none" aria-hidden="true" />
-            <label htmlFor="aff-search" className="sr-only">بحث</label>
-            <input id="aff-search" type="search" value={query} maxLength={QUERY_MAX} onChange={(e) => setQuery(e.target.value)}
-              placeholder="ابحث بالاسم أو اسم المستخدم" autoComplete="off" data-search
-              className={`${ui.input} ps-10`} />
-          </div>
-          {canCreate && (
-            <Link href="/recruiter/affiliates/new" data-create-link className={`${ui.btnPrimary} shrink-0`}>
-              <UserPlus className="w-4 h-4" aria-hidden="true" />
-              <span className="hidden sm:inline">إنشاء أفلييت</span>
-              <span className="sm:hidden">إنشاء</span>
-            </Link>
-          )}
-        </div>
-      </PageHeader>
-
-      {permsError && <RetryError code={permsError} onRetry={retryPerms} />}
-
-      <Card className={`${ui.cardPad} space-y-4`} aria-label="قائمة الأفلييت" data-affiliates-list>
-        {!list.error && !(list.loading && list.items.length === 0) && (
-          <p className="text-sm text-slate-600" data-total>
-            {searching ? "النتائج" : "المجموع"}: <b className="text-slate-900">{fmt(list.total)}</b>
-            {list.items.length > 0 && list.items.length < list.total && <span className="text-slate-500"> (معروض {fmt(list.items.length)})</span>}
-          </p>
-        )}
-        {list.error ? (
-          <RetryError code={list.error} onRetry={() => load(list.q)} />
-        ) : list.items.length > 0 ? (
-          <ul className="grid gap-3 lg:grid-cols-2 min-w-0">
-            {list.items.map((a) => <AffiliateCard key={a.id} a={a} />)}
-          </ul>
-        ) : !list.loading && (
-          <div data-empty>
-            <EmptyState Icon={Users} text={searching ? "لا توجد نتائج لهذا البحث." : "لا يوجد أفلييت في شبكتك بعد"}>
-              {!searching && canCreate && (
-                <Link href="/recruiter/affiliates/new" className={`${ui.btnPrimary} mt-1`} data-empty-create>
-                  <UserPlus className="w-4 h-4" aria-hidden="true" />
-                  إنشاء أفلييت
-                </Link>
-              )}
-            </EmptyState>
-          </div>
-        )}
-        {list.loading && (list.items.length === 0 ? <LoadingBlock /> : <Loading />)}
-        {list.moreError && <RetryError code={list.moreError} onRetry={() => load(list.q, list.nextCursor)} />}
-        {!list.loading && !list.error && !list.moreError && list.nextCursor && (
-          <div className="flex justify-center">
-            <button type="button" onClick={() => load(list.q, list.nextCursor)} data-load-more
-              className={`${ui.btnSecondary} w-full sm:w-auto`}>عرض المزيد</button>
-          </div>
-        )}
-      </Card>
-    </div>
+    <Suspense fallback={<LoadingBlock />}>
+      <AffiliatesView />
+    </Suspense>
   );
 }

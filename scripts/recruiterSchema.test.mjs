@@ -28,7 +28,7 @@
  * Run: node scripts/recruiterSchema.test.mjs
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
 const R = await import('../src/lib/recruiterSettings.js');
@@ -331,7 +331,8 @@ console.log('\n1e. Data sources: real delivered orders (isFake = false) and the 
   ok('isIdentityApproved() compares status === "APPROVED" (same rule as the withdrawal gate)', /return row\?\.status === 'APPROVED';/.test(idSvc));
   const fnBody = (code, name) => { const i = code.indexOf(`export async function ${name}(`); if (i < 0) return ''; const j = code.indexOf('\n}\n', i); return code.slice(i, j + 2); };
   // every write of a status 'APPROVED' in src (excluding the generated Prisma client)
-  const walk = (dir) => git(['ls-files', '--cached', '--others', '--exclude-standard', dir]).split('\n').filter((f) => /\.(m?[jt]sx?|cjs)$/.test(f) && !f.startsWith('src/generated/'));
+  // (a tracked file deleted in the working tree is skipped: only files that exist are scanned)
+  const walk = (dir) => git(['ls-files', '--cached', '--others', '--exclude-standard', dir]).split('\n').filter((f) => /\.(m?[jt]sx?|cjs)$/.test(f) && !f.startsWith('src/generated/') && existsSync(new URL(`../${f}`, import.meta.url)));
   const srcFiles = walk('src');
   const ID_WRITE = /identityVerification\.(create|createMany|update|updateMany|upsert)\b|identity_verifications/; // the original detector, unchanged
   const idWriters = srcFiles.filter((f) => identityWriteHit(ID_WRITE, f, read(f))); // + raw SQL writes in every file; the Part 5b join allowance (top of file)

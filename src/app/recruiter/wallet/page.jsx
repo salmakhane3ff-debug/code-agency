@@ -1,6 +1,8 @@
 "use client";
 /**
- * /recruiter/wallet — "أرباحي والسحب" (Affiliate Recruiter System, Phase 5). Arabic, RTL.
+ * /recruiter/wallet — "المحفظة" (Affiliate Recruiter System, Phase 5). Arabic, RTL.
+ * Layout (mobile first): 4 totals → withdrawal request → bank details (RIB) → withdrawal history →
+ * one collapsed "تفاصيل المكافآت" (reward rule, gross / reversed / net, reward history).
  *
  *   • GET  /api/recruiter/wallet               → reward rule, totals (MAD cents), reward history,
  *                                                withdrawals, bank details (the recruiter's OWN only)
@@ -21,12 +23,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Award, Banknote, CheckCircle2, Clock, Gift, History, Landmark, Loader2, RefreshCw, Scale, ShieldCheck, Wallet } from "lucide-react";
+import { Banknote, CheckCircle2, ChevronDown, Clock, Coins, Gift, History, Landmark, Loader2, RefreshCw, Scale, ShieldCheck, Wallet } from "lucide-react";
 import { toRecruiterError, toRecruiterIdentityView, toRecruiterProgressSummaryView, toRecruiterWalletView } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel, recruiterFieldErrorLabel } from "../errorLabels";
 import { authAction, rewardAmountsDisplay } from "../recruiterUiState";
 import { groupRowDetail, rewardRowTitle, walletGrossNet } from "./walletUi";
-import { Badge, Card, CardTitle, CenteredNotice, PageHeader, ui } from "../_components/ui";
+import { Badge, CenteredNotice, LoadingBlock, PageHeader, Section, StatCard, ui } from "../_components/ui";
 
 const EMPTY_BANK = { bankName: "", rib: "", accountName: "" };
 
@@ -74,7 +76,7 @@ const STATUS = {
   REJECTED: { label: "مرفوض", tone: "red" },
 };
 
-const inputCls = (bad) => `${bad ? ui.input.replace("border-violet-100 bg-violet-50/40", "border-red-400 bg-red-50/40") : ui.input} min-w-0`;
+const inputCls = (bad) => `${bad ? ui.input.replace("border-gray-200 bg-white", "border-red-400 bg-red-50/40") : ui.input} min-w-0`;
 
 function Field({ id, label, hint, error, field, children }) {
   return (
@@ -87,25 +89,19 @@ function Field({ id, label, hint, error, field, children }) {
   );
 }
 
-/** One total (same look as the shared StatTile; the amount keeps dir="ltr" and its data-* hook). */
-function TotalCard({ label, value, hook, tone = "slate", Icon }) {
-  const tones = {
-    slate: ["bg-slate-50", "text-slate-500"],
-    green: ["bg-emerald-50/70", "text-emerald-600"],
-    amber: ["bg-amber-50/70", "text-amber-600"],
-    violet: ["bg-violet-50/70", "text-violet-600"],
-  };
-  const [bg, ic] = tones[tone] ?? tones.slate;
+/** A StatCard amount: wraps instead of being truncated on a narrow phone (an amount is never cut). */
+const money = (cents) => <span className="block whitespace-normal break-words text-lg sm:text-xl leading-tight">{fmtMad(cents)}</span>;
+
+/** Small sub-title inside the collapsed reward details. */
+function SubTitle({ Icon, children }) {
   return (
-    <div className={`rounded-2xl ${bg} border border-white px-3 sm:px-4 py-3 min-w-0`}>
-      <p className="flex items-start gap-1.5 text-xs font-semibold text-slate-500 leading-tight">
-        {Icon && <Icon className={`w-4 h-4 shrink-0 ${ic}`} aria-hidden="true" />}
-        <span className="min-w-0">{label}</span>
-      </p>
-      <p className="mt-1 text-base sm:text-xl font-extrabold text-slate-900 break-words" dir="ltr" style={{ textAlign: "right" }} {...{ [hook]: "" }}>{value}</p>
-    </div>
+    <h3 className="flex items-center gap-2 text-sm font-bold text-gray-700">
+      <Icon className="w-4 h-4 shrink-0 text-gray-400" aria-hidden="true" /> {children}
+    </h3>
   );
 }
+
+const banner = "text-sm rounded-xl border px-3 py-2";
 
 export default function RecruiterWalletPage() {
   const router = useRouter();
@@ -323,17 +319,13 @@ export default function RecruiterWalletPage() {
   const withdrawals = wallet?.withdrawals ?? [];
 
   return (
-    <div className="space-y-5 sm:space-y-6 min-w-0" data-recruiter-wallet>
-      <PageHeader Icon={Gift} title="أرباحي والسحب" subtitle="مكافآتك، رصيدك، معلوماتك البنكية وطلبات السحب." />
+    <div className="space-y-5 min-w-0" data-recruiter-wallet>
+      <PageHeader Icon={Wallet} title="المحفظة" subtitle="رصيدك، طلبات السحب ومعلوماتك البنكية." back={null} />
 
-      {loading && !wallet && (
-        <p className="text-sm text-slate-500 flex items-center gap-2" aria-live="polite" data-loading>
-          <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> جارٍ التحميل…
-        </p>
-      )}
+      {loading && !wallet && <LoadingBlock hook="data-loading" />}
 
       {loadError && (
-        <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center gap-3 justify-between" data-error>
+        <div role="alert" className="rounded-xl border border-red-100 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center gap-3 justify-between" data-error>
           <span className="min-w-0">{loadError}</span>
           <button type="button" onClick={() => load()} data-retry
             className="shrink-0 inline-flex items-center gap-1.5 min-h-10 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100">
@@ -344,113 +336,51 @@ export default function RecruiterWalletPage() {
 
       {wallet && (
         <>
-          {/* Totals */}
-          <section className={`${ui.card} ${ui.cardPad}`} aria-label="المجاميع" data-totals>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              <TotalCard label="إجمالي المكافآت المكتسبة" value={fmtMad(t.earnedCents)} hook="data-total-earned" tone="green" Icon={Award} />
-              <TotalCard label="الرصيد المتاح للسحب" value={fmtMad(t.availableCents)} hook="data-total-available" tone="violet" Icon={Wallet} />
-              <TotalCard label="مبلغ قيد المعالجة" value={fmtMad(t.pendingCents)} hook="data-total-pending" tone="amber" Icon={Clock} />
-              <TotalCard label="المبلغ المدفوع" value={fmtMad(t.paidCents)} hook="data-total-paid" tone="slate" Icon={CheckCircle2} />
-            </div>
+          {/* 1. Totals */}
+          <section className="grid grid-cols-2 lg:grid-cols-4 gap-3" aria-label="المجاميع" data-totals>
+            <StatCard Icon={Coins} color="teal" label="إجمالي المكافآت المكتسبة" value={money(t.earnedCents)} hook="total-earned" valueLtr />
+            <StatCard Icon={Wallet} color={available < 0 ? "red" : "purple"} label="الرصيد المتاح للسحب" value={money(t.availableCents)} hook="total-available" valueLtr />
+            <StatCard Icon={Clock} color="amber" label="طلبات سحب قيد المعالجة" value={money(t.pendingCents)} hook="total-pending" valueLtr />
+            <StatCard Icon={CheckCircle2} color="green" label="المبلغ المدفوع" value={money(t.paidCents)} hook="total-paid" valueLtr />
           </section>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 sm:gap-6 items-start min-w-0">
-            {/* Reward rule */}
-            <Card className={`${ui.cardPad} space-y-3`} data-reward-rule>
-              <CardTitle Icon={Gift} title="قاعدة المكافأة" />
-              <div className="min-w-0 text-sm leading-7 text-slate-700">
-                {s.rewardsEnabled ? (
-                  <p data-reward-rule-text>
-                    تحصل على مكافأة <strong dir="ltr">{fmtMad(s.rewardAmountCents)}</strong> عن كل أفلييت في شبكتك (أنشأته أنت أو انضم عبر أحد أفلييتك) عندما يصل إلى{" "}
-                    <strong>{s.requiredDeliveredOrders}</strong> طلبية حقيقية مسلّمة وتتم الموافقة على بطاقته الوطنية من طرف الإدارة.
-                  </p>
-                ) : (
-                  <p data-rewards-disabled>المكافآت غير مفعّلة حالياً.</p>
-                )}
-                <p className={`${ui.hint} mt-1`}>الطلبات التجريبية لا تُحتسب أبداً. المكافأة تُسجَّل فوراً عند تحقق الشرطين.</p>
-              </div>
-            </Card>
-
-            {/* Stage C: gross awarded vs reversed, apart from the net */}
-            <Card className={`${ui.cardPad} space-y-3`} aria-labelledby="gn-title" data-gross-net>
-              <CardTitle Icon={Scale} id="gn-title" title="المكافآت: الإجمالي والإلغاءات والصافي" />
-              {amounts.error ? (
-                <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 flex flex-wrap items-center justify-between gap-2" data-gross-error>
-                  <span className="min-w-0">تفاصيل الإجمالي والإلغاءات غير متاحة: {recruiterErrorLabel(amounts.error)}</span>
-                  <button type="button" onClick={loadAmounts} data-gross-retry
-                    className="shrink-0 inline-flex items-center gap-1.5 min-h-10 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100">
-                    <RefreshCw className="w-4 h-4" aria-hidden="true" /> إعادة المحاولة
-                  </button>
-                </div>
-              ) : !amounts.data ? (
-                <p className="text-sm text-slate-500" aria-live="polite" data-gross-loading>جارٍ التحميل…</p>
-              ) : (() => {
-                const g = walletGrossNet(amounts.data, t.earnedCents);
-                return (
-                  <>
-                    <dl className="grid grid-cols-1 gap-2 text-sm">
-                      <div className="rounded-2xl border border-white bg-emerald-50/70 px-4 py-3 min-w-0">
-                        <dt className="text-xs font-semibold text-slate-500">إجمالي المكافآت الممنوحة</dt>
-                        <dd className="mt-0.5 text-lg font-extrabold text-slate-900 break-words" dir="ltr" style={{ textAlign: "right" }} data-gross-total>{fmtMad(g.grossCents)}</dd>
-                        <p className="text-[11px] text-slate-500">فردية: <bdi dir="ltr">{fmtMad(amounts.data.individual.awardedCents)}</bdi> · المجموعة: <bdi dir="ltr">{fmtMad(amounts.data.group.awardedCents)}</bdi></p>
-                      </div>
-                      <div className="rounded-2xl border border-white bg-rose-50/70 px-4 py-3 min-w-0">
-                        <dt className="text-xs font-semibold text-slate-500">المكافآت الملغاة</dt>
-                        <dd className="mt-0.5 text-lg font-extrabold text-red-700 break-words" dir="ltr" style={{ textAlign: "right" }} data-reversed-total>{fmtMad(-g.reversedCents)}</dd>
-                        <p className="text-[11px] text-slate-500">فردية: <bdi dir="ltr">{fmtMad(amounts.data.individual.reversedCents)}</bdi> · المجموعة: <bdi dir="ltr">{fmtMad(amounts.data.group.reversedCents)}</bdi></p>
-                      </div>
-                      <div className="rounded-2xl border border-violet-100 bg-violet-50/70 px-4 py-3 min-w-0">
-                        <dt className="text-xs font-semibold text-slate-500">الصافي (إجمالي المكافآت المكتسبة)</dt>
-                        <dd className="mt-0.5 text-lg font-extrabold text-slate-900 break-words" dir="ltr" style={{ textAlign: "right" }} data-net-total>{fmtMad(t.earnedCents)}</dd>
-                        {g.adjustmentCents !== 0 && (
-                          <p className="text-[11px] text-slate-500" data-adjustments>يشمل تعديلات الإدارة: <bdi dir="ltr">{fmtMad(g.adjustmentCents)}</bdi></p>
-                        )}
-                      </div>
-                    </dl>
-                  </>
-                );
-              })()}
-            </Card>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 sm:gap-6 items-start min-w-0">
-            {/* Withdrawal request */}
-            <Card className={`${ui.cardPad} space-y-3`} aria-labelledby="w-title">
-              <CardTitle Icon={Banknote} id="w-title" title="طلب سحب" />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start min-w-0">
+            {/* 2. Withdrawal request */}
+            <Section Icon={Banknote} title="طلب سحب" aria-label="طلب سحب" bodyClass="p-4 sm:p-5 space-y-3">
               {identityUnknown && (
-                <div className="text-sm rounded-2xl border border-slate-200 bg-slate-50 text-slate-700 px-3 py-2 flex flex-wrap items-center justify-between gap-2" data-identity-unavailable>
+                <div className={`${banner} border-gray-200 bg-gray-50 text-gray-700 flex flex-wrap items-center justify-between gap-2`} data-identity-unavailable>
                   <span className="min-w-0">حالة التحقق غير متاحة حالياً. يمكنك المتابعة، والتحقق من هويتك يتم عند معالجة الطلب.</span>
                   <button type="button" onClick={loadIdentity} disabled={identityBusy} data-identity-retry
-                    className="shrink-0 inline-flex items-center gap-1.5 min-h-10 rounded-xl border border-slate-300 bg-white px-3 py-1.5 font-semibold hover:bg-slate-100 disabled:opacity-60">
+                    className="shrink-0 inline-flex items-center gap-1.5 min-h-10 rounded-xl border border-gray-300 bg-white px-3 py-1.5 font-semibold hover:bg-gray-100 disabled:opacity-60">
                     <RefreshCw className="w-4 h-4" aria-hidden="true" /> إعادة المحاولة
                   </button>
                 </div>
               )}
               {identity && !identityApproved && (
-                <div className="text-sm rounded-2xl border border-amber-200 bg-amber-50 text-amber-900 px-3 py-2 space-y-1.5" data-identity-required={identity.status}>
+                <div className={`${banner} border-amber-100 bg-amber-50 text-amber-900 space-y-1.5`} data-identity-required={identity.status}>
                   <p className="font-semibold">
                     {identity.status === "PENDING" ? "التحقق من هويتك قيد المراجعة. يمكنك طلب السحب بعد قبوله."
                       : identity.status === "REJECTED" ? "تم رفض التحقق من هويتك. أرسل صوراً جديدة لبطاقتك الوطنية لتتمكن من طلب السحب."
                       : "يجب التحقق من هويتك (البطاقة الوطنية) قبل طلب أي سحب."}
                   </p>
                   <Link href="/recruiter/verification" data-identity-link
-                    className={`inline-flex items-center gap-1.5 min-h-10 ${ui.link}`}>
+                    className={`inline-flex items-center gap-1.5 min-h-11 ${ui.link}`}>
                     <ShieldCheck className="w-4 h-4 shrink-0" aria-hidden="true" /> صفحة التحقق من الهوية
                   </Link>
                 </div>
               )}
               {!bankComplete && (
-                <p className="text-sm rounded-2xl border border-amber-200 bg-amber-50 text-amber-900 px-3 py-2" data-bank-required>
+                <p className={`${banner} border-amber-100 bg-amber-50 text-amber-900`} data-bank-required>
                   أضف معلوماتك البنكية قبل طلب السحب.
                 </p>
               )}
               {bankComplete && available === 0 && (
-                <p className="text-sm rounded-2xl border border-slate-200 bg-slate-50 text-slate-700 px-3 py-2" data-nothing-available>
+                <p className={`${banner} border-gray-200 bg-gray-50 text-gray-700`} data-nothing-available>
                   لا يوجد رصيد متاح للسحب حالياً.
                 </p>
               )}
               {available < 0 && (
-                <p className="text-sm rounded-2xl border border-red-200 bg-red-50 text-red-800 px-3 py-2" data-negative-balance>
+                <p className={`${banner} border-red-100 bg-red-50 text-red-800`} data-negative-balance>
                   رصيدك المتاح سالب لأن مكافآت سُحبت بعد إلغاء أو إرجاع طلبيات. لا يمكن طلب سحب حتى يصبح رصيدك موجباً من جديد.
                   <span className="block mt-1 font-bold">الرصيد الحالي: <bdi dir="ltr">{fmtMad(available)}</bdi></span>
                 </p>
@@ -464,9 +394,9 @@ export default function RecruiterWalletPage() {
                   <p className={`mt-1.5 ${ui.hint}`}>الحد الأقصى: <span dir="ltr">{fmtMad(available > 0 ? available : 0)}</span></p>
                   {amountError && <p className="mt-1 text-xs text-red-700" role="alert" data-withdraw-amount-error>{amountError}</p>}
                 </div>
-                {wError && <p role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-2xl px-3 py-2" data-withdraw-error>{wError}</p>}
+                {wError && <p role="alert" className={`${banner} text-red-700 bg-red-50 border-red-100`} data-withdraw-error>{wError}</p>}
                 {wSuccess && (
-                  <p role="status" className="text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-2xl px-3 py-2 flex items-start gap-2" data-withdraw-success>
+                  <p role="status" className={`${banner} text-green-800 bg-green-50 border-green-100 flex items-start gap-2`} data-withdraw-success>
                     <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" /> <span className="min-w-0">{wSuccess}</span>
                   </p>
                 )}
@@ -475,11 +405,10 @@ export default function RecruiterWalletPage() {
                   {wBusy ? "جارٍ الإرسال…" : "طلب السحب"}
                 </button>
               </form>
-            </Card>
+            </Section>
 
-            {/* Bank details */}
-            <Card className={`${ui.cardPad} space-y-3`} aria-labelledby="bank-title">
-              <CardTitle Icon={Landmark} id="bank-title" title="المعلومات البنكية" />
+            {/* 3. Bank details */}
+            <Section Icon={Landmark} title="المعلومات البنكية (RIB)" aria-label="المعلومات البنكية (RIB)">
               <form onSubmit={saveBank} noValidate className="space-y-3" data-bank-form>
                 <Field id="b-name" label="اسم البنك" error={bankErrors.bankName ? recruiterFieldErrorLabel("bankName", bankErrors.bankName) : ""} field="bankName">
                   <input id="b-name" value={bank.bankName} onChange={(e) => editBank({ bankName: e.target.value })} maxLength={80}
@@ -495,7 +424,7 @@ export default function RecruiterWalletPage() {
                 </Field>
                 {bankMsg && (
                   <p role={bankMsg.ok ? "status" : "alert"} data-bank-msg={bankMsg.ok ? "ok" : "error"}
-                    className={`text-sm rounded-2xl px-3 py-2 border ${bankMsg.ok ? "text-emerald-800 bg-emerald-50 border-emerald-200" : "text-red-700 bg-red-50 border-red-200"}`}>
+                    className={`${banner} ${bankMsg.ok ? "text-green-800 bg-green-50 border-green-100" : "text-red-700 bg-red-50 border-red-100"}`}>
                     {bankMsg.text}
                   </p>
                 )}
@@ -504,66 +433,129 @@ export default function RecruiterWalletPage() {
                   حفظ المعلومات البنكية
                 </button>
               </form>
-            </Card>
+            </Section>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-5 gap-5 sm:gap-6 items-start min-w-0">
-            {/* Reward history */}
-            <Card className={`${ui.cardPad} space-y-3 lg:col-span-3`} aria-labelledby="r-title">
-              <CardTitle Icon={History} id="r-title" title="سجل المكافآت" />
-              {rewards.length === 0 ? (
-                <p className="rounded-2xl border border-dashed border-violet-200 bg-violet-50/40 px-4 py-6 text-center text-sm text-slate-500" data-empty="rewards">لا توجد مكافآت بعد.</p>
-              ) : (
-                <ul className="space-y-2 min-w-0">
-                  {rewards.map((r, i) => (
-                    <li key={`${r.createdAt}-${i}`} className={`${ui.panel} px-3 py-3 flex flex-wrap items-start gap-x-3 gap-y-1 justify-between min-w-0`} data-reward-row>
-                      <div className="min-w-0 flex-1">
-                        <p className="font-semibold text-slate-900 break-words" data-reward-title={r.type ?? ""}>
-                          {rewardRowTitle(r) ?? (r.affiliate ? (r.affiliate.name || r.affiliate.username || "—") : "—")}
-                          {r.affiliate?.username && <span className="text-xs text-slate-500 font-normal break-all" dir="ltr"> @{r.affiliate.username}</span>}
-                        </p>
-                        <p className="text-xs text-slate-600 mt-0.5 break-words" data-reward-reason>
-                          {r.type === "GROUP_REWARD" || r.type === "GROUP_REVERSAL"
-                            ? groupRowDetail(r)
-                            : r.reason === "REAL_DELIVERED_AND_CIN_APPROVED"
-                            ? `${r.requiredDeliveredOrders ?? "—"} طلبية حقيقية مسلّمة + بطاقة وطنية مقبولة`
-                            : r.reason === "REAL_DELIVERED_BELOW_THRESHOLD"
-                              ? `سحب المكافأة: الطلبيات الحقيقية المسلّمة أصبحت أقل من ${r.requiredDeliveredOrders ?? "—"} (إلغاء أو إرجاع)`
-                              : r.type === "ADMIN_ADJUSTMENT" ? "تعديل من طرف الإدارة" : "—"}
-                          {r.type !== "GROUP_REWARD" && r.type !== "GROUP_REVERSAL" && Number.isInteger(r.cycle) && r.cycle > 1 ? ` · الدورة ${r.cycle}` : ""}
-                        </p>
-                        <p className="text-xs text-slate-400 mt-0.5">{fmtDate(r.createdAt)}</p>
+          {/* 4. Withdrawal history */}
+          <Section Icon={History} title="سجل طلبات السحب" aria-label="سجل طلبات السحب">
+            {withdrawals.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-center text-sm text-gray-500" data-empty="withdrawals">لا توجد طلبات سحب بعد.</p>
+            ) : (
+              <ul className="divide-y divide-gray-100 min-w-0">
+                {withdrawals.map((w) => {
+                  const st = STATUS[w.status] ?? STATUS.PENDING;
+                  return (
+                    <li key={w.id ?? w.createdAt} className="py-2.5 first:pt-0 last:pb-0 flex items-center gap-3 justify-between min-w-0" data-withdrawal-row>
+                      <div className="min-w-0">
+                        <p className="font-bold text-gray-900 break-words" dir="ltr" style={{ textAlign: "right" }}>{fmtMad(w.amountCents)}</p>
+                        <p className="text-xs text-gray-400">{fmtDate(w.createdAt)}</p>
                       </div>
-                      <p className={`shrink-0 font-extrabold ${r.amountCents < 0 ? "text-red-700" : "text-emerald-700"}`} dir="ltr">{fmtMad(r.amountCents)}</p>
+                      <Badge tone={st.tone} data-withdrawal-status={w.status}>{st.label}</Badge>
                     </li>
-                  ))}
-                </ul>
-              )}
-            </Card>
+                  );
+                })}
+              </ul>
+            )}
+          </Section>
 
-            {/* Withdrawal history */}
-            <Card className={`${ui.cardPad} space-y-3 lg:col-span-2`} aria-labelledby="h-title">
-              <CardTitle Icon={Banknote} id="h-title" title="سجل طلبات السحب" />
-              {withdrawals.length === 0 ? (
-                <p className="rounded-2xl border border-dashed border-violet-200 bg-violet-50/40 px-4 py-6 text-center text-sm text-slate-500" data-empty="withdrawals">لا توجد طلبات سحب بعد.</p>
-              ) : (
-                <ul className="space-y-2 min-w-0">
-                  {withdrawals.map((w) => {
-                    const st = STATUS[w.status] ?? STATUS.PENDING;
-                    return (
-                      <li key={w.id ?? w.createdAt} className={`${ui.panel} px-3 py-3 flex flex-wrap items-center gap-x-3 gap-y-1 justify-between min-w-0`} data-withdrawal-row>
-                        <div className="min-w-0">
-                          <p className="font-extrabold text-slate-900" dir="ltr" style={{ textAlign: "right" }}>{fmtMad(w.amountCents)}</p>
-                          <p className="text-xs text-slate-400">{fmtDate(w.createdAt)}</p>
+          {/* 5. Reward details — collapsed by default (rule, gross / reversed / net, history) */}
+          <details className={`${ui.card} group overflow-hidden`} data-reward-details>
+            <summary className="flex items-center justify-between gap-2 min-h-11 px-4 sm:px-5 py-3 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-sm font-bold text-gray-700 hover:bg-gray-50">
+              <span className="flex items-center gap-2 min-w-0">
+                <Gift className="w-4 h-4 shrink-0 text-gray-400" aria-hidden="true" /> تفاصيل المكافآت
+              </span>
+              <ChevronDown className="w-4 h-4 shrink-0 text-gray-400 transition-transform group-open:rotate-180" aria-hidden="true" />
+            </summary>
+            <div className="border-t border-gray-100 p-4 sm:p-5 space-y-5 min-w-0">
+              {/* Reward rule */}
+              <div className="space-y-2 min-w-0" data-reward-rule>
+                <SubTitle Icon={Gift}>قاعدة المكافأة</SubTitle>
+                <div className="min-w-0 text-sm leading-7 text-gray-700">
+                  {s.rewardsEnabled ? (
+                    <p data-reward-rule-text>
+                      تحصل على مكافأة <strong dir="ltr">{fmtMad(s.rewardAmountCents)}</strong> عن كل أفلييت في شبكتك (أنشأته أنت أو انضم عبر أحد أفلييتك) عندما يصل إلى{" "}
+                      <strong>{s.requiredDeliveredOrders}</strong> طلبية حقيقية مسلّمة وتتم الموافقة على بطاقته الوطنية من طرف الإدارة.
+                    </p>
+                  ) : (
+                    <p data-rewards-disabled>المكافآت غير مفعّلة حالياً.</p>
+                  )}
+                  <p className={`${ui.hint} mt-1`}>الطلبات التجريبية لا تُحتسب أبداً. المكافأة تُسجَّل فوراً عند تحقق الشرطين.</p>
+                </div>
+              </div>
+
+              {/* Stage C: gross awarded vs reversed, apart from the net */}
+              <section className="space-y-2 min-w-0" aria-label="المكافآت: الإجمالي والإلغاءات والصافي" data-gross-net>
+                <SubTitle Icon={Scale}>المكافآت: الإجمالي والإلغاءات والصافي</SubTitle>
+                {amounts.error ? (
+                  <div role="alert" className="rounded-xl border border-red-100 bg-red-50 p-3 text-sm text-red-700 flex flex-wrap items-center justify-between gap-2" data-gross-error>
+                    <span className="min-w-0">تفاصيل الإجمالي والإلغاءات غير متاحة: {recruiterErrorLabel(amounts.error)}</span>
+                    <button type="button" onClick={loadAmounts} data-gross-retry
+                      className="shrink-0 inline-flex items-center gap-1.5 min-h-10 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100">
+                      <RefreshCw className="w-4 h-4" aria-hidden="true" /> إعادة المحاولة
+                    </button>
+                  </div>
+                ) : !amounts.data ? (
+                  <p className="text-sm text-gray-500" aria-live="polite" data-gross-loading>جارٍ التحميل…</p>
+                ) : (() => {
+                  const g = walletGrossNet(amounts.data, t.earnedCents);
+                  return (
+                    <dl className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
+                      <div className={`${ui.panel} px-3.5 py-3 min-w-0`}>
+                        <dt className="text-xs font-semibold text-gray-500">إجمالي المكافآت الممنوحة</dt>
+                        <dd className="mt-0.5 text-lg font-bold text-gray-900 break-words" dir="ltr" style={{ textAlign: "right" }} data-gross-total>{fmtMad(g.grossCents)}</dd>
+                        <p className="text-[11px] text-gray-500">فردية: <bdi dir="ltr">{fmtMad(amounts.data.individual.awardedCents)}</bdi> · المجموعة: <bdi dir="ltr">{fmtMad(amounts.data.group.awardedCents)}</bdi></p>
+                      </div>
+                      <div className={`${ui.panel} px-3.5 py-3 min-w-0`}>
+                        <dt className="text-xs font-semibold text-gray-500">المكافآت الملغاة</dt>
+                        <dd className="mt-0.5 text-lg font-bold text-red-700 break-words" dir="ltr" style={{ textAlign: "right" }} data-reversed-total>{fmtMad(-g.reversedCents)}</dd>
+                        <p className="text-[11px] text-gray-500">فردية: <bdi dir="ltr">{fmtMad(amounts.data.individual.reversedCents)}</bdi> · المجموعة: <bdi dir="ltr">{fmtMad(amounts.data.group.reversedCents)}</bdi></p>
+                      </div>
+                      <div className={`${ui.panel} px-3.5 py-3 min-w-0`}>
+                        <dt className="text-xs font-semibold text-gray-500">الصافي (إجمالي المكافآت المكتسبة)</dt>
+                        <dd className="mt-0.5 text-lg font-bold text-gray-900 break-words" dir="ltr" style={{ textAlign: "right" }} data-net-total>{fmtMad(t.earnedCents)}</dd>
+                        {g.adjustmentCents !== 0 && (
+                          <p className="text-[11px] text-gray-500" data-adjustments>يشمل تعديلات الإدارة: <bdi dir="ltr">{fmtMad(g.adjustmentCents)}</bdi></p>
+                        )}
+                      </div>
+                    </dl>
+                  );
+                })()}
+              </section>
+
+              {/* Reward history */}
+              <section className="space-y-2 min-w-0" aria-label="سجل المكافآت">
+                <SubTitle Icon={History}>سجل المكافآت</SubTitle>
+                {rewards.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-center text-sm text-gray-500" data-empty="rewards">لا توجد مكافآت بعد.</p>
+                ) : (
+                  <ul className="divide-y divide-gray-100 min-w-0">
+                    {rewards.map((r, i) => (
+                      <li key={`${r.createdAt}-${i}`} className="py-2.5 first:pt-0 last:pb-0 flex flex-wrap items-start gap-x-3 gap-y-1 justify-between min-w-0" data-reward-row>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold text-gray-900 break-words" data-reward-title={r.type ?? ""}>
+                            {rewardRowTitle(r) ?? (r.affiliate ? (r.affiliate.name || r.affiliate.username || "—") : "—")}
+                            {r.affiliate?.username && <span className="text-xs text-gray-500 font-normal break-all" dir="ltr"> @{r.affiliate.username}</span>}
+                          </p>
+                          <p className="text-xs text-gray-600 mt-0.5 break-words" data-reward-reason>
+                            {r.type === "GROUP_REWARD" || r.type === "GROUP_REVERSAL"
+                              ? groupRowDetail(r)
+                              : r.reason === "REAL_DELIVERED_AND_CIN_APPROVED"
+                              ? `${r.requiredDeliveredOrders ?? "—"} طلبية حقيقية مسلّمة + بطاقة وطنية مقبولة`
+                              : r.reason === "REAL_DELIVERED_BELOW_THRESHOLD"
+                                ? `سحب المكافأة: الطلبيات الحقيقية المسلّمة أصبحت أقل من ${r.requiredDeliveredOrders ?? "—"} (إلغاء أو إرجاع)`
+                                : r.type === "ADMIN_ADJUSTMENT" ? "تعديل من طرف الإدارة" : "—"}
+                            {r.type !== "GROUP_REWARD" && r.type !== "GROUP_REVERSAL" && Number.isInteger(r.cycle) && r.cycle > 1 ? ` · الدورة ${r.cycle}` : ""}
+                          </p>
+                          <p className="text-xs text-gray-400 mt-0.5">{fmtDate(r.createdAt)}</p>
                         </div>
-                        <Badge tone={st.tone} data-withdrawal-status={w.status}>{st.label}</Badge>
+                        <p className={`shrink-0 font-bold ${r.amountCents < 0 ? "text-red-700" : "text-green-700"}`} dir="ltr">{fmtMad(r.amountCents)}</p>
                       </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </Card>
-          </div>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            </div>
+          </details>
         </>
       )}
     </div>

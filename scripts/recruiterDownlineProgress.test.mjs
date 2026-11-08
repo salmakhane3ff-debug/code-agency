@@ -155,10 +155,12 @@ console.log('\n2. A 350-deep chain of admin-created descendants under one linked
   const m1 = E.db._queryCount();
   const n = (await nodes(E, E.A, { parentId: ids[299] })).body;
   const qNodes = E.db._queryCount() - m1;
-  // Stage E: every member is reward-eligible → the page always reads its ledger rows (rewardState): 8 queries (Stage B: 7)
-  ok('nodes?parentId = the level-300 node: breadcrumb of 300 (levels 1…300, only the root linked), child at level 301 with 49 descendants — 8 queries (Stage E: + the ledger read for every member)',
+  // Stage E: every member is reward-eligible → the page always reads its ledger rows (rewardState): 8 queries (Stage B: 7);
+  // simplified dashboard: + the scope's own card (one statement) = 9
+  ok('nodes?parentId = the level-300 node: breadcrumb of 300 (levels 1…300, only the root linked), child at level 301 with 49 descendants — 9 queries (+ the scope\'s own card)',
     n.path.length === 300 && n.path.every((x, i) => x.id === ids[i] && x.level === i + 1 && x.linkedToMe === (i === 0)) && n.nodes[0].id === ids[300] && n.nodes[0].level === 301
-    && n.nodes[0].descendantsCount === 49 && n.nodes[0].linkedToMe === false && eq(n.nodes[0].rewardState, { state: 'NONE', cycle: null }) && qNodes === 8, `${n.path?.length} ${qNodes}`);
+    && n.nodes[0].descendantsCount === 49 && n.nodes[0].linkedToMe === false && eq(n.nodes[0].rewardState, { state: 'NONE', cycle: null }) && qNodes === 9
+    && n.parentNode.id === ids[299] && n.parentNode.level === 300 && n.parentNode.descendantsCount === 50, `${n.path?.length} ${qNodes}`);
   const s300 = (await stats(E, E.A, ids[299])).body.stats;
   ok('stats?rootId = the level-300 node → levels 301…350', s300.levels[0].level === 301 && s300.levels.length === 50 && s300.totals.maxLevel === 350);
   const sum = (await progress(E, E.A)).body.progress;

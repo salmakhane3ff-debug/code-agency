@@ -265,19 +265,21 @@ export function isPublicRecruiterPath(pathname) {
 }
 
 /**
- * The menu entry to highlight for a recruiter route (null when none). A page whose own entry is hidden by a
- * permission highlights its parent: the statistics page → "network" without canViewOrders, the creation
- * page → "affiliates" without canCreateAffiliates (the server refuses there anyway).
+ * The menu entry to highlight for a recruiter route (null when none). Simplified dashboard: three main sections —
+ * "home", "affiliates" (the list, the details / network view, the creation page "add" when allowed, and the former
+ * tree URL /recruiter/network that now leads there) and "wallet" — and the "المزيد" entries "profile",
+ * "verification", "password", "activation" and "stats" (the network statistics).
  */
 export function sectionForPath(pathname, perms) {
   const p = normPath(pathname);
   if (p === "/recruiter") return "home";
-  if (under(p, "/recruiter/network/stats")) return perms?.canViewOrders === true ? "orders" : "network";
-  if (under(p, "/recruiter/network")) return "network";
+  if (under(p, "/recruiter/network/stats")) return "stats";
+  if (under(p, "/recruiter/network")) return "affiliates";
   if (under(p, "/recruiter/affiliates/new")) return perms?.canCreateAffiliates === true ? "add" : "affiliates";
   if (under(p, "/recruiter/affiliates/activation")) return "activation";
   if (under(p, "/recruiter/affiliates")) return "affiliates";
-  if (under(p, "/recruiter/wallet")) return "rewards";
+  if (under(p, "/recruiter/wallet")) return "wallet";
+  if (under(p, "/recruiter/profile")) return "profile";
   if (under(p, "/recruiter/verification")) return "verification";
   if (under(p, "/recruiter/password")) return "password";
   return null;
