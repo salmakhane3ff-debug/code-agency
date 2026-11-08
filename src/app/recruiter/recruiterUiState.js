@@ -17,6 +17,15 @@
  *   • mergeById             append a page without duplicating rows (rapid clicks, retries)
  *   • createRequestGate     discard stale responses (root / branch / search changed meanwhile)
  *   • levelLabel            ONE level wording everywhere (levels are absolute in every API)
+ * Dashboard redesign (UI only — every value below comes straight from an existing API answer, nothing
+ * is estimated or invented; a missing source gives null / an empty series, shown as an empty state):
+ *   • individualProgressDisplay  affiliates whose individual reward is currently held (awarded − reversed
+ *                                rows of GET /api/recruiter/progress) out of the whole network
+ *   • groupRemaining             affiliates still needed for the next group reward
+ *   • orderStatusSeries          real orders by status (GET /api/recruiter/network/stats; null = withheld)
+ *   • levelSeries                affiliates per absolute level (active / inactive), the deep tail grouped
+ *   • dashboardAlerts            the recruiter's real alerts (account, identity, permissions, rewards off)
+ *   • isPublicRecruiterPath / sectionForPath  Phase 2: which routes get the app shell, which menu entry is current
  * Display only: the server stays the authority for every permission, amount and gate.
  * ─────────────────────────────────────────────────────────────────────────────
  */
@@ -163,4 +172,113 @@ export function createRequestGate() {
 /** Levels are ABSOLUTE in every recruiter API (1 = a top affiliate of the recruiter's network). */
 export function levelLabel(level) {
   return Number.isInteger(level) && level >= 1 ? `المستوى ${level}` : "بدون مستوى";
+}
+
+// ── Dashboard redesign (UI only) ────────────────────────────────────────────────
+
+/**
+ * Individual reward progress of the whole network (GET /api/recruiter/progress → progress):
+ * `held` = individual rewards currently held (each reversal closes exactly one reward, so awarded −
+ * reversed rows = affiliates whose reward is held now), out of `total` = every affiliate of the network.
+ */
+export function individualProgressDisplay(s) {
+  if (!s || typeof s !== "object") return null;
+  const total = nonNeg(s.downlineAffiliates);
+  const held = Math.max(0, nonNeg(s.rewards?.individual?.awarded) - nonNeg(s.rewards?.individual?.reversed));
+  const base = Math.max(total, held);
+  return {
+    enabled: s.individualEnabled === true,
+    threshold: posInt(s.individualThreshold),
+    held,
+    total,
+    pct: base ? percent(held, base) : 0,
+    text: `${held} / ${total}`,
+  };
+}
+
+/** Affiliates still needed for the next group reward (null when the group size is unknown). */
+export function groupRemaining(g) {
+  const size = posInt(g?.size);
+  return size ? Math.max(0, size - Math.min(nonNeg(g?.toward), size)) : null;
+}
+
+/** Real order statuses of the network, in display order (labels live in the page). */
+export const ORDER_STATUS_KEYS = ["delivered", "pending", "confirmed", "shipped", "cancelled", "returned", "other"];
+
+/**
+ * Real orders of the network by status → [{ key, value }] in ORDER_STATUS_KEYS order, or null when the
+ * order counts are withheld (canViewOrders off → stats.orders is null). Test orders are never counted.
+ */
+export function orderStatusSeries(orders) {
+  const real = orders && typeof orders === "object" ? orders.real : null;
+  if (!real || typeof real !== "object") return null;
+  return ORDER_STATUS_KEYS.map((key) => ({ key, value: nonNeg(real[key]) }));
+}
+
+/**
+ * Affiliates per absolute level (stats.levels) → [{ label, level, active, inactive, affiliates }], at most
+ * `max` bars: the levels deeper than max − 1 are summed into one "N+" bar (nothing dropped). The label is
+ * the level number only (the chart names the axis "المستوى").
+ */
+export function levelSeries(levels, max = 8) {
+  const rows = (Array.isArray(levels) ? levels : [])
+    .filter((l) => Number.isInteger(l?.level) && l.level >= 1)
+    .map((l) => ({ level: l.level, active: nonNeg(l.active), inactive: nonNeg(l.inactive), affiliates: nonNeg(l.affiliates) }))
+    .sort((a, b) => a.level - b.level);
+  const cap = posInt(max) ?? 8;
+  if (rows.length <= cap) return rows.map((r) => ({ ...r, label: `${r.level}` }));
+  const head = rows.slice(0, cap - 1).map((r) => ({ ...r, label: `${r.level}` }));
+  const tail = rows.slice(cap - 1);
+  const sum = (k) => tail.reduce((n, r) => n + r[k], 0);
+  return [...head, { level: tail[0].level, label: `${tail[0].level}+`, active: sum("active"), inactive: sum("inactive"), affiliates: sum("affiliates") }];
+}
+
+/**
+ * The recruiter's real alerts (the header bell) → [{ id, tone, text, href }]: account disabled, identity
+ * not approved (or unknown), creation / order view turned off by the admin, rewards switched off.
+ * `identity` = { status } | null, `identityFailed` = the KYC request failed (unknown — never "not verified").
+ */
+export function dashboardAlerts({ me = null, perms = null, identity = null, identityFailed = false, progress = null } = {}) {
+  const out = [];
+  if (me && me.status !== "ACTIVE") out.push({ id: "disabled", tone: "red", text: "حسابك معطّل حالياً من طرف الإدارة.", href: null });
+  if (identityFailed) out.push({ id: "kyc-unknown", tone: "slate", text: "حالة التحقق من الهوية غير متاحة حالياً.", href: "/recruiter/verification" });
+  else if (identity?.status === "NOT_SUBMITTED") out.push({ id: "kyc", tone: "amber", text: "أرسل بطاقتك الوطنية: التحقق مطلوب قبل أي طلب سحب.", href: "/recruiter/verification" });
+  else if (identity?.status === "PENDING") out.push({ id: "kyc", tone: "amber", text: "بطاقتك الوطنية قيد المراجعة.", href: "/recruiter/verification" });
+  else if (identity?.status === "REJECTED") out.push({ id: "kyc", tone: "red", text: "تم رفض بطاقتك الوطنية: أعد إرسالها.", href: "/recruiter/verification" });
+  if (perms && perms.canCreateAffiliates !== true) out.push({ id: "create-off", tone: "slate", text: "إنشاء أفلييت جدد معطّل لحسابك من طرف الإدارة.", href: null });
+  if (perms && perms.canViewOrders !== true) out.push({ id: "orders-off", tone: "slate", text: "عرض أرقام الطلبات معطّل لحسابك من طرف الإدارة.", href: null });
+  if (progress && progress.individualEnabled !== true && progress.groupEnabled !== true) out.push({ id: "rewards-off", tone: "slate", text: "المكافآت غير مفعّلة حالياً.", href: null });
+  return out;
+}
+
+// ── Phase 2: one recruiter app (UI only) ────────────────────────────────────────
+
+/** Routes of the recruiter area that are PUBLIC (no session, no app shell): the login page. */
+export const PUBLIC_RECRUITER_PATHS = ["/recruiter/login"];
+const under = (p, base) => p === base || p.startsWith(`${base}/`);
+const normPath = (pathname) => String(pathname ?? "").split(/[?#]/)[0].replace(/\/+$/, "") || "/";
+
+/** true for a public recruiter route (rendered without the authenticated shell). */
+export function isPublicRecruiterPath(pathname) {
+  const p = normPath(pathname);
+  return PUBLIC_RECRUITER_PATHS.some((base) => under(p, base));
+}
+
+/**
+ * The menu entry to highlight for a recruiter route (null when none). A page whose own entry is hidden by a
+ * permission highlights its parent: the statistics page → "network" without canViewOrders, the creation
+ * page → "affiliates" without canCreateAffiliates (the server refuses there anyway).
+ */
+export function sectionForPath(pathname, perms) {
+  const p = normPath(pathname);
+  if (p === "/recruiter") return "home";
+  if (under(p, "/recruiter/network/stats")) return perms?.canViewOrders === true ? "orders" : "network";
+  if (under(p, "/recruiter/network")) return "network";
+  if (under(p, "/recruiter/affiliates/new")) return perms?.canCreateAffiliates === true ? "add" : "affiliates";
+  if (under(p, "/recruiter/affiliates/activation")) return "activation";
+  if (under(p, "/recruiter/affiliates")) return "affiliates";
+  if (under(p, "/recruiter/wallet")) return "rewards";
+  if (under(p, "/recruiter/verification")) return "verification";
+  if (under(p, "/recruiter/password")) return "password";
+  return null;
 }

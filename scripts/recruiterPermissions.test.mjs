@@ -771,6 +771,14 @@ console.log('\n4. Regression and scope');
     'src/app/recruiter/affiliates/page.jsx', 'src/app/recruiter/errorLabels.js', 'src/app/recruiter/password/page.jsx',
     'src/app/recruiter/recruiterUiState.js', 'src/app/recruiter/verification/page.jsx', 'src/app/recruiter/wallet/page.jsx',
     'src/app/recruiter/wallet/walletUi.js', 'src/lib/landingMode.js',
+    // Recruiter dashboard redesign (UI only): the dashboard's layout / navigation, cards and charts components (the
+    // dashboard page and its pure helpers are listed above). No service, route handler, schema or money logic.
+    'src/app/recruiter/_components/DashboardCharts.jsx', 'src/app/recruiter/_components/DashboardWidgets.jsx',
+    'src/app/recruiter/_components/RecruiterShell.jsx',
+    // Phase 2 (UI only — one recruiter app): the layout mounts the app shell (RecruiterAppShell) around every authenticated
+    // recruiter page with the shared UI kit (ui.jsx); the activation code card is restyled with it. No service, route handler, schema or money logic.
+    'src/app/recruiter/_components/RecruiterAppShell.jsx', 'src/app/recruiter/_components/ui.jsx', 'src/app/recruiter/layout.jsx',
+    'src/app/recruiter/affiliates/ActivationCodeCard.jsx',
     // Phase 7 Stage F (approved clarification): an affiliate with children cannot be deleted — the deletion helper and the
     // 409 mapping of the admin DELETE route and of the legacy controller (pinned in recruiterAffiliates.test.mjs).
     'src/app/api/admin/affiliates/route.js', 'src/lib/affiliateDeletion.js', 'src/lib/controllers/affiliateController.js',

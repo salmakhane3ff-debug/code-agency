@@ -18,15 +18,17 @@
  *
  * Phase 6 part 4: when the admin turned off the recruiter's canCreateAffiliates (read from
  * /api/recruiter/me), the form is replaced by a note; the server refuses anyway (403 FORBIDDEN).
+ * Phase 2 (UI only): rendered inside the recruiter app shell with the shared ui.jsx primitives.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, CheckCircle2, KeyRound, Search, UserPlus } from "lucide-react";
+import { CheckCircle2, KeyRound, Search, UserPlus } from "lucide-react";
 import { toRecruiterActivationCodeView, toRecruiterError } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel, recruiterFieldErrorLabel } from "../../errorLabels";
 import { authAction } from "../../recruiterUiState";
 import ActivationCodeCard, { requestNewActivationCode } from "../ActivationCodeCard";
+import { Card, CenteredNotice, LoadingBlock, PageHeader, RetryError, ui } from "../../_components/ui";
 
 const EMPTY = { name: "", username: "", phone: "" };
 const USERNAME_RE = /^(?=[a-z0-9._-]*[a-z])[a-z0-9][a-z0-9._-]{2,29}$/;
@@ -52,16 +54,16 @@ function localFieldErrors(f) {
   return out;
 }
 
-const inputCls = (bad) =>
-  `w-full min-w-0 rounded-xl border px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 ${bad ? "border-red-400 bg-red-50/40" : "border-slate-300"}`;
+/** Shared input style; an invalid field (aria-invalid) turns red. */
+const inputCls = `${ui.input} aria-[invalid=true]:border-red-400 aria-[invalid=true]:bg-red-50/40`;
 
 function Field({ id, label, hint, error, field, children }) {
   return (
     <div className="min-w-0">
-      <label htmlFor={id} className="block text-sm font-semibold mb-1">{label}</label>
+      <label htmlFor={id} className={ui.label}>{label}</label>
       {children}
-      {hint && !error && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
-      {error && <p id={`${id}-err`} className="mt-1 text-xs text-red-700" role="alert" data-field-error={field}>{error}</p>}
+      {hint && !error && <p className={`mt-1.5 ${ui.hint}`}>{hint}</p>}
+      {error && <p id={`${id}-err`} className="mt-1.5 text-xs text-red-700" role="alert" data-field-error={field}>{error}</p>}
     </div>
   );
 }
@@ -259,144 +261,131 @@ export default function RecruiterNewAffiliatePage() {
   // Also when the account is disabled DURING a submit: the form is replaced by the notice
   // until the redirect to the login page.
   if (!ready || notice) {
-    return (
-      <main className="min-h-screen flex items-center justify-center px-4">
-        {notice
-          ? <p role="alert" className="max-w-sm text-center text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3" data-page-notice>{notice}</p>
-          : checkError
-            ? (
-              <div role="alert" className="max-w-sm w-full rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3" data-error>
-                <span className="min-w-0">{recruiterErrorLabel(checkError)}</span>
-                <button type="button" onClick={checkSession} className="shrink-0 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100" data-retry>إعادة المحاولة</button>
-              </div>
-            )
-            : <p className="text-sm text-slate-500" aria-live="polite">جارٍ التحميل…</p>}
-      </main>
-    );
+    if (notice) return <CenteredNotice>{notice}</CenteredNotice>;
+    if (checkError) {
+      return <div className="max-w-sm mx-auto py-16"><RetryError code={checkError} onRetry={checkSession} /></div>;
+    }
+    return <LoadingBlock />;
   }
 
   return (
-    <div className="min-h-screen [contain:inline-size]" data-recruiter-new-affiliate>
-      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-slate-200">
-        <div className="max-w-2xl mx-auto flex items-center gap-3 px-4 py-3 min-w-0">
-          <Link href="/recruiter" className="shrink-0 p-2 -m-2 rounded-lg text-slate-700 hover:bg-slate-100" aria-label="الرجوع للوحة" data-back>
-            <ArrowRight className="w-5 h-5" aria-hidden="true" />
-          </Link>
-          <h1 className="text-base sm:text-lg font-bold truncate">إنشاء أفلييت جديد</h1>
-        </div>
-      </header>
+    <div className="space-y-5 sm:space-y-6 min-w-0" data-recruiter-new-affiliate>
+      <PageHeader Icon={UserPlus} title="إنشاء أفلييت جديد" subtitle="أضف أفلييت جديداً إلى شبكتك، ثم أرسل له رمز التفعيل ليختار كلمة السر الخاصة به." />
 
-      <main className="max-w-2xl mx-auto p-4 sm:p-6 space-y-4">
+      <div className="max-w-3xl space-y-5 min-w-0">
         {created ? (
-          <section className="bg-white rounded-2xl border border-emerald-200 shadow-sm p-5 space-y-4" data-create-success aria-live="polite">
-            <div className="flex items-center gap-2 text-emerald-700">
-              <CheckCircle2 className="w-6 h-6 shrink-0" aria-hidden="true" />
-              <h2 className="text-base font-bold">تم إنشاء حساب الأفلييت بنجاح</h2>
+          <Card className={`${ui.cardPad} space-y-5`} data-create-success aria-live="polite">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="grid place-items-center w-11 h-11 shrink-0 rounded-2xl bg-emerald-50 text-emerald-600" aria-hidden="true">
+                <CheckCircle2 className="w-6 h-6" />
+              </span>
+              <h2 className="text-base sm:text-lg font-extrabold text-emerald-800 min-w-0">تم إنشاء حساب الأفلييت بنجاح</h2>
             </div>
-            <dl className="text-sm divide-y divide-slate-100">
-              <div className="flex justify-between gap-3 py-2 min-w-0">
+            <dl className={`${ui.panel} text-sm divide-y divide-violet-100 px-4`}>
+              <div className="flex justify-between gap-3 py-2.5 min-w-0">
                 <dt className="text-slate-500 shrink-0">الاسم</dt>
-                <dd className="font-semibold truncate min-w-0" data-created-name>{created.name}</dd>
+                <dd className="font-semibold text-slate-900 truncate min-w-0" data-created-name>{created.name}</dd>
               </div>
-              <div className="flex justify-between gap-3 py-2 min-w-0">
+              <div className="flex justify-between gap-3 py-2.5 min-w-0">
                 <dt className="text-slate-500 shrink-0">اسم المستخدم</dt>
-                <dd className="font-semibold truncate min-w-0" dir="ltr" data-created-username>{created.username}</dd>
+                <dd className="font-semibold text-slate-900 truncate min-w-0" dir="ltr" data-created-username>{created.username}</dd>
               </div>
-              <div className="flex justify-between gap-3 py-2 min-w-0">
+              <div className="flex justify-between gap-3 py-2.5 min-w-0">
                 <dt className="text-slate-500 shrink-0">الأفلييت الأب</dt>
-                <dd className="font-semibold truncate min-w-0" data-created-parent>{created.parent ?? "حساب رئيسي (بدون أب)"}</dd>
+                <dd className="font-semibold text-slate-900 truncate min-w-0" data-created-parent>{created.parent ?? "حساب رئيسي (بدون أب)"}</dd>
               </div>
             </dl>
             {created.activation ? (
               <ActivationCodeCard activation={created.activation} />
             ) : (
-              <div className="rounded-2xl border border-slate-300 bg-slate-50 p-4 space-y-2" data-activation-missing>
+              <div className={`${ui.panel} p-4 space-y-3`} data-activation-missing>
                 <p className="text-sm text-slate-700">تم إنشاء الحساب سابقاً، والرمز لم يعد قابلاً للعرض.</p>
-                <button type="button" onClick={regenerate} disabled={regen.busy || !created.id} data-regenerate-code
-                  className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
+                <button type="button" onClick={regenerate} disabled={regen.busy || !created.id} data-regenerate-code className={ui.btnPrimary}>
                   <KeyRound className="w-4 h-4" aria-hidden="true" />
                   {regen.busy ? "جارٍ الإنشاء…" : "إنشاء رمز تفعيل جديد"}
                 </button>
                 {regen.error && <p role="alert" className="text-xs text-red-700" data-regenerate-error>{regen.error}</p>}
               </div>
             )}
-            <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2" data-inactive-note>
+            <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3" data-inactive-note>
               الحساب غير مفعّل حالياً: سيتم تفعيله من طرف الإدارة بعد التحقق من البطاقة الوطنية.
             </p>
             <div className="flex flex-col sm:flex-row gap-2">
-              <button type="button" onClick={again} data-create-another
-                className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 text-white font-bold py-2.5 hover:bg-emerald-700">
+              <button type="button" onClick={again} data-create-another className={`${ui.btnPrimary} flex-1`}>
                 <UserPlus className="w-4 h-4" aria-hidden="true" />
                 إنشاء أفلييت آخر
               </button>
-              <Link href="/recruiter" data-back-dashboard
-                className="flex-1 inline-flex items-center justify-center rounded-xl border border-slate-300 font-semibold py-2.5 hover:bg-slate-50">
+              <Link href="/recruiter" data-back-dashboard className={`${ui.btnSecondary} flex-1`}>
                 الرجوع للوحة
               </Link>
             </div>
-          </section>
+          </Card>
         ) : !canCreate ? (
-          <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 space-y-3 text-sm text-amber-900" data-create-disabled>
+          <section className="rounded-3xl border border-amber-200 bg-amber-50 p-5 sm:p-6 space-y-3 text-sm text-amber-900" data-create-disabled>
             <p>إنشاء أفلييت جدد معطّل لحسابك من طرف الإدارة. يمكنك دائماً الاطلاع على شبكتك.</p>
-            <Link href="/recruiter/network" className="inline-block font-bold text-emerald-700 hover:underline">شبكتي</Link>
+            <Link href="/recruiter/network" className={`${ui.btnSecondary}`}>شبكتي</Link>
           </section>
         ) : (
-          <form onSubmit={submit} noValidate className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4" data-create-affiliate-form>
-            <p className="text-sm text-slate-600">
-              الحساب الجديد يُنشأ <strong>غير مفعّل</strong>، ويتم تفعيله من طرف الإدارة بعد التحقق.
-              بعد الإنشاء ستحصل على <strong>رمز تفعيل</strong> ترسله للأفلييت ليختار كلمة السر الخاصة به.
+          <form onSubmit={submit} noValidate className={`${ui.card} ${ui.cardPad} space-y-5`} data-create-affiliate-form>
+            <p className={`${ui.panel} px-4 py-3 text-sm text-slate-600 leading-relaxed`}>
+              الحساب الجديد يُنشأ <strong className="text-slate-900">غير مفعّل</strong>، ويتم تفعيله من طرف الإدارة بعد التحقق.
+              بعد الإنشاء ستحصل على <strong className="text-slate-900">رمز تفعيل</strong> ترسله للأفلييت ليختار كلمة السر الخاصة به.
             </p>
 
-            <Field id="aff-name" field="name" label="الاسم الكامل" error={fieldError("name")}>
-              <input id="aff-name" name="name" autoComplete="off" value={form.name} maxLength={80} disabled={busy}
-                aria-invalid={!!fieldErrors.name} aria-describedby={fieldErrors.name ? "aff-name-err" : undefined}
-                onChange={(e) => edit({ name: e.target.value })} className={inputCls(!!fieldErrors.name)} data-input="name" />
-            </Field>
-
-            <Field id="aff-username" field="username" label="اسم المستخدم" error={fieldError("username")}
-              hint="من 3 إلى 30 حرفاً: حروف لاتينية صغيرة وأرقام و . _ - (حرف واحد على الأقل).">
-              <input id="aff-username" name="username" autoComplete="off" autoCapitalize="none" spellCheck={false} dir="ltr"
-                value={form.username} maxLength={30} disabled={busy}
-                aria-invalid={!!fieldErrors.username} aria-describedby={fieldErrors.username ? "aff-username-err" : undefined}
-                onChange={(e) => edit({ username: e.target.value })} className={`${inputCls(!!fieldErrors.username)} text-left`} data-input="username" />
-            </Field>
-
-            <Field id="aff-phone" field="phone" label="رقم الهاتف (اختياري)" error={fieldError("phone")}>
-              <input id="aff-phone" name="phone" type="tel" inputMode="tel" autoComplete="off" dir="ltr" value={form.phone} maxLength={20} disabled={busy}
-                aria-invalid={!!fieldErrors.phone} aria-describedby={fieldErrors.phone ? "aff-phone-err" : undefined}
-                onChange={(e) => edit({ phone: e.target.value })} className={`${inputCls(!!fieldErrors.phone)} text-left`} data-input="phone" />
-            </Field>
-
-            <fieldset className="min-w-0 space-y-2" data-parent-selector>
-              <legend className="block text-sm font-semibold mb-1">الأفلييت الأب</legend>
-              <label className={`flex items-center gap-2 rounded-xl border px-3 py-2.5 cursor-pointer ${parentId === "" ? "border-emerald-500 bg-emerald-50" : "border-slate-300"}`}>
-                <input type="radio" name="parent" value="" checked={parentId === ""} disabled={busy}
-                  onChange={() => chooseParent("", null)} data-parent-root />
-                <span className="text-sm font-semibold">حساب رئيسي (بدون أب)</span>
-              </label>
-
-              <div className="relative">
-                <Search className="w-4 h-4 text-slate-400 absolute top-1/2 -translate-y-1/2 right-3 pointer-events-none" aria-hidden="true" />
-                <input type="search" aria-label="البحث في شبكتك" placeholder="ابحث في شبكتك بالاسم أو اسم المستخدم" value={query} maxLength={40}
-                  onChange={(e) => setQuery(e.target.value)} disabled={busy}
-                  className="w-full min-w-0 rounded-xl border border-slate-300 pr-9 pl-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" data-parent-search />
+            <div className="grid gap-4 sm:grid-cols-2 min-w-0">
+              <div className="sm:col-span-2 min-w-0">
+                <Field id="aff-name" field="name" label="الاسم الكامل" error={fieldError("name")}>
+                  <input id="aff-name" name="name" autoComplete="off" value={form.name} maxLength={80} disabled={busy}
+                    aria-invalid={!!fieldErrors.name} aria-describedby={fieldErrors.name ? "aff-name-err" : undefined}
+                    onChange={(e) => edit({ name: e.target.value })} className={inputCls} data-input="name" />
+                </Field>
               </div>
 
-              <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100" data-parent-list aria-busy={network.loading}>
+              <Field id="aff-username" field="username" label="اسم المستخدم" error={fieldError("username")}
+                hint="من 3 إلى 30 حرفاً: حروف لاتينية صغيرة وأرقام و . _ - (حرف واحد على الأقل).">
+                <input id="aff-username" name="username" autoComplete="off" autoCapitalize="none" spellCheck={false} dir="ltr"
+                  value={form.username} maxLength={30} disabled={busy}
+                  aria-invalid={!!fieldErrors.username} aria-describedby={fieldErrors.username ? "aff-username-err" : undefined}
+                  onChange={(e) => edit({ username: e.target.value })} className={`${inputCls} text-left`} data-input="username" />
+              </Field>
+
+              <Field id="aff-phone" field="phone" label="رقم الهاتف (اختياري)" error={fieldError("phone")}>
+                <input id="aff-phone" name="phone" type="tel" inputMode="tel" autoComplete="off" dir="ltr" value={form.phone} maxLength={20} disabled={busy}
+                  aria-invalid={!!fieldErrors.phone} aria-describedby={fieldErrors.phone ? "aff-phone-err" : undefined}
+                  onChange={(e) => edit({ phone: e.target.value })} className={`${inputCls} text-left`} data-input="phone" />
+              </Field>
+            </div>
+
+            <fieldset className="min-w-0 space-y-2.5" data-parent-selector>
+              <legend className={ui.label}>الأفلييت الأب</legend>
+              <label className={`flex items-center gap-2.5 min-h-11 rounded-2xl border px-3.5 py-2.5 cursor-pointer ${parentId === "" ? "border-violet-400 bg-violet-50 ring-1 ring-violet-200" : "border-violet-100 bg-white hover:bg-violet-50/50"}`}>
+                <input type="radio" name="parent" value="" checked={parentId === ""} disabled={busy}
+                  onChange={() => chooseParent("", null)} className="accent-violet-600 w-4 h-4 shrink-0" data-parent-root />
+                <span className="text-sm font-semibold text-slate-800">حساب رئيسي (بدون أب)</span>
+              </label>
+
+              <div className="relative min-w-0">
+                <Search className="w-4 h-4 text-violet-400 absolute top-1/2 -translate-y-1/2 start-3.5 pointer-events-none" aria-hidden="true" />
+                <input type="search" aria-label="البحث في شبكتك" placeholder="ابحث في شبكتك بالاسم أو اسم المستخدم" value={query} maxLength={40}
+                  onChange={(e) => setQuery(e.target.value)} disabled={busy}
+                  className={`${ui.input} ps-10`} data-parent-search />
+              </div>
+
+              <div className="max-h-64 overflow-y-auto rounded-2xl border border-violet-100 bg-white divide-y divide-violet-50" data-parent-list aria-busy={network.loading}>
                 {network.failed ? (
-                  <p className="p-3 text-sm text-red-700" data-parent-list-error>تعذّر تحميل الشبكة، المرجو المحاولة من جديد.</p>
+                  <p className="p-3.5 text-sm text-red-700" data-parent-list-error>تعذّر تحميل الشبكة، المرجو المحاولة من جديد.</p>
                 ) : network.list.length === 0 ? (
-                  <p className="p-3 text-sm text-slate-500" data-parent-list-empty>
+                  <p className="p-3.5 text-sm text-slate-500" data-parent-list-empty>
                     {network.loading ? "جارٍ التحميل…" : query.trim() ? "لا توجد نتائج في شبكتك." : "لا يوجد أي أفلييت في شبكتك بعد."}
                   </p>
                 ) : network.list.map((a) => {
                   const label = a.name ? `${a.name} (${a.username ?? ""})` : (a.username ?? "");
                   return (
-                    <label key={a.id} className={`flex items-center gap-2 px-3 py-2.5 cursor-pointer min-w-0 ${parentId === a.id ? "bg-emerald-50" : "hover:bg-slate-50"}`}>
+                    <label key={a.id} className={`flex items-center gap-2.5 min-h-11 px-3.5 py-2.5 cursor-pointer min-w-0 ${parentId === a.id ? "bg-violet-50" : "hover:bg-violet-50/50"}`}>
                       <input type="radio" name="parent" value={a.id} checked={parentId === a.id} disabled={busy}
-                        onChange={() => chooseParent(a.id, label)} data-parent-option={a.username ?? ""} />
+                        onChange={() => chooseParent(a.id, label)} className="accent-violet-600 w-4 h-4 shrink-0" data-parent-option={a.username ?? ""} />
                       <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-semibold truncate">{a.name || "—"}</span>
+                        <span className="block text-sm font-semibold text-slate-800 truncate">{a.name || "—"}</span>
                         <span className="block text-xs text-slate-500 truncate" dir="ltr">{a.username}</span>
                       </span>
                     </label>
@@ -404,10 +393,10 @@ export default function RecruiterNewAffiliatePage() {
                 })}
               </div>
               {network.truncated && (
-                <p className="text-xs text-slate-500" data-parent-truncated>يتم عرض آخر 50 أفلييت فقط، استعمل البحث للعثور على أفلييت آخر.</p>
+                <p className={ui.hint} data-parent-truncated>يتم عرض آخر 50 أفلييت فقط، استعمل البحث للعثور على أفلييت آخر.</p>
               )}
               {parentId && parentLabel && (
-                <p className="text-xs text-slate-600" data-parent-selected>الأب المختار: <span className="font-semibold">{parentLabel}</span></p>
+                <p className="text-xs text-slate-600" data-parent-selected>الأب المختار: <span className="font-semibold text-violet-700">{parentLabel}</span></p>
               )}
               {fieldErrors.parentId && <p className="text-xs text-red-700" role="alert" data-field-error="parentId">{fieldError("parentId")}</p>}
             </fieldset>
@@ -417,16 +406,15 @@ export default function RecruiterNewAffiliatePage() {
                 {fieldError(fieldErrors.body ? "body" : "requestId")}
               </p>
             )}
-            {error && <p role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2" data-create-error>{error}</p>}
+            {error && <p role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-2xl px-4 py-3" data-create-error>{error}</p>}
 
-            <button type="submit" disabled={busy} data-create-submit
-              className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 text-white font-bold py-2.5 hover:bg-emerald-700 disabled:opacity-60">
+            <button type="submit" disabled={busy} data-create-submit className={`${ui.btnPrimary} w-full`}>
               <UserPlus className="w-4 h-4" aria-hidden="true" />
               {busy ? "جارٍ الإنشاء…" : "إنشاء الحساب"}
             </button>
           </form>
         )}
-      </main>
+      </div>
     </div>
   );
 }

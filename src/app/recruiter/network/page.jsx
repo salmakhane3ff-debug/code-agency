@@ -20,17 +20,19 @@
  * Stale answers (root changed) are discarded, a branch / page is never loaded twice at once and
  * rows are merged by id; a failed "load more" keeps the rows already shown. Creation buttons only
  * when GET /api/recruiter/me says canCreateAffiliates.
+ * Rendered inside the recruiter app shell (RecruiterShell): no own header / <main>, the shared UI kit.
  */
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronDown, ChevronLeft, Network, UserPlus } from "lucide-react";
+import { ChevronDown, ChevronLeft, Network, TriangleAlert, UserPlus } from "lucide-react";
 import { toRecruiterNetworkNodeView, toRecruiterNetworkPathView, toRecruiterNetworkStatsView } from "@/lib/recruiterVisibility";
 import {
-  Breadcrumb, Chip, ErrorBox, FAKE_LABEL, IDENTITY_LABEL, Loading, NetworkHeader, NodeBadges, ORDER_KEYS, ORDER_LABEL, OrdersHidden, PageNotice,
+  Breadcrumb, Chip, ErrorBox, FAKE_LABEL, FigureTile, IDENTITY_LABEL, Loading, NetworkHeader, NodeBadges, ORDER_KEYS, ORDER_LABEL, OrdersHidden, PageNotice,
   ProgressBar, STATUS_LABEL, fmt, getJson, handleAuth, identityTone, useRecruiterPerms,
 } from "./networkUi";
 import { createRequestGate, levelLabel, mergeById } from "../recruiterUiState";
+import { Card, CardTitle, EmptyState, LoadingBlock, ui } from "../_components/ui";
 
 const PAGE = 50;
 const nodesUrl = (params) => `/api/recruiter/network/nodes?${new URLSearchParams(params).toString()}`;
@@ -41,28 +43,23 @@ function SummaryStrip({ stats, root }) {
   const items = [
     ["الأفلييت", t.affiliates, { "data-stats-total": "" }],
     [root ? "المباشرون تحته" : "المباشرون", t.direct, {}],
-    ["مفعّلون", t.active, {}],
+    ["مفعّلون", t.active, {}, "green"],
     ["غير مفعّلين", t.inactive, {}],
     ...(stats.orders ? [
-      ["طلبات مسلّمة حقيقية", stats.orders.real.delivered, { "data-real-delivered": "" }],
+      ["طلبات مسلّمة حقيقية", stats.orders.real.delivered, { "data-real-delivered": "" }, "green"],
       ["طلبات تجريبية مسلّمة (غير محتسبة)", stats.orders.fake.delivered, { "data-fake-total": "" }],
     ] : []),
   ];
   return (
-    <section className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3" data-summary aria-label="ملخص الشبكة">
-      <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        {items.map(([label, value, attrs]) => (
-          <div key={label} className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2 min-w-0">
-            <dt className="text-[11px] text-slate-500 leading-tight">{label}</dt>
-            <dd className="text-lg font-bold text-slate-900" {...attrs}>{fmt(value)}</dd>
-          </div>
-        ))}
+    <Card className={`${ui.cardPad} space-y-4`} data-summary aria-label="ملخص الشبكة">
+      <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
+        {items.map(([label, value, attrs, tone]) => <FigureTile key={label} label={label} value={value} attrs={attrs} tone={tone} />)}
       </dl>
       {!stats.orders && <OrdersHidden />}
-      <Link href={`/recruiter/network/stats${root ? `?root=${encodeURIComponent(root)}` : ""}`} className="inline-block text-sm font-semibold text-emerald-700 hover:underline" data-stats-link>
+      <Link href={`/recruiter/network/stats${root ? `?root=${encodeURIComponent(root)}` : ""}`} className={`inline-flex items-center min-h-11 text-sm ${ui.link}`} data-stats-link>
         عرض كل الإحصائيات ‹
       </Link>
-    </section>
+    </Card>
   );
 }
 
@@ -88,21 +85,21 @@ function NodeOrders({ orders }) {
 function NodeCard({ node, open, onToggle, unplaced, busy }) {
   const hasChildren = node.childrenCount > 0;
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-3 space-y-2 min-w-0"
+    <div className="bg-white rounded-2xl border border-violet-100 shadow-sm p-3 space-y-2 min-w-0"
       data-node-id={node.id} data-node-level={node.level ?? ""} data-node-linked={node.linkedToMe ? "1" : "0"}>
       <div className="flex items-start gap-2 min-w-0">
         {hasChildren ? (
           <button type="button" onClick={onToggle} aria-expanded={open} data-expand disabled={busy} aria-busy={busy || undefined}
             aria-label={open ? "إخفاء الفروع" : "إظهار الفروع"}
-            className="shrink-0 mt-0.5 rounded-lg p-1 text-slate-600 hover:bg-slate-100 disabled:opacity-60">
-            {open ? <ChevronDown className="w-4 h-4" aria-hidden="true" /> : <ChevronLeft className="w-4 h-4" aria-hidden="true" />}
+            className={`shrink-0 grid place-items-center w-11 h-11 -my-1 rounded-xl border disabled:opacity-60 ${open ? "border-violet-200 bg-violet-50 text-violet-700" : "border-violet-100 text-slate-600 hover:bg-violet-50"}`}>
+            {open ? <ChevronDown className="w-5 h-5" aria-hidden="true" /> : <ChevronLeft className="w-5 h-5" aria-hidden="true" />}
           </button>
-        ) : <span className="shrink-0 w-6" aria-hidden="true" />}
+        ) : <span className="shrink-0 w-11" aria-hidden="true" />}
         <div className="min-w-0 flex-1">
-          <p className="font-bold text-sm truncate" data-node-name>{node.name || "—"}</p>
+          <p className="font-bold text-sm text-slate-900 truncate" data-node-name>{node.name || "—"}</p>
           <p className="text-xs text-slate-500 truncate" dir="ltr" data-node-username>{node.username || "—"}</p>
         </div>
-        <Chip tone="slate" data-level-badge>{levelLabel(node.level)}</Chip>
+        <Chip tone="violet" data-level-badge>{levelLabel(node.level)}</Chip>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <Chip tone={node.status === "ACTIVE" ? "green" : node.status === "INACTIVE" ? "red" : "slate"} data-node-status={node.status ?? ""}>
@@ -122,8 +119,8 @@ function NodeCard({ node, open, onToggle, unplaced, busy }) {
       <NodeOrders orders={node.orders} />
       {hasChildren && !unplaced && (
         <Link href={`/recruiter/network?root=${encodeURIComponent(node.id)}`} data-subnetwork-link
-          className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:underline">
-          <Network className="w-3.5 h-3.5" aria-hidden="true" />
+          className="inline-flex items-center gap-1.5 min-h-11 -mb-2 text-sm font-semibold text-violet-700 hover:underline">
+          <Network className="w-4 h-4" aria-hidden="true" />
           عرض شبكته
         </Link>
       )}
@@ -137,7 +134,7 @@ function NodeCard({ node, open, onToggle, unplaced, busy }) {
  */
 function Branch({ list, branches, toggle, loadMore, indent, unplaced = false }) {
   return (
-    <ul className={`space-y-2 min-w-0 ${indent > 0 && indent <= 4 ? "ps-3 border-s-2 border-emerald-100" : ""}`}>
+    <ul className={`space-y-2 min-w-0 ${indent > 0 && indent <= 4 ? "ps-2 sm:ps-3 border-s-2 border-violet-100" : ""}`}>
       {list.nodes.map((n) => {
         const b = branches[n.id];
         return (
@@ -150,7 +147,7 @@ function Branch({ list, branches, toggle, loadMore, indent, unplaced = false }) 
                 {b.error && <ErrorBox code={b.error} onRetry={() => loadMore(n.id)} />}
                 {!b.loading && !b.error && b.nextCursor !== null && (
                   <button type="button" onClick={() => loadMore(n.id)} data-load-more
-                    className="mt-2 rounded-xl border border-slate-300 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50">تحميل المزيد</button>
+                    className={`mt-2 ${ui.btnSecondary}`}>تحميل المزيد</button>
                 )}
               </div>
             )}
@@ -284,72 +281,75 @@ function NetworkTree() {
   const current = root && top.path.length ? top.path[top.path.length - 1] : null;
   const title = root ? `شبكة ${current?.name || current?.username || "الأفلييت"}` : "شبكتي";
   return (
-    <div className="min-h-screen [contain:inline-size]" data-recruiter-network>
+    <div className="space-y-5 sm:space-y-6 min-w-0 [contain:inline-size]" data-recruiter-network>
       <NetworkHeader title={title} current="tree" root={root} />
-      <main className="max-w-4xl mx-auto p-4 sm:p-6 space-y-4 min-w-0">
-        {root && top.path.length > 0 && <Breadcrumb path={top.path} base="/recruiter/network" />}
+      {root && top.path.length > 0 && (
+        <div className={`${ui.card} px-4 sm:px-5 py-1`}>
+          <Breadcrumb path={top.path} base="/recruiter/network" />
+        </div>
+      )}
 
-        {stats ? <SummaryStrip stats={stats} root={root} /> : statsError ? (statsError !== "NOT_FOUND" && <ErrorBox code={statsError} onRetry={loadStats} />) : <Loading />}
+      {stats ? <SummaryStrip stats={stats} root={root} /> : statsError ? (statsError !== "NOT_FOUND" && <ErrorBox code={statsError} onRetry={loadStats} />) : <Loading />}
 
-        {!root && stats && stats.totals.unplaced > 0 && (
-          <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 space-y-3 text-sm text-amber-900" data-unplaced>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="min-w-0">أعضاء بدون موقع صالح في الشجرة (بيانات غير متناسقة): <b>{fmt(stats.totals.unplaced)}</b></p>
-              {!unplaced && (
-                <button type="button" onClick={() => loadUnplaced(0)} data-unplaced-show
-                  className="shrink-0 rounded-xl border border-amber-300 bg-white px-3 py-1.5 font-semibold hover:bg-amber-100">عرض هؤلاء الأعضاء</button>
+      {!root && stats && stats.totals.unplaced > 0 && (
+        <section className="rounded-3xl border border-amber-200 bg-amber-50 p-4 sm:p-5 space-y-3 text-sm text-amber-900 min-w-0" data-unplaced>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="min-w-0 flex items-start gap-2"><TriangleAlert className="w-5 h-5 shrink-0 text-amber-600" aria-hidden="true" /><span>أعضاء بدون موقع صالح في الشجرة (بيانات غير متناسقة): <b>{fmt(stats.totals.unplaced)}</b></span></p>
+            {!unplaced && (
+              <button type="button" onClick={() => loadUnplaced(0)} data-unplaced-show
+                className="shrink-0 inline-flex items-center min-h-11 rounded-2xl border border-amber-300 bg-white px-4 py-2 font-bold hover:bg-amber-100">عرض هؤلاء الأعضاء</button>
+            )}
+          </div>
+          {unplaced && (
+            <div className="space-y-2" data-unplaced-list>
+              {unplaced.nodes.length > 0 && <Branch list={unplaced} branches={{}} toggle={() => {}} loadMore={() => {}} indent={0} unplaced />}
+              {unplaced.loading && <Loading />}
+              {unplaced.error && <ErrorBox code={unplaced.error} onRetry={() => loadUnplaced(unplaced.failedCursor ?? 0)} />}
+              {!unplaced.loading && !unplaced.error && unplaced.nextCursor !== null && (
+                <button type="button" onClick={() => loadUnplaced(unplaced.nextCursor)} data-load-more
+                  className="inline-flex items-center min-h-11 rounded-2xl border border-amber-300 bg-white px-4 py-2 font-bold hover:bg-amber-100">تحميل المزيد</button>
               )}
             </div>
-            {unplaced && (
-              <div className="space-y-2" data-unplaced-list>
-                {unplaced.nodes.length > 0 && <Branch list={unplaced} branches={{}} toggle={() => {}} loadMore={() => {}} indent={0} unplaced />}
-                {unplaced.loading && <Loading />}
-                {unplaced.error && <ErrorBox code={unplaced.error} onRetry={() => loadUnplaced(unplaced.failedCursor ?? 0)} />}
-                {!unplaced.loading && !unplaced.error && unplaced.nextCursor !== null && (
-                  <button type="button" onClick={() => loadUnplaced(unplaced.nextCursor)} data-load-more
-                    className="rounded-xl border border-amber-300 bg-white px-3 py-1.5 font-semibold">تحميل المزيد</button>
-                )}
-              </div>
-            )}
-          </section>
-        )}
+          )}
+        </section>
+      )}
 
-        <section className="space-y-3 min-w-0" aria-label="شجرة الشبكة" data-tree>
-          <h2 className="text-base font-bold">{root ? "الأفلييت تحت هذا الحساب" : "الأفلييت الرئيسيون"}{!top.loading && !top.error && <span className="text-slate-500 font-normal"> ({fmt(top.total)})</span>}</h2>
-          {permsError && <ErrorBox code={permsError} onRetry={retryPerms} />}
-          {top.error ? (
-            <div className="space-y-3">
-              <ErrorBox code={top.error} onRetry={() => loadTop(0)} />
-              {top.error === "NOT_FOUND" && <Link href="/recruiter/network" className="inline-block text-sm font-semibold text-emerald-700 hover:underline" data-back-network>الرجوع لشبكتي</Link>}
-            </div>
-          ) : top.nodes.length > 0 ? (
-            <Branch list={top} branches={branches} toggle={toggle} loadMore={loadMore} indent={0} />
-          ) : !top.loading && (
-            <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-6 text-center space-y-3" data-empty>
-              <p className="text-sm text-slate-600">{root ? "لا يوجد أفلييت تحت هذا الحساب." : "لا يوجد أفلييت في شبكتك بعد"}</p>
+      <Card className="p-4 sm:p-6 space-y-4" aria-label="شجرة الشبكة" data-tree>
+        <CardTitle Icon={Network} title={<>{root ? "الأفلييت تحت هذا الحساب" : "الأفلييت الرئيسيون"}{!top.loading && !top.error && <span className="text-slate-500 font-normal"> ({fmt(top.total)})</span>}</>} />
+        {permsError && <ErrorBox code={permsError} onRetry={retryPerms} />}
+        {top.error ? (
+          <div className="space-y-3">
+            <ErrorBox code={top.error} onRetry={() => loadTop(0)} />
+            {top.error === "NOT_FOUND" && <Link href="/recruiter/network" className={`inline-flex items-center min-h-11 text-sm ${ui.link}`} data-back-network>الرجوع لشبكتي</Link>}
+          </div>
+        ) : top.nodes.length > 0 ? (
+          <Branch list={top} branches={branches} toggle={toggle} loadMore={loadMore} indent={0} />
+        ) : !top.loading && (
+          <div data-empty>
+            <EmptyState Icon={Network} text={root ? "لا يوجد أفلييت تحت هذا الحساب." : "لا يوجد أفلييت في شبكتك بعد"}>
               {!root && canCreate && (
-                <Link href="/recruiter/affiliates/new" className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 text-white font-bold px-4 py-2 hover:bg-emerald-700" data-empty-create>
+                <Link href="/recruiter/affiliates/new" className={`mt-1 ${ui.btnPrimary}`} data-empty-create>
                   <UserPlus className="w-4 h-4" aria-hidden="true" />
                   إنشاء أفلييت
                 </Link>
               )}
-            </div>
-          )}
-          {top.loading && <Loading />}
-          {top.moreError && <ErrorBox code={top.moreError} onRetry={() => loadTop(top.nextCursor ?? 0)} />}
-          {!top.loading && !top.error && !top.moreError && top.nextCursor !== null && (
-            <button type="button" onClick={() => loadTop(top.nextCursor)} data-load-more
-              className="rounded-xl border border-slate-300 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50">تحميل المزيد</button>
-          )}
-        </section>
-      </main>
+            </EmptyState>
+          </div>
+        )}
+        {top.loading && <Loading />}
+        {top.moreError && <ErrorBox code={top.moreError} onRetry={() => loadTop(top.nextCursor ?? 0)} />}
+        {!top.loading && !top.error && !top.moreError && top.nextCursor !== null && (
+          <button type="button" onClick={() => loadTop(top.nextCursor)} data-load-more
+            className={ui.btnSecondary}>تحميل المزيد</button>
+        )}
+      </Card>
     </div>
   );
 }
 
 export default function RecruiterNetworkPage() {
   return (
-    <Suspense fallback={<main className="min-h-screen flex items-center justify-center px-4"><Loading /></main>}>
+    <Suspense fallback={<LoadingBlock />}>
       <NetworkTree />
     </Suspense>
   );

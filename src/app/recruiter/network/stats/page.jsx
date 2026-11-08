@@ -12,33 +12,28 @@
  * changed meanwhile) is discarded; creation buttons only when /api/recruiter/me allows them.
  * Phase 6 part 4: `orders: null` (order visibility turned off by the admin) → the order section
  * and the per-level order columns are not shown (never zeros); a note explains why.
+ * Rendered inside the recruiter app shell (RecruiterShell): no own header / <main>, the shared UI kit;
+ * the tables scroll inside their card, never the page.
  */
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Layers, Package, ShieldCheck, UserPlus, Users } from "lucide-react";
 import { toRecruiterNetworkPathView, toRecruiterNetworkStatsView } from "@/lib/recruiterVisibility";
 import {
-  Breadcrumb, ErrorBox, FAKE_LABEL, IDENTITY_KEYS, IDENTITY_LABEL, Loading, NetworkHeader, ORDER_KEYS, ORDER_LABEL, PageNotice,
+  Breadcrumb, ErrorBox, FAKE_LABEL, FigureTile, IDENTITY_KEYS, IDENTITY_LABEL, Loading, NetworkHeader, ORDER_KEYS, ORDER_LABEL, PageNotice,
   OrdersHidden, fmt, getJson, handleAuth, useRecruiterPerms,
 } from "../networkUi";
 import { createRequestGate, levelLabel } from "../../recruiterUiState";
+import { Card, CardTitle, EmptyState, LoadingBlock, ui } from "../../_components/ui";
 
-function Card({ label, value, attrs = {}, tone = "slate" }) {
-  const tones = { slate: "bg-white border-slate-200", green: "bg-emerald-50 border-emerald-200", violet: "bg-violet-50 border-violet-200", amber: "bg-amber-50 border-amber-200" };
+/** One card of the page (shell Card + CardTitle with a lucide icon). */
+function Section({ title, Icon, children, ...rest }) {
   return (
-    <div className={`rounded-2xl border p-3 min-w-0 ${tones[tone]}`}>
-      <dt className="text-xs text-slate-500 leading-tight">{label}</dt>
-      <dd className="text-xl font-bold text-slate-900 mt-1" {...attrs}>{fmt(value)}</dd>
-    </div>
-  );
-}
-
-function Section({ title, children, ...rest }) {
-  return (
-    <section className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3 min-w-0" {...rest}>
-      <h2 className="text-base font-bold">{title}</h2>
+    <Card className={`${ui.cardPad} space-y-4`} {...rest}>
+      <CardTitle Icon={Icon} title={title} />
       {children}
-    </section>
+    </Card>
   );
 }
 
@@ -74,126 +69,128 @@ function NetworkStats() {
   const title = root ? `إحصائيات شبكة ${current?.name || current?.username || "الأفلييت"}` : "إحصائيات شبكتي";
   const t = stats?.totals;
   return (
-    <div className="min-h-screen [contain:inline-size]" data-recruiter-network-stats>
+    <div className="space-y-5 sm:space-y-6 min-w-0 [contain:inline-size]" data-recruiter-network-stats>
       <NetworkHeader title={title} current="stats" root={root} />
-      <main className="max-w-4xl mx-auto p-4 sm:p-6 space-y-4 min-w-0">
-        {root && path.length > 0 && <Breadcrumb path={path} base="/recruiter/network/stats" />}
-        {root && (
-          <Link href="/recruiter/network/stats" className="inline-block text-sm font-semibold text-emerald-700 hover:underline" data-full-network>
+      {root && (
+        <div className={`${ui.card} px-4 sm:px-5 py-1 flex flex-wrap items-center justify-between gap-x-4`}>
+          {path.length > 0 && <Breadcrumb path={path} base="/recruiter/network/stats" />}
+          <Link href="/recruiter/network/stats" className={`inline-flex items-center min-h-11 text-sm ${ui.link}`} data-full-network>
             إحصائيات الشبكة كاملة ‹
           </Link>
-        )}
+        </div>
+      )}
 
-        {permsError && <ErrorBox code={permsError} onRetry={retryPerms} />}
-        {error ? <ErrorBox code={error} onRetry={load} /> : !stats ? <Loading /> : t.affiliates === 0 ? (
-          <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-6 text-center space-y-3" data-empty>
-            <p className="text-sm text-slate-600">{root ? "لا يوجد أفلييت تحت هذا الحساب." : "لا يوجد أفلييت في شبكتك بعد"}</p>
-            {!root && canCreate && <Link href="/recruiter/affiliates/new" className="inline-block rounded-xl bg-emerald-600 text-white font-bold px-4 py-2" data-empty-create>إنشاء أفلييت</Link>}
-          </div>
-        ) : (
-          <>
-            <Section title="المجموع" data-totals>
-              <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                <Card label="عدد الأفلييت" value={t.affiliates} attrs={{ "data-stats-total": "" }} />
-                <Card label={root ? "المباشرون تحت هذا الحساب" : "الأفلييت الرئيسيون (المستوى 1)"} value={t.direct} attrs={{ "data-stats-direct": "" }} />
-                <Card label="أعمق مستوى" value={t.maxLevel} attrs={{ "data-stats-max-level": "" }} />
-                <Card label="مفعّلون" value={t.active} tone="green" attrs={{ "data-stats-active": "" }} />
-                <Card label="غير مفعّلين" value={t.inactive} attrs={{ "data-stats-inactive": "" }} />
-                {t.unplaced > 0 && <Card label="بدون موقع صالح (بيانات غير متناسقة)" value={t.unplaced} tone="amber" attrs={{ "data-unplaced": "" }} />}
-              </dl>
+      {permsError && <ErrorBox code={permsError} onRetry={retryPerms} />}
+      {error ? <ErrorBox code={error} onRetry={load} /> : !stats ? <Loading /> : t.affiliates === 0 ? (
+        <Card className={ui.cardPad} data-empty>
+          <EmptyState Icon={Users} text={root ? "لا يوجد أفلييت تحت هذا الحساب." : "لا يوجد أفلييت في شبكتك بعد"}>
+            {!root && canCreate && <Link href="/recruiter/affiliates/new" className={`mt-1 ${ui.btnPrimary}`} data-empty-create><UserPlus className="w-4 h-4" aria-hidden="true" />إنشاء أفلييت</Link>}
+          </EmptyState>
+        </Card>
+      ) : (
+        <>
+          <Section title="المجموع" Icon={Users} data-totals>
+            <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
+              <FigureTile label="عدد الأفلييت" value={t.affiliates} attrs={{ "data-stats-total": "" }} />
+              <FigureTile label={root ? "المباشرون تحت هذا الحساب" : "الأفلييت الرئيسيون (المستوى 1)"} value={t.direct} attrs={{ "data-stats-direct": "" }} />
+              <FigureTile label="أعمق مستوى" value={t.maxLevel} attrs={{ "data-stats-max-level": "" }} />
+              <FigureTile label="مفعّلون" value={t.active} tone="green" attrs={{ "data-stats-active": "" }} />
+              <FigureTile label="غير مفعّلين" value={t.inactive} tone="slate" attrs={{ "data-stats-inactive": "" }} />
+              {t.unplaced > 0 && <FigureTile label="بدون موقع صالح (بيانات غير متناسقة)" value={t.unplaced} tone="amber" attrs={{ "data-unplaced": "" }} />}
+            </dl>
+          </Section>
+
+          <Section title="التحقق من البطاقة الوطنية" Icon={ShieldCheck} data-identity>
+            <dl className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
+              {IDENTITY_KEYS.map((k) => <FigureTile key={k} label={IDENTITY_LABEL[k]} value={stats.identity[k]} attrs={{ "data-identity-count": k }}
+                tone={k === "APPROVED" ? "green" : k === "PENDING" ? "amber" : "slate"} />)}
+            </dl>
+          </Section>
+
+          {!stats.orders ? (
+            <Section title="تتبّع الطلبات" Icon={Package} data-orders>
+              <OrdersHidden />
             </Section>
-
-            <Section title="التحقق من البطاقة الوطنية" data-identity>
-              <dl className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {IDENTITY_KEYS.map((k) => <Card key={k} label={IDENTITY_LABEL[k]} value={stats.identity[k]} attrs={{ "data-identity-count": k }} />)}
-              </dl>
-            </Section>
-
-            {!stats.orders ? (
-              <Section title="تتبّع الطلبات" data-orders>
-                <OrdersHidden />
-              </Section>
-            ) : (
-            <Section title="تتبّع الطلبات" data-orders>
-              <p className="text-xs text-violet-800 bg-violet-50 border border-violet-200 rounded-xl px-3 py-2" data-fake-note>
-                الطلبات التجريبية تظهر منفصلة ولا تُحتسب أبداً ضمن الطلبات الحقيقية المسلّمة.
-              </p>
-              <dl className="grid grid-cols-2 gap-2">
-                <Card label="طلبات حقيقية مسلّمة" value={stats.orders.real.delivered} tone="green" attrs={{ "data-real-delivered": "" }} />
-                <Card label="طلبات حقيقية غير مسلّمة" value={stats.orders.real.total - stats.orders.real.delivered} attrs={{ "data-real-not-delivered": "" }} />
-              </dl>
-              <div className="overflow-x-auto max-w-full rounded-xl border border-slate-200">
-                <table className="w-full text-sm">
-                  <thead className="bg-slate-50 text-slate-600">
-                    <tr>
-                      <th scope="col" className="text-start font-semibold px-3 py-2">الحالة</th>
-                      <th scope="col" className="text-start font-semibold px-3 py-2">حقيقية</th>
-                      <th scope="col" className="text-start font-semibold px-3 py-2">{FAKE_LABEL}</th>
+          ) : (
+          <Section title="تتبّع الطلبات" Icon={Package} data-orders>
+            <p className="text-xs leading-relaxed text-violet-800 bg-violet-50 border border-violet-200 rounded-2xl px-3.5 py-2.5" data-fake-note>
+              الطلبات التجريبية تظهر منفصلة ولا تُحتسب أبداً ضمن الطلبات الحقيقية المسلّمة.
+            </p>
+            <dl className="grid grid-cols-2 gap-2 sm:gap-3">
+              <FigureTile label="طلبات حقيقية مسلّمة" value={stats.orders.real.delivered} tone="green" attrs={{ "data-real-delivered": "" }} />
+              <FigureTile label="طلبات حقيقية غير مسلّمة" value={stats.orders.real.total - stats.orders.real.delivered} tone="slate" attrs={{ "data-real-not-delivered": "" }} />
+            </dl>
+            <div className={ui.tableWrap}>
+              <table className="w-full">
+                <thead>
+                  <tr>
+                    <th scope="col" className={ui.th}>الحالة</th>
+                    <th scope="col" className={ui.th}>حقيقية</th>
+                    <th scope="col" className={ui.th}>{FAKE_LABEL}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-violet-50">
+                  {ORDER_KEYS.map((k) => (
+                    <tr key={k} data-order-row={k}>
+                      <th scope="row" className={`${ui.td} text-start font-normal whitespace-nowrap`}>{ORDER_LABEL[k]}</th>
+                      <td className={`${ui.td} font-semibold ${k === "delivered" ? "text-emerald-700" : ""}`} data-real={k}>{fmt(stats.orders.real[k])}</td>
+                      <td className={`${ui.td} text-violet-700`} data-fake={k}>{fmt(stats.orders.fake[k])}</td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {ORDER_KEYS.map((k) => (
-                      <tr key={k} data-order-row={k}>
-                        <th scope="row" className="text-start font-normal px-3 py-2">{ORDER_LABEL[k]}</th>
-                        <td className="px-3 py-2 font-semibold" data-real={k}>{fmt(stats.orders.real[k])}</td>
-                        <td className="px-3 py-2 text-violet-700" data-fake={k}>{fmt(stats.orders.fake[k])}</td>
-                      </tr>
+                  ))}
+                  <tr className="bg-violet-50/60 font-bold">
+                    <th scope="row" className={`${ui.td} text-start text-slate-900`}>المجموع</th>
+                    <td className={`${ui.td} text-slate-900`} data-real="total">{fmt(stats.orders.real.total)}</td>
+                    <td className={`${ui.td} text-violet-700`} data-fake-total="">{fmt(stats.orders.fake.total)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </Section>
+          )}
+
+          <Section title="حسب المستوى" Icon={Layers} data-levels>
+            <p className={ui.hint} data-levels-note>
+              المستويات نفسها في الشجرة والإحصائيات: المستوى 1 = الأفلييت الرئيسيون في شبكتك{root ? "، حتى داخل شبكة فرعية" : ""}.
+            </p>
+            <div className={ui.tableWrap} data-levels-scroll>
+              <table className="min-w-[44rem] w-full">
+                <thead>
+                  <tr>
+                    {["المستوى", "الأفلييت", "مفعّلون", "غير مفعّلين", ...IDENTITY_KEYS.map((k) => `البطاقة: ${IDENTITY_LABEL[k]}`), ...(stats.orders ? ["حقيقية مسلّمة", "حقيقية غير مسلّمة", "تجريبية"] : [])].map((h) => (
+                      <th key={h} scope="col" className={ui.th}>{h}</th>
                     ))}
-                    <tr className="bg-slate-50 font-bold">
-                      <th scope="row" className="text-start px-3 py-2">المجموع</th>
-                      <td className="px-3 py-2" data-real="total">{fmt(stats.orders.real.total)}</td>
-                      <td className="px-3 py-2 text-violet-700" data-fake-total="">{fmt(stats.orders.fake.total)}</td>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-violet-50">
+                  {stats.levels.map((l) => (
+                    <tr key={l.level} data-level-row={l.level}>
+                      <th scope="row" className={`${ui.td} text-start font-bold text-violet-700 whitespace-nowrap`} data-level-label>{levelLabel(l.level)}</th>
+                      <td className={`${ui.td} font-semibold text-slate-900`} data-level-affiliates>{fmt(l.affiliates)}</td>
+                      <td className={ui.td}>{fmt(l.active)}</td>
+                      <td className={ui.td}>{fmt(l.inactive)}</td>
+                      {IDENTITY_KEYS.map((k) => <td key={k} className={ui.td}>{fmt(l.identity[k])}</td>)}
+                      {l.orders && (
+                        <>
+                          <td className={`${ui.td} font-semibold text-emerald-700`} data-level-real-delivered>{fmt(l.orders.real.delivered)}</td>
+                          <td className={ui.td}>{fmt(l.orders.real.total - l.orders.real.delivered)}</td>
+                          <td className={`${ui.td} text-violet-700`} data-level-fake>{fmt(l.orders.fake.total)}</td>
+                        </>
+                      )}
                     </tr>
-                  </tbody>
-                </table>
-              </div>
-            </Section>
-            )}
-
-            <Section title="حسب المستوى" data-levels>
-              <p className="text-xs text-slate-500" data-levels-note>
-                المستويات نفسها في الشجرة والإحصائيات: المستوى 1 = الأفلييت الرئيسيون في شبكتك{root ? "، حتى داخل شبكة فرعية" : ""}.
-              </p>
-              <div className="overflow-x-auto max-w-full rounded-xl border border-slate-200" data-levels-scroll>
-                <table className="min-w-[44rem] w-full text-sm">
-                  <thead className="bg-slate-50 text-slate-600">
-                    <tr>
-                      {["المستوى", "الأفلييت", "مفعّلون", "غير مفعّلين", ...IDENTITY_KEYS.map((k) => `البطاقة: ${IDENTITY_LABEL[k]}`), ...(stats.orders ? ["حقيقية مسلّمة", "حقيقية غير مسلّمة", "تجريبية"] : [])].map((h) => (
-                        <th key={h} scope="col" className="text-start font-semibold px-3 py-2 whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {stats.levels.map((l) => (
-                      <tr key={l.level} data-level-row={l.level}>
-                        <th scope="row" className="text-start px-3 py-2 font-bold whitespace-nowrap" data-level-label>{levelLabel(l.level)}</th>
-                        <td className="px-3 py-2" data-level-affiliates>{fmt(l.affiliates)}</td>
-                        <td className="px-3 py-2">{fmt(l.active)}</td>
-                        <td className="px-3 py-2">{fmt(l.inactive)}</td>
-                        {IDENTITY_KEYS.map((k) => <td key={k} className="px-3 py-2">{fmt(l.identity[k])}</td>)}
-                        {l.orders && (
-                          <>
-                            <td className="px-3 py-2 font-semibold text-emerald-700" data-level-real-delivered>{fmt(l.orders.real.delivered)}</td>
-                            <td className="px-3 py-2">{fmt(l.orders.real.total - l.orders.real.delivered)}</td>
-                            <td className="px-3 py-2 text-violet-700" data-level-fake>{fmt(l.orders.fake.total)}</td>
-                          </>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Section>
-          </>
-        )}
-      </main>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Section>
+        </>
+      )}
     </div>
   );
 }
 
 export default function RecruiterNetworkStatsPage() {
   return (
-    <Suspense fallback={<main className="min-h-screen flex items-center justify-center px-4"><Loading /></main>}>
+    <Suspense fallback={<LoadingBlock />}>
       <NetworkStats />
     </Suspense>
   );

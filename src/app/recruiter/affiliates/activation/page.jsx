@@ -10,15 +10,16 @@
  * Phase 6 part 4: when the admin turned off the recruiter's canCreateAffiliates, the list stays
  * visible but no new code can be issued (the server refuses with 403 FORBIDDEN; the button is
  * hidden and a note explains it — the admin recovery path remains for these affiliates).
+ * Phase 2 (UI only): rendered inside the recruiter app shell with the shared ui.jsx primitives.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, KeyRound, RefreshCw } from "lucide-react";
+import { KeyRound, RefreshCw, UserCheck } from "lucide-react";
 import { toRecruiterError, toRecruiterPendingActivationView } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel } from "../../errorLabels";
 import { authAction } from "../../recruiterUiState";
 import ActivationCodeCard, { requestNewActivationCode } from "../ActivationCodeCard";
+import { Badge, Card, CenteredNotice, EmptyState, LoadingBlock, PageHeader, ui } from "../../_components/ui";
 
 const fmtDate = (iso) => {
   const d = iso ? new Date(iso) : null;
@@ -29,13 +30,13 @@ const fmtDate = (iso) => {
 
 function StateChip({ state, expiresAt }) {
   if (state === "ACTIVE") {
-    return <span className="inline-flex rounded-full bg-emerald-100 text-emerald-800 px-2.5 py-0.5 text-xs font-semibold" data-state="ACTIVE">رمز صالح حتى {fmtDate(expiresAt)}</span>;
+    return <Badge tone="green" data-state="ACTIVE">رمز صالح حتى {fmtDate(expiresAt)}</Badge>;
   }
   if (state === "EXPIRED") {
-    return <span className="inline-flex rounded-full bg-slate-200 text-slate-700 px-2.5 py-0.5 text-xs font-semibold" data-state="EXPIRED">منتهي الصلاحية</span>;
+    return <Badge tone="slate" data-state="EXPIRED">منتهي الصلاحية</Badge>;
   }
   if (state === "INVALIDATED") {
-    return <span className="inline-flex rounded-full bg-red-100 text-red-800 px-2.5 py-0.5 text-xs font-semibold" data-state="INVALIDATED">ملغى بعد محاولات خاطئة</span>;
+    return <Badge tone="red" data-state="INVALIDATED">ملغى بعد محاولات خاطئة</Badge>;
   }
   return null;
 }
@@ -118,82 +119,75 @@ export default function RecruiterActivationPage() {
     }
   };
 
-  if (notice) {
-    return (
-      <main className="min-h-screen flex items-center justify-center px-4">
-        <p role="alert" className="max-w-sm text-center text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3" data-page-notice>{notice}</p>
-      </main>
-    );
-  }
+  if (notice) return <CenteredNotice>{notice}</CenteredNotice>;
 
   return (
-    <div className="min-h-screen [contain:inline-size]" data-recruiter-activation>
-      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-slate-200">
-        <div className="max-w-2xl mx-auto flex items-center gap-3 px-4 py-3 min-w-0">
-          <Link href="/recruiter" className="shrink-0 p-2 -m-2 rounded-lg text-slate-700 hover:bg-slate-100" aria-label="الرجوع للوحة" data-back>
-            <ArrowRight className="w-5 h-5" aria-hidden="true" />
-          </Link>
-          <h1 className="text-base sm:text-lg font-bold truncate">تفعيل حسابات الأفلييت</h1>
+    <div className="space-y-5 sm:space-y-6 min-w-0" data-recruiter-activation>
+      <PageHeader Icon={KeyRound} title="تفعيل حسابات الأفلييت"
+        subtitle="هؤلاء الأفلييت لم يختاروا كلمة السر الخاصة بهم بعد. يمكنك إنشاء رمز تفعيل جديد إذا ضاع الرمز أو انتهت صلاحيته. الرمز الجديد يلغي الرمز السابق، ويظهر مرة واحدة فقط." />
+
+      {permsUnknown && !state.loading && !state.error && (
+        <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3" data-perms-error>
+          <span className="min-w-0">تعذّر التحقق من صلاحياتك. {recruiterErrorLabel(null)}</span>
+          <button type="button" onClick={load} data-retry
+            className="shrink-0 inline-flex items-center gap-1.5 min-h-10 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100">
+            <RefreshCw className="w-4 h-4" aria-hidden="true" />
+            إعادة المحاولة
+          </button>
         </div>
-      </header>
-
-      <main className="max-w-2xl mx-auto p-4 sm:p-6 space-y-4">
-        <p className="text-sm text-slate-600">
-          هؤلاء الأفلييت لم يختاروا كلمة السر الخاصة بهم بعد. يمكنك إنشاء رمز تفعيل جديد إذا ضاع الرمز أو انتهت صلاحيته.
-          الرمز الجديد يلغي الرمز السابق، ويظهر مرة واحدة فقط.
+      )}
+      {!canCreate && !permsUnknown && (
+        <p className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" data-create-disabled>
+          إنشاء رموز تفعيل جديدة معطّل لحسابك من طرف الإدارة. يمكن للأفلييت المعني طلب استرجاع التفعيل من الإدارة.
         </p>
+      )}
 
-        {permsUnknown && !state.loading && !state.error && (
-          <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3" data-perms-error>
-            <span className="min-w-0">تعذّر التحقق من صلاحياتك. {recruiterErrorLabel(null)}</span>
-            <button type="button" onClick={load} className="shrink-0 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100" data-retry>إعادة المحاولة</button>
+      {state.loading ? (
+        <LoadingBlock />
+      ) : state.error ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3" data-error>
+          <p role="alert" className="min-w-0">{state.error}</p>
+          <button type="button" onClick={load} data-retry
+            className="shrink-0 inline-flex items-center gap-1.5 min-h-10 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100">
+            <RefreshCw className="w-4 h-4" aria-hidden="true" />
+            إعادة المحاولة
+          </button>
+        </div>
+      ) : state.list.length === 0 ? (
+        <Card className={ui.cardPad}>
+          <div data-empty>
+            <EmptyState Icon={UserCheck} text="لا يوجد أفلييت في انتظار التفعيل." />
           </div>
-        )}
-        {!canCreate && !permsUnknown && (
-          <p className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" data-create-disabled>
-            إنشاء رموز تفعيل جديدة معطّل لحسابك من طرف الإدارة. يمكن للأفلييت المعني طلب استرجاع التفعيل من الإدارة.
-          </p>
-        )}
-
-        {state.loading ? (
-          <p className="text-sm text-slate-500" aria-live="polite" data-loading>جارٍ التحميل…</p>
-        ) : state.error ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 space-y-2" data-error>
-            <p role="alert" className="text-sm text-red-700">{state.error}</p>
-            <button type="button" onClick={load} className="inline-flex items-center gap-2 rounded-xl border border-red-300 bg-white px-3 py-2 text-sm font-semibold" data-retry>
-              <RefreshCw className="w-4 h-4" aria-hidden="true" />
-              إعادة المحاولة
-            </button>
-          </div>
-        ) : state.list.length === 0 ? (
-          <p className="rounded-2xl border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-600" data-empty>
-            لا يوجد أفلييت في انتظار التفعيل.
-          </p>
-        ) : (
-          <ul className="space-y-3" data-pending-list>
-            {state.list.map((p) => (
-              <li key={p.affiliate.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3 min-w-0" data-pending-row={p.affiliate.username ?? ""}>
-                <div className="flex flex-wrap items-start justify-between gap-2 min-w-0">
+        </Card>
+      ) : (
+        <ul className="grid gap-4 xl:grid-cols-2 items-start min-w-0" data-pending-list>
+          {state.list.map((p) => (
+            <li key={p.affiliate.id} className={`${ui.card} p-4 sm:p-5 space-y-4`} data-pending-row={p.affiliate.username ?? ""}>
+              <div className="flex flex-wrap items-start justify-between gap-3 min-w-0">
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="grid place-items-center w-10 h-10 shrink-0 rounded-2xl bg-violet-50 text-violet-600" aria-hidden="true">
+                    <KeyRound className="w-5 h-5" />
+                  </span>
                   <div className="min-w-0">
-                    <p className="font-bold truncate">{p.affiliate.name || "—"}</p>
+                    <p className="font-bold text-slate-900 truncate">{p.affiliate.name || "—"}</p>
                     <p className="text-xs text-slate-500 truncate" dir="ltr">{p.affiliate.username}</p>
                   </div>
-                  <StateChip state={p.state} expiresAt={p.expiresAt} />
                 </div>
-                {canCreate && (
-                  <button type="button" onClick={() => regenerate(p.affiliate.id)} disabled={rowBusy === p.affiliate.id} data-regenerate={p.affiliate.username ?? ""}
-                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
-                    <KeyRound className="w-4 h-4" aria-hidden="true" />
-                    {rowBusy === p.affiliate.id ? "جارٍ الإنشاء…" : "إنشاء رمز جديد"}
-                  </button>
-                )}
-                {rowError[p.affiliate.id] && <p role="alert" className="text-xs text-red-700" data-row-error>{rowError[p.affiliate.id]}</p>}
-                {issued[p.affiliate.id] && <ActivationCodeCard activation={issued[p.affiliate.id]} />}
-              </li>
-            ))}
-          </ul>
-        )}
-      </main>
+                <StateChip state={p.state} expiresAt={p.expiresAt} />
+              </div>
+              {canCreate && (
+                <button type="button" onClick={() => regenerate(p.affiliate.id)} disabled={rowBusy === p.affiliate.id} data-regenerate={p.affiliate.username ?? ""}
+                  className={`${ui.btnPrimary} w-full sm:w-auto`}>
+                  <KeyRound className="w-4 h-4" aria-hidden="true" />
+                  {rowBusy === p.affiliate.id ? "جارٍ الإنشاء…" : "إنشاء رمز جديد"}
+                </button>
+              )}
+              {rowError[p.affiliate.id] && <p role="alert" className="text-xs text-red-700" data-row-error>{rowError[p.affiliate.id]}</p>}
+              {issued[p.affiliate.id] && <ActivationCodeCard activation={issued[p.affiliate.id]} />}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

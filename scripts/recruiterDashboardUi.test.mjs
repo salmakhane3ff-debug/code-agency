@@ -108,6 +108,49 @@ console.log('\n1. Pure helpers (recruiterUiState.js / walletUi.js)');
   const gn = W.walletGrossNet({ grossCents: 145000, reversedCents: 15000 }, 130000);
   ok('walletUi.walletGrossNet: no adjustment when net = gross − reversed', gn.adjustmentCents === 0 && gn.netCents === 130000);
   ok('walletUi.walletGrossNet: an admin adjustment is shown as the difference (never hidden)', W.walletGrossNet({ grossCents: 145000, reversedCents: 15000 }, 125000).adjustmentCents === -5000);
+
+  // Dashboard redesign (UI only): helpers of the new cards, charts and alerts — straight from API answers.
+  const ip = U.individualProgressDisplay({ downlineAffiliates: 31, individualEnabled: true, individualThreshold: 10, rewards: { individual: { awarded: 4, reversed: 1 } } });
+  ok('individualProgressDisplay: held = awarded − reversed rows (3) of the whole network (31), threshold kept',
+    ip.held === 3 && ip.total === 31 && ip.text === '3 / 31' && ip.pct === 9 && ip.threshold === 10 && ip.enabled === true, JSON.stringify(ip));
+  const ip0 = U.individualProgressDisplay({ downlineAffiliates: 0, rewards: { individual: { awarded: 1, reversed: 3 } } });
+  ok('individualProgressDisplay: never negative, switched off unless explicitly true, empty network → 0 %; null input → null',
+    ip0.held === 0 && ip0.pct === 0 && ip0.enabled === false && ip0.threshold === null && U.individualProgressDisplay(null) === null);
+  ok('individualProgressDisplay: a legacy held count above the network size never exceeds 100 %',
+    U.individualProgressDisplay({ downlineAffiliates: 2, rewards: { individual: { awarded: 3, reversed: 0 } } }).pct === 100);
+  ok('groupRemaining: size − toward (clamped), null when the size is unknown',
+    U.groupRemaining({ size: 10, toward: 7 }) === 3 && U.groupRemaining({ size: 10, toward: 12 }) === 0 && U.groupRemaining({ size: null, toward: 3 }) === null && U.groupRemaining(null) === null);
+  ok('orderStatusSeries: real orders only, in the display order; test orders never counted',
+    eq(U.orderStatusSeries({ real: { delivered: 5, pending: 2, confirmed: 1, shipped: 0, cancelled: 3, returned: 1, other: 0, total: 12 }, fake: { delivered: 99, total: 99 } }),
+      [{ key: 'delivered', value: 5 }, { key: 'pending', value: 2 }, { key: 'confirmed', value: 1 }, { key: 'shipped', value: 0 }, { key: 'cancelled', value: 3 }, { key: 'returned', value: 1 }, { key: 'other', value: 0 }]));
+  ok('orderStatusSeries: withheld counts (canViewOrders off → orders null) → null, never zeros', U.orderStatusSeries(null) === null && U.orderStatusSeries({ fake: {} }) === null);
+  const lv = U.levelSeries([{ level: 2, active: 1, inactive: 1, affiliates: 2 }, { level: 1, active: 3, inactive: 0, affiliates: 3 }, { level: null, active: 9 }]);
+  ok('levelSeries: sorted by absolute level, invalid levels skipped', eq(lv.map((x) => [x.label, x.active, x.inactive]), [['1', 3, 0], ['2', 1, 1]]), JSON.stringify(lv));
+  const deep = U.levelSeries(Array.from({ length: 12 }, (_, i) => ({ level: i + 1, active: 1, inactive: 1, affiliates: 2 })), 8);
+  ok('levelSeries: the deep tail is summed into one "N+" bar (nothing dropped)',
+    deep.length === 8 && deep[7].label === '8+' && deep[7].active === 5 && deep[7].affiliates === 10 && deep.reduce((n, x) => n + x.affiliates, 0) === 24, JSON.stringify(deep.at(-1)));
+  ok('levelSeries: no levels → empty series (empty state)', eq(U.levelSeries(undefined), []));
+  const al = U.dashboardAlerts({ me: { status: 'ACTIVE' }, perms: { canCreateAffiliates: true, canViewOrders: true }, identity: { status: 'APPROVED' }, progress: { individualEnabled: true, groupEnabled: false } });
+  ok('dashboardAlerts: nothing to report → no alert (no invented notification)', eq(al, []));
+  const al2 = U.dashboardAlerts({ me: { status: 'DISABLED' }, perms: { canCreateAffiliates: false, canViewOrders: false }, identity: { status: 'REJECTED' }, progress: { individualEnabled: false, groupEnabled: false } });
+  ok('dashboardAlerts: disabled account, rejected CIN (→ verification page), creation / orders off, rewards off',
+    eq(al2.map((a) => a.id), ['disabled', 'kyc', 'create-off', 'orders-off', 'rewards-off']) && al2[1].href === '/recruiter/verification' && al2[1].tone === 'red');
+  const al3 = U.dashboardAlerts({ me: { status: 'ACTIVE' }, perms: { canCreateAffiliates: true, canViewOrders: true }, identity: null, identityFailed: true });
+  ok('dashboardAlerts: a failed KYC request is "unknown", never "not verified"', eq(al3.map((a) => a.id), ['kyc-unknown']) && !al3[0].text.includes('أرسل'));
+  ok('dashboardAlerts: before anything loads → no alert', eq(U.dashboardAlerts(), []));
+
+  // Phase 2 (one recruiter app): which routes get the shell, which menu entry is current.
+  ok('isPublicRecruiterPath: only the login page (and below it) is public — never the dashboard or a prefix look-alike',
+    U.isPublicRecruiterPath('/recruiter/login') && U.isPublicRecruiterPath('/recruiter/login/') && U.isPublicRecruiterPath('/recruiter/login?next=x')
+    && !U.isPublicRecruiterPath('/recruiter') && !U.isPublicRecruiterPath('/recruiter/loginx') && !U.isPublicRecruiterPath('/recruiter/wallet') && !U.isPublicRecruiterPath(undefined));
+  const P = { canViewOrders: true, canCreateAffiliates: true };
+  ok('sectionForPath: every authenticated route highlights its menu entry',
+    eq(['/recruiter', '/recruiter/', '/recruiter/network', '/recruiter/network?root=a1', '/recruiter/network/stats', '/recruiter/affiliates', '/recruiter/affiliates/new',
+      '/recruiter/affiliates/activation', '/recruiter/wallet', '/recruiter/verification', '/recruiter/password'].map((x) => U.sectionForPath(x, P)),
+    ['home', 'home', 'network', 'network', 'orders', 'affiliates', 'add', 'activation', 'rewards', 'verification', 'password']));
+  ok('sectionForPath: a page whose own entry is hidden by a permission highlights its parent (stats → network, new → affiliates)',
+    U.sectionForPath('/recruiter/network/stats', { canViewOrders: false }) === 'network' && U.sectionForPath('/recruiter/affiliates/new', null) === 'affiliates'
+    && U.sectionForPath('/recruiter/networkx', P) === null && U.sectionForPath('/recruiter/unknown', P) === null);
 }
 
 // ── 2. on top of the real projections ───────────────────────────────────────────
@@ -185,14 +228,54 @@ console.log('\n4. Static assertions on the recruiter pages');
     ok(`${f}: every creation link (incl. the empty state) is behind canCreate (from /api/recruiter/me)`, creates.length >= 1 && creates.every((ctx) => /canCreate &&/.test(ctx)) && /useRecruiterPerms\(/.test(code), String(creates.length));
   }
   const hub = src['src/app/recruiter/page.jsx'];
-  ok('hub: one entry per page (no duplicate /recruiter/network), affiliates list linked, activity log stays "قريباً"',
-    (hub.match(/href: "\/recruiter\/network"/g) || []).length === 1 && /href: "\/recruiter\/affiliates"/.test(hub) && /data-affiliates-link/.test(hub)
-    && /\{ id: "log", label: "سجل العمليات", Icon: History \}/.test(hub) && /قريباً/.test(hub));
+  // Dashboard redesign (UI only): the menu lives in RecruiterShell.jsx, the cards in DashboardWidgets.jsx.
+  const shell = stripJs(read('src/app/recruiter/_components/RecruiterShell.jsx'));
+  const widgets = stripJs(read('src/app/recruiter/_components/DashboardWidgets.jsx'));
+  const charts = stripJs(read('src/app/recruiter/_components/DashboardCharts.jsx'));
+  // Phase 2: the shell is mounted ONCE by the recruiter layout (RecruiterAppShell: session chrome, logout, guide).
+  const appShell = stripJs(read('src/app/recruiter/_components/RecruiterAppShell.jsx'));
+  const layout = stripJs(read('src/app/recruiter/layout.jsx'));
+  const hubAll = `${hub}\n${shell}\n${widgets}\n${appShell}`;
+  ok('hub: one menu entry per page (no duplicate /recruiter/network), affiliates list linked, activity log stays "قريباً"',
+    (shell.slice(shell.indexOf('export const SECTIONS = ['), shell.indexOf('];', shell.indexOf('export const SECTIONS = ['))).match(/href: "\/recruiter\/network"/g) || []).length === 1 && /href: "\/recruiter\/affiliates"/.test(shell) && /data-affiliates-link|hook="affiliates-link"/.test(widgets)
+    && /\{ id: "log", label: "سجل العمليات", Icon: History \}/.test(shell) && /قريباً/.test(shell) && /import RecruiterAppShell from "\.\/_components\/RecruiterAppShell"/.test(layout) && /<RecruiterAppShell>\{children\}<\/RecruiterAppShell>/.test(layout)
+    && /import RecruiterShell from "\.\/RecruiterShell"/.test(appShell) && !/RecruiterShell/.test(hub.replace(/RecruiterAppShell/g, '')));
   ok('hub: progress summary from /api/recruiter/progress (group q / size, awarded / reversed, gross / net, "غير مفعّلة"), KYC card from /api/recruiter/identity',
-    /\/api\/recruiter\/progress/.test(hub) && /toRecruiterProgressSummaryView/.test(hub) && /data-group-progress/.test(hub) && /data-gross/.test(hub) && /data-net/.test(hub)
-    && /غير مفعّلة/.test(hub) && /\/api\/recruiter\/identity/.test(hub) && /data-kyc-card/.test(hub));
-  ok('hub: creation entries need an explicit canCreateAffiliates === true', /const canCreate = perms\?\.canCreateAffiliates === true;/.test(hub) && /canCreateAffiliates !== true/.test(hub));
+    /\/api\/recruiter\/progress/.test(hub) && /toRecruiterProgressSummaryView/.test(hub) && /data-group-progress/.test(widgets) && /data-gross/.test(hub) && /hook="net"/.test(hub)
+    && /غير مفعّلة/.test(widgets) && /\/api\/recruiter\/identity/.test(hub) && /data-kyc-card/.test(widgets));
+  ok('hub: creation entries need an explicit canCreateAffiliates === true (menu filter + quick action behind `active && canCreate`)',
+    /const canCreate = perms\?\.canCreateAffiliates === true;/.test(hub) && /canCreateAffiliates !== true/.test(shell)
+    && /\{active && canCreate && <Action href="\/recruiter\/affiliates\/new"/.test(widgets) && (hubAll.match(/"\/recruiter\/affiliates\/new"/g) || []).length === 2);
+  ok('hub: order entries need an explicit canViewOrders === true (menu filter, KPI, chart)',
+    /const canViewOrders = perms\?\.canViewOrders === true;/.test(hub) && /canViewOrders !== true/.test(shell) && /if \(!canViewOrders\) body = <EmptyState/.test(hub));
+  ok('hub (redesign): only the existing read-only endpoints — me, progress, identity, network stats (no wallet read: it reconciles), logout',
+    eq([...new Set([...hubAll.matchAll(/"(\/api\/recruiter\/[a-z/]+)"/g)].map((m) => m[1]))].sort(),
+      ['/api/recruiter/auth', '/api/recruiter/identity', '/api/recruiter/me', '/api/recruiter/network/stats', '/api/recruiter/progress'])
+    && !/\/api\/recruiter\/wallet/.test(hubAll) && /toRecruiterNetworkStatsView/.test(hub));
+  ok('hub (redesign): nothing invented — no random / hard-coded trend, no fetch outside the page, charts only from the stats helpers',
+    !/Math\.random|\+\d+%|trend/i.test(`${hubAll}\n${charts}`) && !/fetch\(/.test(`${shell}\n${widgets}\n${charts}`)
+    && /orderStatusSeries\(stats\.data\.orders\)/.test(hub) && /levelSeries\(stats\.data\.levels\)/.test(hub)
+    && /dynamic\(\(\) => import\("\.\/_components\/DashboardCharts"\)[^;]*ssr: false/.test(hub));
+  ok('hub (redesign): empty states and retries — progress / stats errors retry, no data → empty state',
+    /hook="progress"/.test(hub) && /hook="stats"/.test(hub) && /data-progress-empty/.test(hub) && /لا توجد طلبات حقيقية بعد في شبكتك/.test(hub) && /لا يوجد أفلييت في شبكتك بعد/.test(hub));
+  ok('hub (redesign): the mobile drawer is a modal dialog with Escape, a close button and the same permission-filtered menu',
+    /role="dialog" aria-modal="true" aria-label="القائمة الرئيسية"/.test(shell) && /e\.key === "Escape"/.test(shell) && /aria-label="إغلاق القائمة"/.test(shell)
+    && (shell.match(/<Nav perms=\{perms\}/g) || []).length === 2 && /data-menu-open/.test(shell) && /data-logout/.test(shell));
 
+  // Phase 2 (one recruiter app): every authenticated page renders inside the layout's shell with the shared UI kit.
+  const AUTH_PAGES = PAGES; // the 9 authenticated recruiter pages above (dashboard included)
+  const raw = Object.fromEntries([...AUTH_PAGES, 'src/app/recruiter/network/networkUi.jsx'].map((f) => [f, stripJs(read(f))]));
+  ok('phase 2: no authenticated page renders its own <main>, full-screen wrapper or sticky header (the shell owns them)',
+    Object.entries(raw).every(([, c]) => !/<main\b/.test(c) && !/min-h-screen/.test(c) && !/<header\b/.test(c)),
+    Object.entries(raw).filter(([, c]) => /<main\b|min-h-screen|<header\b/.test(c)).map(([f]) => f).join(', '));
+  ok('phase 2: every sub-page builds its title with the shared PageHeader (directly or through NetworkHeader)',
+    AUTH_PAGES.filter((f) => f !== 'src/app/recruiter/page.jsx').every((f) => /<PageHeader\b|<NetworkHeader\b/.test(raw[f]) && /_components\/ui"/.test(read(f)))
+    && /<PageHeader\b/.test(raw['src/app/recruiter/network/networkUi.jsx']) && /<Tabs\b/.test(raw['src/app/recruiter/network/networkUi.jsx']));
+  ok('phase 2: the shell is mounted once by the layout, never by a page; the login page stays outside it',
+    AUTH_PAGES.every((f) => !/<RecruiterShell\b|<RecruiterAppShell\b/.test(raw[f])) && /if \(isPublicRecruiterPath\(pathname\)\) return children;/.test(appShell)
+    && !/RecruiterShell|RecruiterAppShell|_components/.test(read('src/app/recruiter/login/page.jsx')));
+  ok('phase 2: the app shell never redirects or blocks a page (the pages keep their own 401-only login redirect)',
+    !/router\.(replace|push)\("\/recruiter\/login"\)(?![^]*logout)/.test(appShell.replace(/const logout[^]*?\}, \[router\]\);/, '')) && /the page itself handles 401/.test(read('src/app/recruiter/_components/RecruiterAppShell.jsx')));
   const wallet = src['src/app/recruiter/wallet/page.jsx'];
   ok('wallet: gross / reversed / net apart (from /api/recruiter/progress), group rows labelled with cycle and size',
     /\/api\/recruiter\/progress/.test(wallet) && /data-gross-total/.test(wallet) && /data-reversed-total/.test(wallet) && /data-net-total/.test(wallet)
