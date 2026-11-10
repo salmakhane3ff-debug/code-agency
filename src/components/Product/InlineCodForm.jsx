@@ -16,6 +16,21 @@ import { Zap } from "lucide-react";
 import { resolveClickId } from "@/lib/tracking/clickId";
 import { buildCodOrderPayload, validateCodForm } from "@/lib/codOrder";
 import { trackPurchase } from "@/lib/meta/purchase";
+import { fieldDir } from "@/lib/marketLocale";
+
+// The form's built-in texts (Arabic — the original wording). A caller may override any of them.
+const DEFAULT_TEXT = Object.freeze({
+  successTitle: "تم استلام طلبك بنجاح!",
+  successSub: "سنتصل بك قريباً لتأكيد الطلب.",
+  heading: "أكمل طلبك الآن",
+  name: "الاسم الكامل *",
+  phone: "رقم الهاتف *",
+  city: "المدينة",
+  address: "العنوان التفصيلي",
+  error: "حدث خطأ، يرجى المحاولة مرة أخرى.",
+  sending: "جارٍ الإرسال…",
+  submit: "اطلب الآن",
+});
 
 function imgSrc(v) {
   if (!v) return "";
@@ -34,7 +49,14 @@ export default function InlineCodForm({
   // Bump this counter (from the product page's Buy Now) to focus the first field
   // and play a subtle highlight so the customer immediately notices the form.
   focusSignal = 0,
+  // Optional texts / direction for a market-localized caller (the /offer landing page passes the
+  // visitor's market — MA Arabic RTL / FR French LTR). Without them the form renders exactly as
+  // before (Arabic, RTL), so the product page is unchanged.
+  text = null,
+  dir = "rtl",
+  phoneDir = undefined,
 }) {
+  const tx = { ...DEFAULT_TEXT, ...(text || {}) };
   const [form,   setForm]   = useState({ name: "", phone: "", city: "", address: "" });
   const [status, setStatus] = useState("idle"); // idle | submitting | success | error
   const setF = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -48,8 +70,7 @@ export default function InlineCodForm({
     if (card) {
       // Restart the CSS animation without remounting (which would reset inputs).
       card.style.animation = "none";
-      // eslint-disable-next-line no-unused-expressions
-      card.offsetWidth; // force reflow
+      void card.offsetWidth; // force reflow
       card.style.animation = "codAttn 1.3s ease-out";
     }
   }, [focusSignal]);
@@ -126,9 +147,9 @@ export default function InlineCodForm({
         <div className="bg-green-50 border border-green-200 rounded-2xl p-6 text-center space-y-3">
           <div className="text-4xl">🎉</div>
           <p className="text-base font-black text-green-700">
-            {cfg.successMessage || "تم استلام طلبك بنجاح!"}
+            {cfg.successMessage || tx.successTitle}
           </p>
-          <p className="text-sm text-green-600">سنتصل بك قريباً لتأكيد الطلب.</p>
+          <p className="text-sm text-green-600">{tx.successSub}</p>
         </div>
       </div>
     );
@@ -142,29 +163,29 @@ export default function InlineCodForm({
         100% { box-shadow: 0 0 0 0 rgba(251,191,36,0); }
       }`}</style>
       <div ref={cardRef} className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
-        <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">📦 أكمل طلبك الآن</p>
-        <form onSubmit={submit} className="space-y-3" dir="rtl">
+        <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">📦 {tx.heading}</p>
+        <form onSubmit={submit} className="space-y-3" dir={dir}>
           <input ref={nameRef} required value={form.name} onChange={(e) => setF("name", e.target.value)}
-            placeholder="الاسم الكامل *"
+            placeholder={tx.name}
             className="w-full text-sm border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-200 bg-gray-50" />
           <input required type="tel" value={form.phone} onChange={(e) => setF("phone", e.target.value)}
-            placeholder="رقم الهاتف *"
+            placeholder={tx.phone} dir={phoneDir === "auto" ? fieldDir(form.phone) : phoneDir}
             className="w-full text-sm border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-200 bg-gray-50" />
           <input value={form.city} onChange={(e) => setF("city", e.target.value)}
-            placeholder="المدينة"
+            placeholder={tx.city}
             className="w-full text-sm border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-200 bg-gray-50" />
           {cfg.showAddress !== false && (
             <input value={form.address} onChange={(e) => setF("address", e.target.value)}
-              placeholder="العنوان التفصيلي"
+              placeholder={tx.address}
               className="w-full text-sm border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-200 bg-gray-50" />
           )}
           {status === "error" && (
-            <p className="text-xs text-red-500 text-center">حدث خطأ، يرجى المحاولة مرة أخرى.</p>
+            <p className="text-xs text-red-500 text-center">{tx.error}</p>
           )}
           <button type="submit" disabled={status === "submitting"}
             className="w-full flex items-center justify-center gap-2 py-4 bg-amber-400 hover:bg-amber-500 active:scale-[0.98] text-white rounded-2xl font-black text-base transition-all shadow-lg shadow-amber-200 disabled:opacity-70">
             <Zap className="w-5 h-5" />
-            {status === "submitting" ? "جارٍ الإرسال…" : (cfg.buttonText || "اطلب الآن")}
+            {status === "submitting" ? tx.sending : (cfg.buttonText || tx.submit)}
           </button>
         </form>
       </div>

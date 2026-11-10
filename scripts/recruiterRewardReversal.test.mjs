@@ -574,6 +574,28 @@ console.log('\n11. Affiliate commissions, points, balances and payouts untouched
     // Simplified dashboard (UI only): three sections + "المزيد" — the new profile page (read-only account view of
     // GET /api/recruiter/me); the former dashboard charts component is gone.
     'src/app/recruiter/profile/page.jsx',
+    // Task 7 (UI only — market-based Arabic / French localization): the four market-scoped areas (affiliate dashboard +
+    // affiliate login / activation, recruiter, /offer and /tsajlim3ana landing pages) follow the existing site-language
+    // choice (MA → Arabic RTL, FR → French LTR) through the shared plumbing (marketLocale.js, useMarketLocale.jsx, the
+    // root pre-paint script, LanguageContext) and per-area dictionaries; shared components get optional text / direction
+    // props with unchanged defaults. Translated texts and direction only — no service, route handler, schema, money logic
+    // or API request change (pinned in scripts/marketLocale.test.mjs).
+    'src/app/affiliate/activate/page.jsx', 'src/app/affiliate/activate/recovery/page.jsx', 'src/app/affiliate/dashboard/BoosterTab.jsx',
+    'src/app/affiliate/dashboard/BrandTab.jsx', 'src/app/affiliate/dashboard/DepositTab.jsx', 'src/app/affiliate/dashboard/UgcTab.jsx',
+    'src/app/affiliate/dashboard/page.jsx', 'src/app/affiliate/layout.jsx', 'src/app/affiliate/login/page.jsx',
+    'src/app/layout.jsx', 'src/app/offer/[slug]/OfferClient.jsx', 'src/app/recruiter/login/page.jsx',
+    'src/app/recruiter/wallet/walletI18n.js', 'src/app/tsajlim3ana/RecruitmentLanding.jsx', 'src/app/tsajlim3ana/page.jsx',
+    'src/components/LiveActivity.jsx', 'src/components/Product/InlineCodForm.jsx', 'src/components/Product/StickyCTA.jsx',
+    'src/components/affiliate/PaymentProofsSlider.jsx', 'src/components/checkout/BankDetailsCard.jsx', 'src/context/LanguageContext.jsx',
+    'src/context/useMarketLocale.jsx', 'src/lib/affiliateDashboardI18n.js', 'src/lib/affiliateTabsI18n.js',
+    'src/lib/landingI18n.js', 'src/lib/marketLocale.js', 'src/lib/recruiterI18n.js',
+    // Task 7 round 2 (UI only — closing the localization gaps): server-produced text (live activity / live feed, API
+    // errors, stored notification messages) localized AT DISPLAY TIME by pure parsers (src/lib/serverText/*) — no API,
+    // service or stored data change; the store header / selector changed only on market-scoped routes; the first-paint
+    // gate (globals.css); currency display labels درهم / DH. Pinned in marketLocale / liveText / affiliateServerText tests.
+    'src/app/affiliate/dashboard/RewardsTab.jsx', 'src/app/affiliate/dashboard/_brand/BrandDashboard.jsx', 'src/app/globals.css',
+    'src/components/template/Header.jsx', 'src/components/template/LanguageSwitcher.jsx',
+    'src/lib/brandI18n.js', 'src/lib/serverText/affiliateServerText.js', 'src/lib/serverText/liveText.js',
     // Phase 7 Stage F (approved clarification): an affiliate with children cannot be deleted — the deletion helper and the
     // 409 mapping of the admin DELETE route and of the legacy controller (no commission / points / balance / payout file).
     'src/app/api/admin/affiliates/route.js', 'src/lib/affiliateDeletion.js', 'src/lib/controllers/affiliateController.js',

@@ -14,6 +14,7 @@
  * Every page still loads and authorizes its OWN data exactly as before (same endpoints, same 401-only
  * login redirect) — the shell never redirects and never blocks a page. The "how rewards work" guide
  * reads GET /api/recruiter/progress on demand (or the summary the dashboard already loaded).
+ * The alerts follow the market language (useRecruiterLocale → dashboardAlerts(…, lang)) and switch live.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -22,6 +23,7 @@ import { toRecruiterError, toRecruiterIdentityView, toRecruiterProgressSummaryVi
 import { dashboardAlerts, groupProgressDisplay, isPublicRecruiterPath, permsFromMe, sectionForPath } from "../recruiterUiState";
 import RecruiterShell from "./RecruiterShell";
 import { GuideDialog } from "./DashboardWidgets";
+import { useRecruiterLocale } from "./ui";
 
 const SessionContext = createContext(null);
 
@@ -44,6 +46,7 @@ async function getApi(url) {
 function RecruiterSession({ children }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { lang } = useRecruiterLocale();
   const [me, setMe] = useState(null);
   const [perms, setPerms] = useState(null);
   const [identity, setIdentity] = useState({ data: null, failed: false });
@@ -96,8 +99,8 @@ function RecruiterSession({ children }) {
     router.replace("/recruiter/login");
   }, [router]);
 
-  const alerts = useMemo(() => dashboardAlerts({ me, perms, identity: identity.data, identityFailed: identity.failed, progress: summary }),
-    [me, perms, identity, summary]);
+  const alerts = useMemo(() => dashboardAlerts({ me, perms, identity: identity.data, identityFailed: identity.failed, progress: summary, lang }),
+    [me, perms, identity, summary, lang]);
   const value = useMemo(() => ({ me, perms, identity: identity.data, identityFailed: identity.failed, publishSummary }), [me, perms, identity, publishSummary]);
   const groupInfo = useMemo(() => (summary ? groupProgressDisplay(summary) : null), [summary]);
 

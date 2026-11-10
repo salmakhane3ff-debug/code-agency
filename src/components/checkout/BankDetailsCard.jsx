@@ -21,7 +21,9 @@ const DEFAULT_LABELS = {
   copied:        "Copié",
 };
 
-export default function BankDetailsCard({ bankInfo, labels = {} }) {
+// `dir` / `valueDir` are optional: the affiliate area passes its market direction (MA RTL / FR LTR) and
+// "ltr" for the RIB / account / SWIFT values; without them (checkout) the card renders exactly as before.
+export default function BankDetailsCard({ bankInfo, labels = {}, dir = "rtl", valueDir = undefined }) {
   const L = { ...DEFAULT_LABELS, ...labels };
   const [ribCopied,  setRibCopied]  = useState(false);
   const [acctCopied, setAcctCopied] = useState(false);
@@ -82,7 +84,7 @@ export default function BankDetailsCard({ bankInfo, labels = {} }) {
               { label: L.accountHolder, value: bankInfo.accountName },
             ].map(({ label, value }) =>
               value ? (
-                <div key={label} dir="rtl" className="flex items-center justify-between py-3 border-b border-gray-50">
+                <div key={label} dir={dir} className="flex items-center justify-between py-3 border-b border-gray-50">
                   <span className="text-xs text-gray-400 font-medium">{label}</span>
                   <span className="text-sm font-bold text-gray-900">{value}</span>
                 </div>
@@ -91,12 +93,12 @@ export default function BankDetailsCard({ bankInfo, labels = {} }) {
 
             {/* RIB with copy */}
             {bankInfo.rib && (
-              <div dir="rtl" className="flex items-center justify-between gap-2 py-3 border-b border-gray-50">
+              <div dir={dir} className="flex items-center justify-between gap-2 py-3 border-b border-gray-50">
                 <div className="flex items-center gap-1.5 shrink-0">
                   <span className="text-xs text-gray-400 font-medium">RIB</span>
                   <CopyBtn copied={ribCopied} onClick={() => copy(bankInfo.rib, setRibCopied)} />
                 </div>
-                <span className="text-sm font-mono font-bold text-gray-900 flex-1 text-left leading-relaxed" style={{ wordBreak: "break-all" }}>
+                <span className={`text-sm font-mono font-bold text-gray-900 flex-1 ${dir === "rtl" ? "text-left" : "text-right"} leading-relaxed`} style={{ wordBreak: "break-all" }} dir={valueDir}>
                   {bankInfo.rib}
                 </span>
               </div>
@@ -104,12 +106,12 @@ export default function BankDetailsCard({ bankInfo, labels = {} }) {
 
             {/* Account Number with copy */}
             {bankInfo.accountNumber && (
-              <div dir="rtl" className="flex items-center justify-between gap-2 py-3 border-b border-gray-50">
+              <div dir={dir} className="flex items-center justify-between gap-2 py-3 border-b border-gray-50">
                 <div className="flex items-center gap-1.5 shrink-0">
                   <span className="text-xs text-gray-400 font-medium">{L.accountNumber}</span>
                   <CopyBtn copied={acctCopied} onClick={() => copy(bankInfo.accountNumber, setAcctCopied)} />
                 </div>
-                <span className="text-sm font-mono font-bold text-gray-900 flex-1 text-left leading-relaxed" style={{ wordBreak: "break-all" }}>
+                <span className={`text-sm font-mono font-bold text-gray-900 flex-1 ${dir === "rtl" ? "text-left" : "text-right"} leading-relaxed`} style={{ wordBreak: "break-all" }} dir={valueDir}>
                   {bankInfo.accountNumber}
                 </span>
               </div>
@@ -117,9 +119,9 @@ export default function BankDetailsCard({ bankInfo, labels = {} }) {
 
             {/* SWIFT */}
             {bankInfo.swift && (
-              <div dir="rtl" className="flex items-center justify-between py-3">
+              <div dir={dir} className="flex items-center justify-between py-3">
                 <span className="text-xs text-gray-400 font-medium">SWIFT / BIC</span>
-                <span className="text-sm font-mono font-bold text-gray-900">{bankInfo.swift}</span>
+                <span className="text-sm font-mono font-bold text-gray-900" dir={valueDir}>{bankInfo.swift}</span>
               </div>
             )}
           </div>

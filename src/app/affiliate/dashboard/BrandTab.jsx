@@ -39,7 +39,9 @@ import {
   ArrowLeft, ArrowRight, Crown, Check, Boxes,
 } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
-import { brandT, brandDir } from "@/lib/brandI18n";
+import { brandT, brandDir, BRAND_TEXT } from "@/lib/brandI18n";
+import { knownServerError } from "@/lib/serverText/affiliateServerText";
+import { useMarketLocale } from "@/context/useMarketLocale";
 import { BRAND_LIMITS } from "@/lib/brandProgram";
 import { displayBreakdown } from "@/lib/brandPricing";
 import BrandDashboard from "./_brand/BrandDashboard";
@@ -78,7 +80,14 @@ function newRequestId() {
 const PROOF_ACCEPT = "image/jpeg,image/png,image/webp,application/pdf";
 const PROOF_MAX_BYTES = 8 * 1024 * 1024; // same limit as the server (DEPOSIT_MAX_BYTES), checked again there
 
-const errorText = (r, t) => (r.status === 0 ? t("error_network") : (r.data?.code ? t(`code_${r.data.code}`, { n: r.data.expected ?? "" }) : t("error_generic")));
+// Brand error CODES → this tab's dictionary (code_*). Anything else the server can answer (generic 500
+// SERVER_ERROR, shared rate limiter, auth middleware) → the affiliate server-text table; else generic.
+const errorText = (r, t, lang) => {
+  if (r.status === 0) return t("error_network");
+  const code = r.data?.code;
+  if (code && BRAND_TEXT.fr[`code_${code}`] !== undefined) return t(`code_${code}`, { n: r.data.expected ?? "" });
+  return knownServerError(r.data || {}, lang) ?? t("error_generic");
+};
 
 /**
  * Square product thumbnail. Plain <img>: catalogue images come from the store's
@@ -327,7 +336,7 @@ function Progress({ step, t }) {
  * products, name, itemised costs, VAT, total, refund terms — and "Buy Now".
  * The server re-checks everything and computes the amount itself.
  */
-function Offer({ data, t, money, dir, onRequested, onStale }) {
+function Offer({ data, t, lang, money, dir, onRequested, onStale }) {
   const packages = data.packages || [];
   const [step, setStep] = useState(0);
   // Nothing is pre-selected: the affiliate compares the packs and picks one.
@@ -385,7 +394,7 @@ function Offer({ data, t, money, dir, onRequested, onStale }) {
     setSending(false);
     if (r.ok) { requestId.current = null; onRequested(); return; }
     if (r.status !== 0) requestId.current = null;
-    setError(errorText(r, t));
+    setError(errorText(r, t, lang));
     if (["PRODUCT_NOT_AVAILABLE", "PACKAGE_NOT_FOUND", "TERMS_CHANGED"].includes(r.data?.code)) {
       onStale();
       if (r.data.code === "PRODUCT_NOT_AVAILABLE") setStep(1);
@@ -594,7 +603,8 @@ function BrandHeader({ access, t, status, sinceDays }) {
 }
 
 /** Bank details + transfer proof upload for a request awaiting payment (one proof per request). */
-function PaymentProof({ access, t, onChanged }) {
+function PaymentProof({ access, t, lang, onChanged }) {
+  const { dir: marketDir } = useMarketLocale(null);
   const [bankInfo, setBankInfo] = useState(null);
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -634,12 +644,12 @@ function PaymentProof({ access, t, onChanged }) {
       r = { ok: res.ok, status: res.status, data: await res.json().catch(() => ({})) };
     } catch { r = { ok: false, status: 0, data: null }; }
     setBusy(false);
-    if (r.ok) onChanged(); else setError(errorText(r, t));
+    if (r.ok) onChanged(); else setError(errorText(r, t, lang));
   };
   return (
     <div className="space-y-3" data-brand-proof>
       <p className="text-xs text-gray-600">{t("pending_payment_step")}</p>
-      <BankDetailsCard bankInfo={bankInfo} labels={{ title: t("proof_bank_title") }} />
+      <BankDetailsCard bankInfo={bankInfo} labels={{ title: t("proof_bank_title") }} dir={marketDir} valueDir="ltr" />
       <label className="block">
         <span className="block text-xs font-semibold text-gray-600 mb-1">{t("proof_reference")}</span>
         <input dir="auto" value={reference} onChange={(e) => setReference(e.target.value)} maxLength={120}
@@ -659,7 +669,7 @@ function PaymentProof({ access, t, onChanged }) {
  * Fresh consent to the CURRENT published terms (separate record; the terms
  * accepted with the request are never changed). Explicit checkbox, no implied consent.
  */
-function ConsentRenewal({ access, terms, t, onChanged }) {
+function ConsentRenewal({ access, terms, t, lang, onChanged }) {
   const [accepted, setAccepted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -671,7 +681,7 @@ function ConsentRenewal({ access, terms, t, onChanged }) {
       method: "POST", body: { termsVersion: terms.version, acceptTerms: true },
     });
     setBusy(false);
-    if (r.ok) onChanged(); else setError(errorText(r, t));
+    if (r.ok) onChanged(); else setError(errorText(r, t, lang));
   };
   return (
     <div className="rounded-xl border border-gray-100 bg-gray-50 p-3 space-y-2" data-consent-renewal>
@@ -691,7 +701,7 @@ function ConsentRenewal({ access, terms, t, onChanged }) {
   );
 }
 
-function PendingCard({ access, terms, t, money, onChanged }) {
+function PendingCard({ access, terms, t, lang, money, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const cancel = async () => {
@@ -699,7 +709,7 @@ function PendingCard({ access, terms, t, money, onChanged }) {
     setBusy(true);
     const r = await call(`/api/affiliate/brand/access/${encodeURIComponent(access.id)}/cancel`, { method: "POST" });
     setBusy(false);
-    if (r.ok) onChanged(); else setError(errorText(r, t));
+    if (r.ok) onChanged(); else setError(errorText(r, t, lang));
   };
   return (
     <div className="space-y-4">
@@ -725,10 +735,10 @@ function PendingCard({ access, terms, t, money, onChanged }) {
             <p role="status" className="text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
               {t(access.consentStatus === "RENEWED_PAYMENT_BLOCKED" ? "consent_renewed_payment_blocked" : "consent_payment_blocked")}
             </p>
-            {access.consentStatus === "PAYMENT_BLOCKED" && <ConsentRenewal access={access} terms={terms} t={t} onChanged={onChanged} />}
+            {access.consentStatus === "PAYMENT_BLOCKED" && <ConsentRenewal access={access} terms={terms} t={t} lang={lang} onChanged={onChanged} />}
           </div>
         ) : (
-          <PaymentProof access={access} t={t} onChanged={onChanged} />
+          <PaymentProof access={access} t={t} lang={lang} onChanged={onChanged} />
         )}
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
         <button type="button" onClick={cancel} disabled={busy}
@@ -753,7 +763,7 @@ function ActiveDashboard({ access, t, lang, dir, locale, money }) {
     setLoading(true);
     const r = await call(`/api/affiliate/brand/dashboard?window=${windowKey}`);
     setLoading(false);
-    if (r.ok) { setDash(r.data); setError(null); } else setError(errorText(r, t));
+    if (r.ok) { setDash(r.data); setError(null); } else setError(errorText(r, t, lang));
   }, [windowKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // "See all": one page of the simulated orders of the period the list was opened with, frozen at its
@@ -783,14 +793,15 @@ export default function BrandTab() {
   const t = brandT(lang);
   const dir = brandDir(lang);
   const locale = lang === "ar" ? "ar-MA" : "fr-FR";
-  const money = (n) => `${Number(n || 0).toLocaleString(locale, { maximumFractionDigits: 2 })} MAD`;
+  // Amount unchanged (same locale / rounding); the currency label follows the site rule (fr « DH », ar via the dictionary).
+  const money = (n) => `${Number(n || 0).toLocaleString(locale, { maximumFractionDigits: 2 })} ${t("currency")}`;
 
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
     const r = await call("/api/affiliate/brand");
-    if (r.ok) { setData(r.data); setError(null); } else setError(errorText(r, t));
+    if (r.ok) { setData(r.data); setError(null); } else setError(errorText(r, t, lang));
   }, [lang]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [load]);
 
@@ -809,12 +820,12 @@ export default function BrandTab() {
     return (
       <div dir={dir} className="max-w-3xl mx-auto space-y-5 text-start">
         <ActiveDashboard access={access} t={t} lang={lang} dir={dir} locale={locale} money={money} />
-        {access.consentStatus === "RENEWAL_REQUIRED" && <ConsentRenewal access={access} terms={data.terms} t={t} onChanged={load} />}
+        {access.consentStatus === "RENEWAL_REQUIRED" && <ConsentRenewal access={access} terms={data.terms} t={t} lang={lang} onChanged={load} />}
         {access.consentStatus === "RENEWED" && <p role="status" className="text-xs text-gray-600 bg-gray-50 rounded-xl px-3 py-2">{t("consent_renewed")}</p>}
         {data.enabled && (
           <>
             <p className="text-xs text-gray-600 bg-gray-50 rounded-xl px-3 py-2">{t("closed_new_request")}</p>
-            <Offer data={data} t={t} money={money} dir={dir} onRequested={load} onStale={load} />
+            <Offer data={data} t={t} lang={lang} money={money} dir={dir} onRequested={load} onStale={load} />
           </>
         )}
       </div>
@@ -825,7 +836,7 @@ export default function BrandTab() {
     <div dir={dir} className="max-w-3xl mx-auto space-y-5 text-start">
       {access?.status === "PENDING_PAYMENT" ? (
         <>
-          <PendingCard access={access} terms={data.terms} t={t} money={money} onChanged={load} />
+          <PendingCard access={access} terms={data.terms} t={t} lang={lang} money={money} onChanged={load} />
           <WhatYouBuy t={t} />
         </>
       ) : (
@@ -837,7 +848,7 @@ export default function BrandTab() {
               {data.enabled && <p className="mt-1">{t("can_retry")}</p>}
             </div>
           )}
-          {data.enabled ? <Offer data={data} t={t} money={money} dir={dir} onRequested={load} onStale={load} />
+          {data.enabled ? <Offer data={data} t={t} lang={lang} money={money} dir={dir} onRequested={load} onStale={load} />
             : (
               <>
                 <WhatYouBuy t={t} />

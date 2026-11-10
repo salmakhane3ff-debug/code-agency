@@ -11,11 +11,25 @@ import Link from "next/link";
 import { useUIControl } from "@/hooks/useUIControl";
 import { useLanguage } from "@/context/LanguageContext";
 import LanguageSwitcher from "@/components/template/LanguageSwitcher";
+import { usePathname } from "next/navigation";
+import { isMarketScopedPath } from "@/lib/marketLocale";
+import { MarketLanguageSwitcher, useHydrated, useMarketLocale } from "@/context/useMarketLocale";
+
+// Market-scoped routes (affiliate area, /tsajlim3ana) render this store header too. There only, the selector shows the
+// visitor's market as active with localized labels, and the hydration-stale aria-labels below are refreshed once
+// after hydration (key change). Every other route renders exactly as before (no key, the plain LanguageSwitcher).
+const HEADER_MARKET_TEXT = Object.freeze({ ar: Object.freeze({ menu: "القائمة" }), fr: Object.freeze({ menu: "Menu" }) });
 
 export default function FullHeader() {
   const ui = useUIControl();
   const { t, dir } = useLanguage();
   const isRTL = dir === "rtl";
+  const marketRoute = isMarketScopedPath(usePathname());
+  const hydrated = useHydrated();
+  const { t: mt } = useMarketLocale(HEADER_MARKET_TEXT);
+  // undefined on every non-market route → no remount, identical markup.
+  const marketKey = marketRoute ? (hydrated ? "client" : "server") : undefined;
+  const Switcher = marketRoute ? MarketLanguageSwitcher : LanguageSwitcher;
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuItems, setMenuItems] = useState([]);
@@ -131,6 +145,7 @@ export default function FullHeader() {
             <button
               onClick={() => setMenuOpen(true)}
               className="text-black text-xl p-2 cursor-pointer"
+              aria-label={marketRoute ? mt("menu") : undefined}
             >
               <RiMenuLine />
             </button>
@@ -139,6 +154,7 @@ export default function FullHeader() {
               href="/products"
               className="p-2.5 text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-colors"
               prefetch={true}
+              key={marketKey ? `nav_search-${marketKey}` : undefined}
               aria-label={t("nav_search")}
               suppressHydrationWarning
             >
@@ -177,7 +193,7 @@ export default function FullHeader() {
           {/* ── RIGHT: Language + Wishlist + Cart ── */}
           <div className="flex items-center gap-1 ms-auto">
             <div className="hidden md:flex items-center me-1">
-              <LanguageSwitcher />
+              <Switcher />
             </div>
 
             {ui.showWishlistIcon && (
@@ -185,7 +201,8 @@ export default function FullHeader() {
                 href="/wishlist"
                 className="relative p-2.5 text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-colors"
                 prefetch={true}
-                aria-label={t("nav_wishlist")}
+                key={marketKey ? `nav_wishlist-${marketKey}` : undefined}
+              aria-label={t("nav_wishlist")}
                 suppressHydrationWarning
               >
                 <Heart className="w-[18px] h-[18px]" />
@@ -202,7 +219,8 @@ export default function FullHeader() {
                 href="/cart"
                 className="relative p-2.5 text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-colors"
                 prefetch={true}
-                aria-label={t("nav_cart")}
+                key={marketKey ? `nav_cart-${marketKey}` : undefined}
+              aria-label={t("nav_cart")}
                 suppressHydrationWarning
               >
                 <IoBagOutline size={20} />
@@ -263,7 +281,7 @@ export default function FullHeader() {
 
                 {/* Language switcher inside mobile sidebar */}
                 <div className="mt-3">
-                  <LanguageSwitcher />
+                  <Switcher />
                 </div>
               </div>
 

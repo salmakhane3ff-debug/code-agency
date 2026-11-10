@@ -7,6 +7,7 @@ import {
   LANGUAGE_SETTINGS_TYPE, FALLBACK_LANG, LANG_STORAGE_KEY,
   normalizeLang, readDefaultLang,
 } from "@/lib/languageSettings";
+import { htmlDirFor } from "@/lib/marketLocale";
 
 const translations = { ar, fr };
 
@@ -61,15 +62,14 @@ export function LanguageProvider({ children }) {
   }, []);
 
   // Sync HTML attributes and persist whenever lang changes.
-  // IMPORTANT: Never apply RTL on admin OR affiliate-dashboard pages — both are
-  // management interfaces that must always be LTR (the affiliate dashboard is
-  // also forced to French; RTL/Arabic there breaks its layout).
+  // IMPORTANT: Never apply RTL on admin pages — a management interface that must
+  // always be LTR. Every other route follows the language; the market-scoped
+  // areas (affiliate, recruiter, landing pages) follow it too: MA → Arabic/RTL,
+  // FR → French/LTR (see src/lib/marketLocale.js — htmlDirFor is the one rule).
   // window.location.pathname is read at effect time (always current route).
   useEffect(() => {
     if (!mounted) return;
-    const p = window.location.pathname;
-    const alwaysLtr = p.startsWith("/admin") || p.startsWith("/affiliate");
-    const dir = (!alwaysLtr && lang === "ar") ? "rtl" : "ltr";
+    const dir = htmlDirFor(window.location.pathname, lang);
     document.documentElement.lang = lang;
     document.documentElement.dir = dir;
     document.documentElement.setAttribute("data-lang", lang);

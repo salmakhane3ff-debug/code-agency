@@ -1,8 +1,10 @@
 /**
- * /tsajlim3ana — public affiliate-recruitment landing page (Moroccan Darija, RTL).
+ * /tsajlim3ana — public affiliate-recruitment landing page. The visible UI follows
+ * the visitor's market (MA → Darija/RTL, FR → French/LTR) in the client components;
+ * the metadata below stays in Darija (server-rendered, unchanged).
  *
  * The enabled/disabled flag is enforced SERVER-SIDE here (not just in the UI):
- *   • disabled → render a simple RTL "unavailable" page + robots noindex, and the
+ *   • disabled → render a simple "unavailable" page + robots noindex, and the
  *     landing content is never sent to the client.
  *   • enabled  → render the landing; indexable.
  * Statistics + team-% range are read server-side (cached / reused affiliate
@@ -13,7 +15,7 @@ import { getSettings } from "@/lib/services/settingsService";
 import { getTeamBonusConfig } from "@/lib/services/affiliateSystemService";
 import { getRecruitmentStats } from "@/lib/services/recruitmentData";
 import { normalizeRecruitmentConfig, buildRecruitmentWhatsappLink, teamRangeFromTiers } from "@/lib/recruitmentCta";
-import RecruitmentLanding from "./RecruitmentLanding";
+import RecruitmentLanding, { RecruitmentUnavailable } from "./RecruitmentLanding";
 
 export const dynamic = "force-dynamic";
 
@@ -39,14 +41,8 @@ export default async function TsajlimPage() {
 
   // Server-side gate — disabled means the content is never rendered/sent.
   if (!config.enabled) {
-    return (
-      <div dir="rtl" lang="ar" className="min-h-screen flex items-center justify-center bg-gray-50 px-6 text-center">
-        <div>
-          <div className="text-4xl mb-3">🌸</div>
-          <p className="text-lg font-bold text-gray-700">التسجيل متوقف مؤقتاً، رجعي قريباً.</p>
-        </div>
-      </div>
-    );
+    // Tiny client view: same markup as before, but text + direction follow the market.
+    return <RecruitmentUnavailable />;
   }
 
   // Real stats (cached) + team % range reused from the affiliate commission tiers.

@@ -706,5 +706,15 @@ console.log("\n11. Final hardening (W5, W9, Escape, W3)");
   }
 }
 
+console.log("\nCurrency label (site rule: Arabic « درهم », French « DH »)");
+{
+  const tab = read("../src/app/affiliate/dashboard/BrandTab.jsx");
+  const dash = read("../src/app/affiliate/dashboard/_brand/BrandDashboard.jsx");
+  ok("brandI18n currency: fr DH, ar درهم", BRAND_TEXT.fr.currency === "DH" && BRAND_TEXT.ar.currency === "درهم");
+  ok("BrandTab money(): same amount formatting, label from the dictionary, no MAD left",
+    tab.includes('const money = (n) => `${Number(n || 0).toLocaleString(locale, { maximumFractionDigits: 2 })} ${t("currency")}`;')
+    && !/\bMAD\b/.test(tab) && !/\bMAD\b/.test(dash));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

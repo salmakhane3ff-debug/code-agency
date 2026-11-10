@@ -656,7 +656,9 @@ console.log('\n8. Static: UI texts, service shape, scope');
     && revAt < syncFn.indexOf('type: REWARD_TYPES.REVERSAL') && revAt > syncFn.indexOf('if (open) {') && revAt < syncFn.indexOf('const settings = await getCurrentRecruiterSettings'));
   const page = read('src/app/recruiter/wallet/page.jsx');
   ok('recruiter wallet page: a data-negative-balance banner (available < 0) in Arabic; data-nothing-available only when available === 0',
-    /\{available < 0 && \(/.test(page) && page.includes('data-negative-balance') && page.includes('رصيدك المتاح سالب')
+    // Market localization: the page renders the banner with tx("w_negative"); its Arabic text lives in the wallet dictionary.
+    /\{available < 0 && \(/.test(page) && page.includes('data-negative-balance') && /tx\("w_negative"\)/.test(page)
+    && read('src/app/recruiter/wallet/walletI18n.js').includes('رصيدك المتاح سالب')
     && /\{bankComplete && available === 0 && \(\s*<p[^>]*data-nothing-available/.test(page)
     // Phase 6 part 3c (documented extension): the form also needs the recruiter KYC APPROVED.
     // Phase 7 Stage C (documented, narrow): a FAILED KYC request (status unknown) no longer blocks the form — the

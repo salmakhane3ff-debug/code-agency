@@ -27,10 +27,67 @@
  *   • dashboardAlerts            the recruiter's real alerts (account, identity, permissions, rewards off)
  *   • isPublicRecruiterPath / sectionForPath  Phase 2: which routes get the app shell, which menu entry is current
  * Display only: the server stays the authority for every permission, amount and gate.
+ * Market language: every helper that produces text takes an optional `lang` ('ar' — the default, the historical
+ * Arabic output — or 'fr' for the FR market); the texts of both languages live in UI_TEXT below (no import).
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
 export const LOGIN_PATH = "/recruiter/login";
+
+// Phase 7 Stage E: every member of the network is reward-eligible; an affiliate the recruiter did not create
+// directly (invited by one of its affiliates) only carries this neutral information badge.
+export const NETWORK_INVITED_LABEL = "مدعو عبر الشبكة";
+export const NETWORK_INVITED_HINT = "انضم إلى شبكتك عن طريق أحد أفلييتك (لم تُنشئه أنت مباشرة)، ويُحتسب لك في المكافآت مثل أي عضو في شبكتك.";
+
+/** The texts of these helpers in both market languages (Arabic = the historical output). */
+const UI_TEXT = Object.freeze({
+  ar: Object.freeze({
+    sales: "مبيعات",
+    invited: NETWORK_INVITED_LABEL,
+    invitedHint: NETWORK_INVITED_HINT,
+    qualified: "مؤهَّل للمكافأة",
+    qualifiedGroup: "يُحتسب في مكافأة المجموعة",
+    cycle: "الدورة",
+    awarded: "مكافأة ممنوحة",
+    reversed: "مكافأة ملغاة",
+    currency: "درهم",
+    level: "المستوى",
+    noLevel: "بدون مستوى",
+    alertDisabled: "حسابك معطّل حالياً من طرف الإدارة.",
+    alertKycUnknown: "حالة التحقق من الهوية غير متاحة حالياً.",
+    alertKycMissing: "أرسل بطاقتك الوطنية: التحقق مطلوب قبل أي طلب سحب.",
+    alertKycPending: "بطاقتك الوطنية قيد المراجعة.",
+    alertKycRejected: "تم رفض بطاقتك الوطنية: أعد إرسالها.",
+    alertCreateOff: "إنشاء أفلييت جدد معطّل لحسابك من طرف الإدارة.",
+    alertOrdersOff: "عرض أرقام الطلبات معطّل لحسابك من طرف الإدارة.",
+    alertRewardsOff: "المكافآت غير مفعّلة حالياً.",
+  }),
+  fr: Object.freeze({
+    sales: "ventes",
+    invited: "Invité via le réseau",
+    invitedHint: "A rejoint votre réseau par l'un de vos affiliés (vous ne l'avez pas créé directement) et compte pour vos récompenses comme tout membre de votre réseau.",
+    qualified: "Éligible à la récompense",
+    qualifiedGroup: "Compte pour la récompense de groupe",
+    cycle: "cycle",
+    awarded: "Récompense accordée",
+    reversed: "Récompense annulée",
+    currency: "DH",
+    level: "Niveau",
+    noLevel: "Sans niveau",
+    alertDisabled: "Votre compte est actuellement désactivé par l'administration.",
+    alertKycUnknown: "Le statut de la vérification d'identité est indisponible pour le moment.",
+    alertKycMissing: "Envoyez votre carte nationale : la vérification est requise avant toute demande de retrait.",
+    alertKycPending: "Votre carte nationale est en cours de vérification.",
+    alertKycRejected: "Votre carte nationale a été refusée : renvoyez-la.",
+    alertCreateOff: "La création de nouveaux affiliés est désactivée pour votre compte par l'administration.",
+    alertOrdersOff: "L'affichage des chiffres de commandes est désactivé pour votre compte par l'administration.",
+    alertRewardsOff: "Les récompenses ne sont pas activées pour le moment.",
+  }),
+});
+const txt = (lang) => (lang === "fr" ? UI_TEXT.fr : UI_TEXT.ar);
+
+/** The "invited through the network" hint (badge tooltip) in the market language. */
+export const networkInvitedHint = (lang = "ar") => txt(lang).invitedHint;
 
 /** "login" (401) | "disabled" (403 RECRUITER_DISABLED) | null (show the error, keep the session). */
 export function authAction(status, code) {
@@ -61,7 +118,7 @@ export function percent(value, max) {
  * → null when the delivered count is withheld (canViewOrders off) — the caller then shows no count,
  *   no bar and no "qualified" badge (nothing that would read as zero).
  */
-export function progressDisplay(progress) {
+export function progressDisplay(progress, lang = "ar") {
   if (!progress || typeof progress !== "object" || !Number.isInteger(progress.realDelivered) || progress.realDelivered < 0) return null;
   const delivered = progress.realDelivered;
   const threshold = posInt(progress.individualThreshold);
@@ -71,17 +128,12 @@ export function progressDisplay(progress) {
     pct: threshold ? percent(delivered, threshold) : null,
     reached: threshold ? delivered >= threshold : false,
     ratio: threshold ? `${delivered} / ${threshold}` : `${delivered}`,
-    text: threshold ? `${delivered} / ${threshold} مبيعات` : `${delivered} مبيعات`,
+    text: threshold ? `${delivered} / ${threshold} ${txt(lang).sales}` : `${delivered} ${txt(lang).sales}`,
     qualifiedIndividual: progress.qualifiedIndividual === true,
     qualifiedGroup: progress.qualifiedGroup === true,
     identityApproved: progress.identityApproved === true,
   };
 }
-
-// Phase 7 Stage E: every member of the network is reward-eligible; an affiliate the recruiter did not create
-// directly (invited by one of its affiliates) only carries this neutral information badge.
-export const NETWORK_INVITED_LABEL = "مدعو عبر الشبكة";
-export const NETWORK_INVITED_HINT = "انضم إلى شبكتك عن طريق أحد أفلييتك (لم تُنشئه أنت مباشرة)، ويُحتسب لك في المكافآت مثل أي عضو في شبكتك.";
 
 /**
  * Badges of one node / list item: [{ key, label, tone }] — Phase 7 Stage E: the same for every member.
@@ -89,17 +141,18 @@ export const NETWORK_INVITED_HINT = "انضم إلى شبكتك عن طريق أ
  *   • qualified (individual / group) when the delivered count is visible, and the latest individual
  *     reward cycle (AWARDED / REVERSED — NONE shows nothing)
  */
-export function nodeBadges(node) {
+export function nodeBadges(node, lang = "ar") {
   if (!node || typeof node !== "object") return [];
-  const out = node.linkedToMe === true ? [] : [{ key: "invited", label: NETWORK_INVITED_LABEL, tone: "slate" }];
-  const p = progressDisplay(node.progress);
-  if (p?.qualifiedIndividual) out.push({ key: "qualified", label: "مؤهَّل للمكافأة", tone: "green" });
-  if (p?.qualifiedGroup) out.push({ key: "qualifiedGroup", label: "يُحتسب في مكافأة المجموعة", tone: "green" });
+  const T = txt(lang);
+  const out = node.linkedToMe === true ? [] : [{ key: "invited", label: T.invited, tone: "slate" }];
+  const p = progressDisplay(node.progress, lang);
+  if (p?.qualifiedIndividual) out.push({ key: "qualified", label: T.qualified, tone: "green" });
+  if (p?.qualifiedGroup) out.push({ key: "qualifiedGroup", label: T.qualifiedGroup, tone: "green" });
   const rs = node.rewardState;
   const cycle = posInt(rs?.cycle);
-  const suffix = cycle ? ` · الدورة ${cycle}` : "";
-  if (rs?.state === "AWARDED") out.push({ key: "awarded", label: `مكافأة ممنوحة${suffix}`, tone: "green" });
-  else if (rs?.state === "REVERSED") out.push({ key: "reversed", label: `مكافأة ملغاة${suffix}`, tone: "red" });
+  const suffix = cycle ? ` · ${T.cycle} ${cycle}` : "";
+  if (rs?.state === "AWARDED") out.push({ key: "awarded", label: `${T.awarded}${suffix}`, tone: "green" });
+  else if (rs?.state === "REVERSED") out.push({ key: "reversed", label: `${T.reversed}${suffix}`, tone: "red" });
   return out;
 }
 
@@ -137,10 +190,10 @@ export function rewardAmountsDisplay(rewards) {
   return { individual, group, grossCents, reversedCents, netCents: grossCents - reversedCents };
 }
 
-/** Cents → "1 234,50 درهم" (2 decimals, Latin digits). */
-export function fmtMadCents(cents) {
+/** Cents → "1 234,50 درهم" (ar) / "1 234,50 DH" (fr) — 2 decimals, Latin digits, the same grouping in both. */
+export function fmtMadCents(cents, lang = "ar") {
   const n = Number.isInteger(cents) ? cents : 0;
-  return `${(n / 100).toLocaleString("fr-MA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} درهم`;
+  return `${(n / 100).toLocaleString("fr-MA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${txt(lang).currency}`;
 }
 
 /** Append `incoming` to `existing` without duplicates (by id; rows without an id are dropped). */
@@ -170,8 +223,9 @@ export function createRequestGate() {
 }
 
 /** Levels are ABSOLUTE in every recruiter API (1 = a top affiliate of the recruiter's network). */
-export function levelLabel(level) {
-  return Number.isInteger(level) && level >= 1 ? `المستوى ${level}` : "بدون مستوى";
+export function levelLabel(level, lang = "ar") {
+  const T = txt(lang);
+  return Number.isInteger(level) && level >= 1 ? `${T.level} ${level}` : T.noLevel;
 }
 
 // ── Dashboard redesign (UI only) ────────────────────────────────────────────────
@@ -234,20 +288,21 @@ export function levelSeries(levels, max = 8) {
 }
 
 /**
- * The recruiter's real alerts (the header bell) → [{ id, tone, text, href }]: account disabled, identity
+ * The recruiter's real alerts (the header bell, in `lang`) → [{ id, tone, text, href }]: account disabled, identity
  * not approved (or unknown), creation / order view turned off by the admin, rewards switched off.
  * `identity` = { status } | null, `identityFailed` = the KYC request failed (unknown — never "not verified").
  */
-export function dashboardAlerts({ me = null, perms = null, identity = null, identityFailed = false, progress = null } = {}) {
+export function dashboardAlerts({ me = null, perms = null, identity = null, identityFailed = false, progress = null, lang = "ar" } = {}) {
+  const T = txt(lang);
   const out = [];
-  if (me && me.status !== "ACTIVE") out.push({ id: "disabled", tone: "red", text: "حسابك معطّل حالياً من طرف الإدارة.", href: null });
-  if (identityFailed) out.push({ id: "kyc-unknown", tone: "slate", text: "حالة التحقق من الهوية غير متاحة حالياً.", href: "/recruiter/verification" });
-  else if (identity?.status === "NOT_SUBMITTED") out.push({ id: "kyc", tone: "amber", text: "أرسل بطاقتك الوطنية: التحقق مطلوب قبل أي طلب سحب.", href: "/recruiter/verification" });
-  else if (identity?.status === "PENDING") out.push({ id: "kyc", tone: "amber", text: "بطاقتك الوطنية قيد المراجعة.", href: "/recruiter/verification" });
-  else if (identity?.status === "REJECTED") out.push({ id: "kyc", tone: "red", text: "تم رفض بطاقتك الوطنية: أعد إرسالها.", href: "/recruiter/verification" });
-  if (perms && perms.canCreateAffiliates !== true) out.push({ id: "create-off", tone: "slate", text: "إنشاء أفلييت جدد معطّل لحسابك من طرف الإدارة.", href: null });
-  if (perms && perms.canViewOrders !== true) out.push({ id: "orders-off", tone: "slate", text: "عرض أرقام الطلبات معطّل لحسابك من طرف الإدارة.", href: null });
-  if (progress && progress.individualEnabled !== true && progress.groupEnabled !== true) out.push({ id: "rewards-off", tone: "slate", text: "المكافآت غير مفعّلة حالياً.", href: null });
+  if (me && me.status !== "ACTIVE") out.push({ id: "disabled", tone: "red", text: T.alertDisabled, href: null });
+  if (identityFailed) out.push({ id: "kyc-unknown", tone: "slate", text: T.alertKycUnknown, href: "/recruiter/verification" });
+  else if (identity?.status === "NOT_SUBMITTED") out.push({ id: "kyc", tone: "amber", text: T.alertKycMissing, href: "/recruiter/verification" });
+  else if (identity?.status === "PENDING") out.push({ id: "kyc", tone: "amber", text: T.alertKycPending, href: "/recruiter/verification" });
+  else if (identity?.status === "REJECTED") out.push({ id: "kyc", tone: "red", text: T.alertKycRejected, href: "/recruiter/verification" });
+  if (perms && perms.canCreateAffiliates !== true) out.push({ id: "create-off", tone: "slate", text: T.alertCreateOff, href: null });
+  if (perms && perms.canViewOrders !== true) out.push({ id: "orders-off", tone: "slate", text: T.alertOrdersOff, href: null });
+  if (progress && progress.individualEnabled !== true && progress.groupEnabled !== true) out.push({ id: "rewards-off", tone: "slate", text: T.alertRewardsOff, href: null });
   return out;
 }
 

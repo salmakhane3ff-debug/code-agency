@@ -1,7 +1,7 @@
 "use client";
 /**
  * /recruiter/affiliates/activation — affiliates of the recruiter whose credentials are still
- * pending (Affiliate Recruiter System, Phase 6 part 1). Arabic, RTL.
+ * pending (Affiliate Recruiter System, Phase 6 part 1). Market language (MA → Arabic RTL, FR → French LTR).
  *
  *   • GET  /api/recruiter/affiliates/activation          → pending list (code STATE only)
  *   • POST /api/recruiter/affiliates/<id>/activation-code → a NEW one-time code (the previous
@@ -11,6 +11,7 @@
  * visible but no new code can be issued (the server refuses with 403 FORBIDDEN; the button is
  * hidden and a note explains it — the admin recovery path remains for these affiliates).
  * Phase 2 (UI only): rendered inside the recruiter app shell with the shared ui.jsx primitives.
+ * Errors are kept as CODES in state and rendered in the current market language (they switch live).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -19,42 +20,44 @@ import { toRecruiterError, toRecruiterPendingActivationView } from "@/lib/recrui
 import { recruiterErrorLabel } from "../../errorLabels";
 import { authAction } from "../../recruiterUiState";
 import ActivationCodeCard, { requestNewActivationCode } from "../ActivationCodeCard";
-import { Badge, Card, CenteredNotice, EmptyState, LoadingBlock, PageHeader, ui } from "../../_components/ui";
+import { Badge, Card, CenteredNotice, EmptyState, LoadingBlock, PageHeader, ui, useRecruiterLocale } from "../../_components/ui";
 
-const fmtDate = (iso) => {
+const fmtDate = (iso, locale) => {
   const d = iso ? new Date(iso) : null;
   return d && Number.isFinite(d.getTime())
-    ? d.toLocaleString("ar-MA", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    ? d.toLocaleString(locale, { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })
     : "";
 };
 
 function StateChip({ state, expiresAt }) {
+  const { t, intlLocale } = useRecruiterLocale();
   if (state === "ACTIVE") {
-    return <Badge tone="green" data-state="ACTIVE">رمز صالح حتى {fmtDate(expiresAt)}</Badge>;
+    return <Badge tone="green" data-state="ACTIVE">{t("act_valid_until")} <bdi>{fmtDate(expiresAt, intlLocale)}</bdi></Badge>;
   }
   if (state === "EXPIRED") {
-    return <Badge tone="slate" data-state="EXPIRED">منتهي الصلاحية</Badge>;
+    return <Badge tone="slate" data-state="EXPIRED">{t("act_expired")}</Badge>;
   }
   if (state === "INVALIDATED") {
-    return <Badge tone="red" data-state="INVALIDATED">ملغى بعد محاولات خاطئة</Badge>;
+    return <Badge tone="red" data-state="INVALIDATED">{t("act_invalidated")}</Badge>;
   }
   return null;
 }
 
 export default function RecruiterActivationPage() {
   const router = useRouter();
-  const [notice, setNotice] = useState("");
+  const { t, lang } = useRecruiterLocale();
+  const [notice, setNotice] = useState(""); // error CODE (RECRUITER_DISABLED)
   const [state, setState] = useState({ loading: true, error: "", list: [] });
   const [issued, setIssued] = useState({}); // affiliateId → { code, expiresAt } (memory only)
   const [rowBusy, setRowBusy] = useState("");
-  const [rowError, setRowError] = useState({});
+  const [rowError, setRowError] = useState({}); // affiliateId → error CODE
   const [canCreate, setCanCreate] = useState(false); // Phase 6 part 4 (from /api/recruiter/me; Stage C: hidden until allowed)
   const [permsUnknown, setPermsUnknown] = useState(false); // Stage C: /me failed (not 401) → note + retry
   const aliveRef = useRef(true);
 
   const toLogin = useCallback((code) => {
     if (code === "RECRUITER_DISABLED") {
-      setNotice(recruiterErrorLabel(code));
+      setNotice(code);
       setTimeout(() => { if (aliveRef.current) router.replace("/recruiter/login"); }, 2500);
     } else {
       router.replace("/recruiter/login");
@@ -80,11 +83,11 @@ export default function RecruiterActivationPage() {
         const action = authAction(res.status, code);
         if (action) { toLogin(action === "disabled" ? code : "UNAUTHORIZED"); return; }
       }
-      if (!res.ok) { setState({ loading: false, error: recruiterErrorLabel(toRecruiterError(body).code), list: [] }); return; }
+      if (!res.ok) { setState({ loading: false, error: toRecruiterError(body).code, list: [] }); return; }
       const list = (Array.isArray(body?.pending) ? body.pending : []).map(toRecruiterPendingActivationView).filter((p) => p.affiliate.id);
       setState({ loading: false, error: "", list });
     } catch {
-      if (aliveRef.current) setState({ loading: false, error: recruiterErrorLabel(null), list: [] });
+      if (aliveRef.current) setState({ loading: false, error: "SERVER_ERROR", list: [] });
     }
   }, [toLogin]);
 
@@ -96,7 +99,7 @@ export default function RecruiterActivationPage() {
 
   const regenerate = async (id) => {
     if (rowBusy) return;
-    if (!window.confirm("سيتم إلغاء الرمز السابق لهذا الأفلييت وإنشاء رمز جديد. هل تريد المتابعة؟")) return;
+    if (!window.confirm(t("act_confirm_regenerate"))) return;
     setRowBusy(id);
     setRowError((e) => ({ ...e, [id]: "" }));
     try {
@@ -110,35 +113,34 @@ export default function RecruiterActivationPage() {
       } else if (r.code === "FORBIDDEN") {
         setCanCreate(false); // turned off by the admin meanwhile
       } else {
-        setRowError((e) => ({ ...e, [id]: recruiterErrorLabel(r.code) }));
+        setRowError((e) => ({ ...e, [id]: r.code }));
       }
     } catch {
-      setRowError((e) => ({ ...e, [id]: recruiterErrorLabel(null) }));
+      setRowError((e) => ({ ...e, [id]: "SERVER_ERROR" }));
     } finally {
       if (aliveRef.current) setRowBusy("");
     }
   };
 
-  if (notice) return <CenteredNotice>{notice}</CenteredNotice>;
+  if (notice) return <CenteredNotice>{recruiterErrorLabel(notice, lang)}</CenteredNotice>;
 
   return (
     <div className="space-y-5 min-w-0" data-recruiter-activation>
-      <PageHeader Icon={KeyRound} title="تفعيل حسابات الأفلييت"
-        subtitle="هؤلاء الأفلييت لم يختاروا كلمة السر الخاصة بهم بعد. الرمز الجديد يلغي الرمز السابق، ويظهر مرة واحدة فقط." />
+      <PageHeader Icon={KeyRound} title={t("act_title")} subtitle={t("act_subtitle")} />
 
       {permsUnknown && !state.loading && !state.error && (
         <div role="alert" className="rounded-xl border border-red-100 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3" data-perms-error>
-          <span className="min-w-0">تعذّر التحقق من صلاحياتك. {recruiterErrorLabel(null)}</span>
+          <span className="min-w-0">{t("act_perms_failed")} {recruiterErrorLabel(null, lang)}</span>
           <button type="button" onClick={load} data-retry
             className="shrink-0 inline-flex items-center gap-1.5 min-h-10 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100">
             <RefreshCw className="w-4 h-4" aria-hidden="true" />
-            إعادة المحاولة
+            {t("common_retry")}
           </button>
         </div>
       )}
       {!canCreate && !permsUnknown && (
         <p className="rounded-xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-700" data-create-disabled>
-          إنشاء رموز تفعيل جديدة معطّل لحسابك من طرف الإدارة. يمكن للأفلييت المعني طلب استرجاع التفعيل من الإدارة.
+          {t("act_create_disabled")}
         </p>
       )}
 
@@ -146,17 +148,17 @@ export default function RecruiterActivationPage() {
         <LoadingBlock />
       ) : state.error ? (
         <div className="rounded-xl border border-red-100 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3" data-error>
-          <p role="alert" className="min-w-0">{state.error}</p>
+          <p role="alert" className="min-w-0">{recruiterErrorLabel(state.error, lang)}</p>
           <button type="button" onClick={load} data-retry
             className="shrink-0 inline-flex items-center gap-1.5 min-h-10 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100">
             <RefreshCw className="w-4 h-4" aria-hidden="true" />
-            إعادة المحاولة
+            {t("common_retry")}
           </button>
         </div>
       ) : state.list.length === 0 ? (
         <Card className={ui.cardPad}>
           <div data-empty>
-            <EmptyState Icon={UserCheck} text="لا يوجد أفلييت في انتظار التفعيل." />
+            <EmptyState Icon={UserCheck} text={t("act_empty")} />
           </div>
         </Card>
       ) : (
@@ -179,10 +181,10 @@ export default function RecruiterActivationPage() {
                 <button type="button" onClick={() => regenerate(p.affiliate.id)} disabled={rowBusy === p.affiliate.id} data-regenerate={p.affiliate.username ?? ""}
                   className={`${ui.btnPrimary} w-full sm:w-auto`}>
                   <KeyRound className="w-4 h-4" aria-hidden="true" />
-                  {rowBusy === p.affiliate.id ? "جارٍ الإنشاء…" : "إنشاء رمز جديد"}
+                  {rowBusy === p.affiliate.id ? t("common_creating") : t("act_new_code")}
                 </button>
               )}
-              {rowError[p.affiliate.id] && <p role="alert" className="text-xs text-red-700" data-row-error>{rowError[p.affiliate.id]}</p>}
+              {rowError[p.affiliate.id] && <p role="alert" className="text-xs text-red-700" data-row-error>{recruiterErrorLabel(rowError[p.affiliate.id], lang)}</p>}
               {issued[p.affiliate.id] && <ActivationCodeCard activation={issued[p.affiliate.id]} />}
             </li>
           ))}

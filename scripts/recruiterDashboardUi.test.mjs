@@ -24,6 +24,10 @@ const U = await import('../src/app/recruiter/recruiterUiState.js');
 const W = await import('../src/app/recruiter/wallet/walletUi.js');
 const V = await import('../src/lib/recruiterVisibility.js');
 const L = await import('../src/lib/landingMode.js');
+// Market localization (MA → Arabic, FR → French): the page texts live in these dictionaries; the Arabic wording pinned
+// below is checked there (the pages render it with t("key")).
+const { RECRUITER_TEXT: RT } = await import('../src/lib/recruiterI18n.js');
+const { RECRUITER_WALLET_TEXT: WT } = await import('../src/app/recruiter/wallet/walletI18n.js');
 
 let pass = 0, fail = 0;
 const ok = (n, c, extra = '') => { if (c) { pass++; console.log('  PASS ', n); } else { fail++; console.log('  FAIL ', n, extra); } };
@@ -225,8 +229,8 @@ console.log('\n4. Static assertions on the recruiter pages');
     /router\.replace\(/.test(redirect) && /\/recruiter\/affiliates/.test(redirect) && /root/.test(redirect) && !/fetch\(|getJson\(/.test(redirect));
   ok('stats: stale answers discarded', /gate\.isCurrent\(token\)/.test(src['src/app/recruiter/network/stats/page.jsx']));
   const aff = src['src/app/recruiter/affiliates/page.jsx'];
-  ok('affiliates page: debounced q, nextCursor "عرض المزيد", gate, mergeById, total, imports recruiterVisibility',
-    /DEBOUNCE_MS/.test(aff) && /عرض المزيد/.test(aff) && /gate\.isCurrent\(token\)/.test(aff) && /mergeById\(l\.items, items\)/.test(aff) && /data-total/.test(aff)
+  ok('affiliates page: debounced q, nextCursor "عرض المزيد" (t("common_load_more")), gate, mergeById, total, imports recruiterVisibility',
+    /DEBOUNCE_MS/.test(aff) && /t\("common_load_more"\)/.test(aff) && RT.ar.common_load_more === 'عرض المزيد' && /gate\.isCurrent\(token\)/.test(aff) && /mergeById\(l\.items, items\)/.test(aff) && /data-total/.test(aff)
     && /from "@\/lib\/recruiterVisibility"/.test(aff));
 
   for (const f of ['src/app/recruiter/network/stats/page.jsx', 'src/app/recruiter/affiliates/page.jsx']) {
@@ -252,7 +256,7 @@ console.log('\n4. Static assertions on the recruiter pages');
     ['network-total', 'network-direct', 'orders-total', 'orders-delivered', 'earned', 'available'].every((h) => hub.includes(`hook="${h}"`))
     && (hub.match(/<StatCard\b/g) || []).length === 6 && /s\.totals\.affiliates/.test(hub) && /s\.totals\.direct/.test(hub)
     && /num\(real\[k\]\)/.test(hub) && /orderValue\("total"\)/.test(hub) && /orderValue\("delivered"\)/.test(hub)
-    && /fmtMadCents\(t\.earnedCents\)/.test(hub) && /fmtMadCents\(available\)/.test(hub) && /const available = t \? t\.availableCents : null;/.test(hub));
+    && /fmtMadCents\(t\.earnedCents, lang\)/.test(hub) && /fmtMadCents\(available, lang\)/.test(hub) && /const available = t \? t\.availableCents : null;/.test(hub));
   ok('simplified dashboard: data only from me, the network statistics and the wallet (the ledger figures; logout and the guide live in the shell)',
     eq([...new Set([...hub.matchAll(/"(\/api\/recruiter\/[a-z/]+)"/g)].map((m) => m[1]))].sort(), ['/api/recruiter/me', '/api/recruiter/network/stats', '/api/recruiter/wallet'])
     && /toRecruiterNetworkStatsView/.test(hub) && /toRecruiterWalletView/.test(hub)
@@ -269,10 +273,10 @@ console.log('\n4. Static assertions on the recruiter pages');
     && /identity: identity\.data, identityFailed: identity\.failed/.test(appShell));
   ok('mobile: the affiliate bottom bar (md:hidden, fixed, rounded-t-[28px], violet active pill) + the "المزيد" sheet (modal dialog, Escape, focus trap, logout tile)',
     /md:hidden fixed bottom-0 inset-x-0 z-\[60\] bg-white border-t border-gray-100 rounded-t-\[28px\]/.test(shell) && /bg-violet-100 text-violet-600/.test(shell)
-    && /role="dialog" aria-modal="true" aria-label="المزيد" data-more-sheet/.test(shell) && /e\.key === "Escape"/.test(shell) && /useModal\(open, onClose, panelRef\)/.test(shell)
+    && /role="dialog" aria-modal="true" aria-label=\{t\("nav_more"\)\} data-more-sheet/.test(shell) && RT.ar.nav_more === 'المزيد' && /e\.key === "Escape"/.test(shell) && /useModal\(open, onClose, panelRef\)/.test(shell)
     && /data-section="logout"/.test(shell) && /data-logout/.test(shell) && /grid grid-cols-3 gap-3/.test(shell));
-  ok('desktop: the light sidebar (md+) with the affiliate gray-900 active state',
-    /hidden md:block w-60 lg:w-64 shrink-0 bg-white border-l border-gray-100/.test(shell) && /on \? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"/.test(shell));
+  ok('desktop: the light sidebar (md+) with the affiliate gray-900 active state (border on the logical end side: mirrors RTL / LTR)',
+    /hidden md:block w-60 lg:w-64 shrink-0 bg-white border-e border-gray-100/.test(shell) && /on \? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"/.test(shell));
 
   // Phase 2 (one recruiter app): every authenticated page renders inside the layout's shell with the shared UI kit.
   const AUTH_PAGES = PAGES; // the 9 authenticated recruiter pages above (dashboard included)
@@ -291,9 +295,9 @@ console.log('\n4. Static assertions on the recruiter pages');
   const wallet = src['src/app/recruiter/wallet/page.jsx'];
   ok('wallet: gross / reversed / net apart (from /api/recruiter/progress), group rows labelled with cycle and size',
     /\/api\/recruiter\/progress/.test(wallet) && /data-gross-total/.test(wallet) && /data-reversed-total/.test(wallet) && /data-net-total/.test(wallet)
-    && /rewardRowTitle\(r\)/.test(wallet) && /groupRowDetail\(r\)/.test(wallet));
+    && /rewardRowTitle\(r, lang\)/.test(wallet) && /groupRowDetail\(r, lang\)/.test(wallet));
   ok('wallet: a failed KYC request → "حالة التحقق غير متاحة" + retry, never "not verified"; a known non-approved status still shows its banner',
-    /حالة التحقق غير متاحة/.test(wallet) && /data-identity-retry/.test(wallet) && /\{identity && !identityApproved && \(/.test(wallet) && !/KYC unknown \(request failed\) → shown as not approved/.test(read('src/app/recruiter/wallet/page.jsx')));
+    /tx\("w_identity_unknown"\)/.test(wallet) && WT.ar.w_identity_unknown.startsWith('حالة التحقق غير متاحة') && /data-identity-retry/.test(wallet) && /\{identity && !identityApproved && \(/.test(wallet) && !/KYC unknown \(request failed\) → shown as not approved/.test(read('src/app/recruiter/wallet/page.jsx')));
   ok('wallet: negative-balance banner and bank gate unchanged', /\{available < 0 && \(/.test(wallet) && /data-bank-required/.test(wallet) && /\{bankComplete && available === 0 && \(/.test(wallet));
 
   const ver = read('src/app/recruiter/verification/page.jsx');
@@ -305,7 +309,8 @@ console.log('\n4. Static assertions on the recruiter pages');
   ok('rate-limit label is neutral ("حاول لاحقاً"), no fixed delay promised', labels.includes('RATE_LIMITED: "محاولات كثيرة، حاول لاحقاً."') && !labels.includes('حاول بعد دقيقة'));
   const stats = read('src/app/recruiter/network/stats/page.jsx');
   ok('levels: one absolute convention (tree and stats use levelLabel; no "relative to the sub-network" wording)',
-    /levelLabel\(l\.level\)/.test(stats) && /levelLabel\(node\.level\)/.test(net) && !stats.includes('1 = المباشرون تحت هذا الحساب'));
+    /levelLabel\(l\.level, lang\)/.test(stats) && /levelLabel\(node\.level, lang\)/.test(net) && !stats.includes('1 = المباشرون تحت هذا الحساب')
+    && !JSON.stringify(RT).includes('1 = المباشرون تحت هذا الحساب'));
   ok('pure helper modules import nothing (no fetch, no React, no "@/" alias)', !/^import /m.test(read('src/app/recruiter/recruiterUiState.js')) && !/^import /m.test(read('src/app/recruiter/wallet/walletUi.js'))
     && !/fetch\(/.test(stripJs(read('src/app/recruiter/recruiterUiState.js'))));
 }

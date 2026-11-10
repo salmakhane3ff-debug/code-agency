@@ -10,6 +10,25 @@ import InlineCodForm from "@/components/Product/InlineCodForm";
 import { resolveCtaAction, isCtaDisabled } from "@/lib/landingCta";
 import { resolveClickId } from "@/lib/tracking/clickId";
 import { trackClarity } from "@/lib/trackClarity";
+import { useMarketLocale, useMarketPaintGate } from "@/context/useMarketLocale";
+import { LANDING_TEXT } from "@/lib/landingI18n";
+
+// Visitor-facing chrome follows the market (MA → Arabic/RTL, FR → French/LTR).
+// Admin-authored content (titles, HTML, custom labels, product data) is shown as authored.
+const useLandingT = () => useMarketLocale(LANDING_TEXT);
+
+// The shared COD form (also used by the product page, which keeps its Arabic defaults) with the
+// visitor's market texts and direction; the phone field resolves its own direction (dir="auto") so
+// the typed number always reads left-to-right.
+function LandingCodForm(props) {
+  const { t, dir } = useLandingT();
+  const text = {
+    successTitle: t("offer_form_success_title"), successSub: t("offer_form_success_sub"), heading: t("offer_form_heading"),
+    name: t("offer_form_name"), phone: t("offer_form_phone"), city: t("offer_form_city"), address: t("offer_form_address"),
+    error: t("offer_form_error"), sending: t("offer_form_sending"), submit: t("offer_order_now"),
+  };
+  return <InlineCodForm {...props} text={text} dir={dir} phoneDir="auto" />;
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  HELPERS
@@ -79,6 +98,7 @@ function CountdownDisplay({ endDate, title, bgColor }) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 function ReviewsSection({ productId }) {
+  const { t } = useLandingT();
   const [reviews, setReviews] = useState([]);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
@@ -108,7 +128,7 @@ function ReviewsSection({ productId }) {
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-full bg-amber-100 flex items-center justify-center text-amber-600 text-xs font-bold">
-                {(r.name || "م")[0].toUpperCase()}
+                {(r.name || t("offer_avatar_fallback"))[0].toUpperCase()}
               </div>
               <span className="text-sm font-semibold text-gray-900">{r.name}</span>
             </div>
@@ -155,7 +175,8 @@ function useAutoCountdown(resetHours = 4) {
 }
 
 function AutoCountdownDisplay({ cfg }) {
-  const { resetHours = 4, title = "ينتهي العرض قريباً", bgColor = "#dc2626" } = cfg;
+  const { t } = useLandingT();
+  const { resetHours = 4, title = t("offer_countdown_default_title"), bgColor = "#dc2626" } = cfg;
   const time = useAutoCountdown(resetHours);
   const pad  = (n) => String(n).padStart(2, "0");
   return (
@@ -178,7 +199,8 @@ function AutoCountdownDisplay({ cfg }) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 function ViewerCountDisplay({ cfg }) {
-  const { min = 18, max = 35, label = "شخصاً يشاهد هذا العرض الآن", icon = "👁️" } = cfg;
+  const { t } = useLandingT();
+  const { min = 18, max = 35, label = t("offer_viewers_default_label"), icon = "👁️" } = cfg;
   const rand = (lo, hi) => Math.floor(Math.random() * (hi - lo + 1)) + lo;
   const [count, setCount] = useState(() => rand(min, max));
   useEffect(() => {
@@ -193,7 +215,7 @@ function ViewerCountDisplay({ cfg }) {
   return (
     <div className="flex items-center justify-center gap-2 py-2.5 px-4 bg-indigo-50 rounded-2xl border border-indigo-100">
       <span className="text-base">{icon}</span>
-      <span className="text-sm font-black text-indigo-700">{count}</span>
+      <span className="text-sm font-black text-indigo-700" dir="ltr">{count}</span>
       <span className="text-xs text-indigo-600">{label}</span>
       <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse flex-shrink-0" />
     </div>
@@ -217,6 +239,7 @@ function getProductImg(product) {
 }
 
 function ActivityPopup({ cfg, product }) {
+  const { t, dir } = useLandingT();
   const { items = [], intervalSec = 8, displaySec = 4 } = cfg;
   const [visible, setVisible] = useState(false);
   const [current, setCurrent] = useState(0);
@@ -240,7 +263,8 @@ function ActivityPopup({ cfg, product }) {
   if (!visible || !person.name) return null;
 
   return (
-    <div className="fixed bottom-24 left-4 z-50 animate-in slide-in-from-left-4 duration-300">
+    // Pinned to the inline END side (left in RTL — unchanged — right in LTR), sliding in from that edge.
+    <div className={`fixed bottom-24 end-4 z-50 animate-in ${dir === "rtl" ? "slide-in-from-left-4" : "slide-in-from-right-4"} duration-300`}>
       <div className="flex items-center gap-3 bg-white rounded-2xl shadow-xl border border-gray-100 px-4 py-3 max-w-[240px]">
         {/* Landing-page product image — falls back to initials if no image available */}
         <div className="w-9 h-9 rounded-full flex-shrink-0 overflow-hidden bg-amber-100">
@@ -253,15 +277,15 @@ function ActivityPopup({ cfg, product }) {
             />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-amber-600 text-base font-bold select-none">
-              {(person.name || "م")[0]}
+              {(person.name || t("offer_avatar_fallback"))[0]}
             </div>
           )}
         </div>
         <div className="min-w-0">
-          <p className="text-xs font-black text-gray-900 leading-tight">{person.name} من {person.city}</p>
-          <p className="text-[10px] text-gray-500 mt-0.5">🛒 طلب للتو · منذ لحظات</p>
+          <p className="text-xs font-black text-gray-900 leading-tight">{t("offer_popup_from", { name: person.name, city: person.city })}</p>
+          <p className="text-[10px] text-gray-500 mt-0.5">{t("offer_popup_just_ordered")}</p>
         </div>
-        <button onClick={() => setVisible(false)} className="text-gray-300 hover:text-gray-500 ml-1 flex-shrink-0">
+        <button onClick={() => setVisible(false)} aria-label={t("common_close")} className="text-gray-300 hover:text-gray-500 me-1 flex-shrink-0">
           <X className="w-3 h-3" />
         </button>
       </div>
@@ -274,6 +298,7 @@ function ActivityPopup({ cfg, product }) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 function BlockRenderer({ block, product, landingPage, onBuyNow, onCta, hasOrderForm, ctaFocus, buying }) {
+  const { t } = useLandingT();
   const { type, config: cfg = {}, visible } = block;
   if (visible === false) return null;
 
@@ -296,7 +321,7 @@ function BlockRenderer({ block, product, landingPage, onBuyNow, onCta, hasOrderF
                 className="self-start flex items-center gap-2 px-5 py-2.5 font-black text-white rounded-2xl transition-all shadow-lg active:scale-[0.98] disabled:opacity-70"
                 style={{ background: cfg.buttonColor || "#f59e0b" }}>
                 <Zap className="w-4 h-4" />
-                {buying ? "جارٍ التحويل..." : (cfg.buttonText || "اطلب الآن")}
+                {buying ? t("offer_redirecting") : (cfg.buttonText || t("offer_order_now"))}
               </button>
             )}
           </div>
@@ -338,7 +363,7 @@ function BlockRenderer({ block, product, landingPage, onBuyNow, onCta, hasOrderF
       return (
         <div className="px-4 py-3">
           <div className="bg-white rounded-2xl border border-gray-100 p-5 text-sm text-gray-700 leading-relaxed prose prose-sm max-w-none"
-            style={{ textAlign: cfg.align || "right" }}
+            style={{ textAlign: cfg.align || "start" /* start = right in RTL (unchanged), left in LTR */ }}
             dangerouslySetInnerHTML={{ __html: cfg.content || "" }}
           />
         </div>
@@ -370,17 +395,17 @@ function BlockRenderer({ block, product, landingPage, onBuyNow, onCta, hasOrderF
           <div className="bg-white rounded-2xl border border-gray-100 p-4">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block text-center">{cfg.beforeLabel || "قبل"}</span>
+                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block text-center">{cfg.beforeLabel || t("offer_before")}</span>
                 {cfg.beforeImage
-                  ? <img src={cfg.beforeImage} alt="before" loading="lazy" className="w-full aspect-square rounded-xl object-cover" />
-                  : <div className="w-full aspect-square rounded-xl bg-gray-100 flex items-center justify-center text-gray-400 text-xs">No image</div>
+                  ? <img src={cfg.beforeImage} alt={t("offer_before")} loading="lazy" className="w-full aspect-square rounded-xl object-cover" />
+                  : <div className="w-full aspect-square rounded-xl bg-gray-100 flex items-center justify-center text-gray-400 text-xs">{t("offer_no_image")}</div>
                 }
               </div>
               <div className="space-y-1.5">
-                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block text-center">{cfg.afterLabel || "بعد"}</span>
+                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block text-center">{cfg.afterLabel || t("offer_after")}</span>
                 {cfg.afterImage
-                  ? <img src={cfg.afterImage} alt="after" loading="lazy" className="w-full aspect-square rounded-xl object-cover" />
-                  : <div className="w-full aspect-square rounded-xl bg-gray-100 flex items-center justify-center text-gray-400 text-xs">No image</div>
+                  ? <img src={cfg.afterImage} alt={t("offer_after")} loading="lazy" className="w-full aspect-square rounded-xl object-cover" />
+                  : <div className="w-full aspect-square rounded-xl bg-gray-100 flex items-center justify-center text-gray-400 text-xs">{t("offer_no_image")}</div>
                 }
               </div>
             </div>
@@ -424,7 +449,7 @@ function BlockRenderer({ block, product, landingPage, onBuyNow, onCta, hasOrderF
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <div className="w-7 h-7 rounded-full bg-amber-100 flex items-center justify-center text-amber-600 text-xs font-bold">
-                    {(r.name || "م")[0].toUpperCase()}
+                    {(r.name || t("offer_avatar_fallback"))[0].toUpperCase()}
                   </div>
                   <span className="text-sm font-semibold text-gray-900">{r.name}</span>
                 </div>
@@ -456,7 +481,7 @@ function BlockRenderer({ block, product, landingPage, onBuyNow, onCta, hasOrderF
               className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl font-black text-white text-base transition-all active:scale-[0.98] shadow-lg disabled:opacity-70"
               style={{ background: cfg.buttonColor || "#f59e0b" }}>
               <Zap className="w-5 h-5" />
-              {buying && !cfg.buttonUrl && !hasOrderForm ? "جارٍ التحويل..." : (cfg.buttonText || "اطلب الآن")}
+              {buying && !cfg.buttonUrl && !hasOrderForm ? t("offer_redirecting") : (cfg.buttonText || t("offer_order_now"))}
             </button>
           </div>
         </div>
@@ -478,22 +503,22 @@ function BlockRenderer({ block, product, landingPage, onBuyNow, onCta, hasOrderF
       return (
         <div className="px-4 py-3">
           <div className="bg-white rounded-2xl border border-gray-100 p-5">
-            <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">المنتج</p>
+            <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">{t("offer_product_label")}</p>
             <h2 className="text-lg font-black text-gray-900 leading-snug mb-3">{product.title}</h2>
             {cfg.showPrice !== false && price != null && (
               <div className="flex items-baseline gap-3 mb-2">
-                <span className="text-3xl font-black text-gray-900">
+                <span className="text-3xl font-black text-gray-900" dir="ltr">
                   {Number(price).toFixed(0)}{" "}
-                  <span className="text-base font-bold text-gray-500">MAD</span>
+                  <span className="text-base font-bold text-gray-500">{t("offer_currency")}</span>
                 </span>
-                {originalPrice && <span className="text-base text-gray-400 line-through">{Number(originalPrice).toFixed(0)} MAD</span>}
-                {discountPct > 0 && <span className="bg-red-100 text-red-600 text-xs font-black px-2 py-0.5 rounded-full">−{discountPct}%</span>}
+                {originalPrice && <span className="text-base text-gray-400 line-through" dir="ltr">{Number(originalPrice).toFixed(0)} {t("offer_currency")}</span>}
+                {discountPct > 0 && <span className="bg-red-100 text-red-600 text-xs font-black px-2 py-0.5 rounded-full" dir="ltr">−{discountPct}%</span>}
               </div>
             )}
             {cfg.showRating !== false && (product.rating || 0) > 0 && (
               <div className="flex items-center gap-2 mb-3">
                 <Stars rating={product.rating} />
-                <span className="text-xs text-gray-500">{product.rating} ({product.reviewsCount || 0} تقييم)</span>
+                <span className="text-xs text-gray-500">{t("offer_rating_count", { rating: product.rating, count: product.reviewsCount || 0 })}</span>
               </div>
             )}
             {cfg.showDescription !== false && product.shortDescription && (
@@ -503,7 +528,7 @@ function BlockRenderer({ block, product, landingPage, onBuyNow, onCta, hasOrderF
               <button onClick={onBuyNow} disabled={buying || !product}
                 className="w-full flex items-center justify-center gap-2 py-3 bg-amber-400 hover:bg-amber-500 text-white rounded-2xl font-black text-sm transition-all active:scale-[0.98] disabled:opacity-70">
                 <Zap className="w-4 h-4" />
-                {buying ? "جارٍ التحويل..." : "اطلب الآن"}
+                {buying ? t("offer_redirecting") : t("offer_order_now")}
               </button>
             )}
           </div>
@@ -536,7 +561,7 @@ function BlockRenderer({ block, product, landingPage, onBuyNow, onCta, hasOrderF
 
     case "stockCounter": {
       const count   = cfg.count ?? 5;
-      const label   = (cfg.label || "فقط {count} قطعة متبقية في المخزون!").replace("{count}", count);
+      const label   = cfg.label ? cfg.label.replace("{count}", count) : t("offer_stock_default", { count });
       const pct     = Math.min(100, Math.max(5, (count / 20) * 100));
       return (
         <div className="px-4 py-2">
@@ -582,7 +607,7 @@ function BlockRenderer({ block, product, landingPage, onBuyNow, onCta, hasOrderF
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2">
                   <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-700 text-xs font-bold">
-                    {(r.name || "م")[0].toUpperCase()}
+                    {(r.name || t("offer_avatar_fallback"))[0].toUpperCase()}
                   </div>
                   <div>
                     <p className="text-sm font-semibold text-gray-900">{r.name}</p>
@@ -593,7 +618,7 @@ function BlockRenderer({ block, product, landingPage, onBuyNow, onCta, hasOrderF
                   <Stars rating={r.rating || 5} />
                   {r.verified !== false && (
                     <span className="flex items-center gap-1 text-[10px] text-green-600 bg-green-50 px-2 py-0.5 rounded-full font-semibold border border-green-100">
-                      <Check className="w-2.5 h-2.5" /> موثّق
+                      <Check className="w-2.5 h-2.5" /> {t("offer_verified")}
                     </span>
                   )}
                 </div>
@@ -652,7 +677,7 @@ function BlockRenderer({ block, product, landingPage, onBuyNow, onCta, hasOrderF
                 <span className="text-2xl">🏆</span>
                 <div>
                   <p className="text-lg font-black text-gray-900 leading-none">{cfg.soldCount}</p>
-                  <p className="text-[10px] text-gray-500">منتج مباع</p>
+                  <p className="text-[10px] text-gray-500">{t("offer_sold_label")}</p>
                 </div>
               </div>
             )}
@@ -661,7 +686,7 @@ function BlockRenderer({ block, product, landingPage, onBuyNow, onCta, hasOrderF
                 <span className="text-2xl">⭐</span>
                 <div>
                   <p className="text-lg font-black text-gray-900 leading-none">{cfg.rating}</p>
-                  <p className="text-[10px] text-gray-500">{cfg.reviewCount ? `(${cfg.reviewCount} تقييم)` : "تقييم متوسط"}</p>
+                  <p className="text-[10px] text-gray-500">{cfg.reviewCount ? t("offer_review_count", { count: cfg.reviewCount }) : t("offer_avg_rating")}</p>
                 </div>
               </div>
             )}
@@ -683,7 +708,7 @@ function BlockRenderer({ block, product, landingPage, onBuyNow, onCta, hasOrderF
       return <AudioBlock cfg={cfg} />;
 
     case "orderForm":
-      return <div id="lp-order-form"><InlineCodForm cfg={cfg} product={product} landingPage={landingPage} focusSignal={ctaFocus} /></div>;
+      return <div id="lp-order-form"><LandingCodForm cfg={cfg} product={product} landingPage={landingPage} focusSignal={ctaFocus} /></div>;
 
     case "upsell": {
       const lpProds = Array.isArray(landingPage?.products) ? landingPage.products : [];
@@ -742,7 +767,7 @@ function FAQBlock({ cfg }) {
             <div key={i} className="border border-gray-100 rounded-xl overflow-hidden">
               <button className="w-full flex items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-gray-800 hover:bg-gray-50 transition-colors"
                 onClick={() => setOpen(open === i ? null : i)}>
-                <span className="text-right flex-1">{item.q}</span>
+                <span className="text-start flex-1">{item.q}</span>
                 {open === i ? <ChevronUp className="w-4 h-4 text-gray-400 flex-shrink-0" /> : <ChevronDown className="w-4 h-4 text-gray-400 flex-shrink-0" />}
               </button>
               {open === i && (
@@ -761,6 +786,7 @@ function FAQBlock({ cfg }) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 function ImageSliderBlock({ cfg }) {
+  const { t, dir } = useLandingT();
   const images = cfg.images || [];
   const [idx, setIdx]         = useState(0);
   const touchStart             = useRef(null);
@@ -777,7 +803,7 @@ function ImageSliderBlock({ cfg }) {
   const onTouchEnd   = (e) => {
     if (touchStart.current == null) return;
     const diff = touchStart.current - e.changedTouches[0].clientX;
-    if (Math.abs(diff) > 40) diff > 0 ? next() : prev();
+    if (Math.abs(diff) > 40) { if (diff > 0) next(); else prev(); }
     touchStart.current = null;
   };
 
@@ -797,13 +823,14 @@ function ImageSliderBlock({ cfg }) {
       {/* Arrows */}
       {cfg.showArrows !== false && images.length > 1 && (
         <>
-          <button onClick={prev} aria-label="Previous"
-            className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 text-white flex items-center justify-center text-lg font-bold hover:bg-black/60 z-10">
-            ›
+          {/* Previous sits on the inline START side, Next on the END side (RTL: right/left as before; LTR: mirrored). */}
+          <button onClick={prev} aria-label={t("common_prev")}
+            className="absolute start-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 text-white flex items-center justify-center text-lg font-bold hover:bg-black/60 z-10">
+            {dir === "rtl" ? "›" : "‹"}
           </button>
-          <button onClick={next} aria-label="Next"
-            className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 text-white flex items-center justify-center text-lg font-bold hover:bg-black/60 z-10">
-            ‹
+          <button onClick={next} aria-label={t("common_next")}
+            className="absolute end-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 text-white flex items-center justify-center text-lg font-bold hover:bg-black/60 z-10">
+            {dir === "rtl" ? "‹" : "›"}
           </button>
         </>
       )}
@@ -811,7 +838,7 @@ function ImageSliderBlock({ cfg }) {
       {cfg.showDots !== false && images.length > 1 && (
         <div className="absolute bottom-2.5 left-0 right-0 flex justify-center gap-1.5 z-10">
           {images.map((_, i) => (
-            <button key={i} onClick={() => setIdx(i)} aria-label={`Slide ${i + 1}`}
+            <button key={i} onClick={() => setIdx(i)} aria-label={t("offer_slide_n", { n: i + 1 })}
               className={`w-2 h-2 rounded-full transition-all ${i === idx ? "bg-white scale-125" : "bg-white/50"}`} />
           ))}
         </div>
@@ -850,6 +877,7 @@ function ImageGridBlock({ cfg }) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 function AudioBlock({ cfg }) {
+  const { t } = useLandingT();
   const audioRef = useRef(null);
   const [playing, setPlaying] = useState(false);
   const [ready,   setReady]   = useState(false);
@@ -877,7 +905,7 @@ function AudioBlock({ cfg }) {
   const toggle = () => {
     const el = audioRef.current;
     if (!el) return;
-    playing ? el.pause() : el.play().catch(() => {});
+    if (playing) el.pause(); else el.play().catch(() => {});
     setPlaying(!playing);
   };
 
@@ -885,7 +913,7 @@ function AudioBlock({ cfg }) {
     <div className="px-4 py-2">
       <audio ref={audioRef} src={cfg.url} preload="metadata" />
       <div className="flex items-center gap-3 bg-purple-50 rounded-2xl border border-purple-100 px-4 py-3">
-        <button onClick={toggle}
+        <button onClick={toggle} aria-label={playing ? t("offer_audio_pause") : t("offer_audio_play")}
           className="w-9 h-9 rounded-full bg-purple-600 text-white flex items-center justify-center flex-shrink-0 hover:bg-purple-700 transition-colors">
           {playing ? (
             <span className="text-xs font-bold">⏸</span>
@@ -894,9 +922,9 @@ function AudioBlock({ cfg }) {
           )}
         </button>
         <div className="flex-1 min-w-0">
-          <p className="text-xs font-semibold text-purple-700 truncate">{cfg.label || "Background Audio"}</p>
-          {!ready && <p className="text-[10px] text-purple-400">Loading…</p>}
-          {ready  && <p className="text-[10px] text-purple-400">{playing ? "Playing" : "Tap to play"}</p>}
+          <p className="text-xs font-semibold text-purple-700 truncate">{cfg.label || t("offer_audio_default_label")}</p>
+          {!ready && <p className="text-[10px] text-purple-400">{t("offer_audio_loading")}</p>}
+          {ready  && <p className="text-[10px] text-purple-400">{playing ? t("offer_audio_playing") : t("offer_audio_tap")}</p>}
         </div>
         <span className="text-purple-400 text-xs">🔊</span>
       </div>
@@ -909,6 +937,7 @@ function AudioBlock({ cfg }) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 function UpsellBlock({ cfg, landingPageProducts }) {
+  const { t } = useLandingT();
   const [added, setAdded] = useState(false);
   // Try to find the upsell product from the landing page's linked products
   const prod = (landingPageProducts || []).find(
@@ -924,7 +953,7 @@ function UpsellBlock({ cfg, landingPageProducts }) {
     <div className="px-4 py-2">
       <div className={`rounded-2xl border-2 transition-all p-4 ${added ? "border-amber-400 bg-amber-50" : "border-dashed border-gray-200 bg-white"}`}>
         <p className="text-xs font-black text-amber-600 uppercase tracking-widest mb-3">
-          💰 {cfg.title || "عرض خاص — أضفه لطلبك"}
+          💰 {cfg.title || t("offer_upsell_default_title")}
         </p>
         {cfg.description && <p className="text-xs text-gray-500 mb-3">{cfg.description}</p>}
         <div className="flex items-center gap-3">
@@ -935,17 +964,17 @@ function UpsellBlock({ cfg, landingPageProducts }) {
           )}
           <div className="flex-1 min-w-0">
             <p className="text-sm font-bold text-gray-900 leading-tight mb-1">
-              {prod?.title || "منتج إضافي"}
+              {prod?.title || t("offer_upsell_default_product")}
             </p>
             <div className="flex items-baseline gap-2">
               {specialPrice != null && (
-                <span className="text-base font-black text-amber-600">
-                  {Number(specialPrice).toFixed(0)} MAD
+                <span className="text-base font-black text-amber-600" dir="ltr">
+                  {Number(specialPrice).toFixed(0)} {t("offer_currency")}
                 </span>
               )}
               {origPrice && specialPrice && origPrice > specialPrice && (
-                <span className="text-xs text-gray-400 line-through">
-                  {Number(origPrice).toFixed(0)} MAD
+                <span className="text-xs text-gray-400 line-through" dir="ltr">
+                  {Number(origPrice).toFixed(0)} {t("offer_currency")}
                 </span>
               )}
             </div>
@@ -957,7 +986,7 @@ function UpsellBlock({ cfg, landingPageProducts }) {
         </div>
         {added && (
           <p className="mt-2 text-xs text-amber-700 font-semibold text-center">
-            ✅ سيتم إضافته لطلبك
+            {t("offer_upsell_added")}
           </p>
         )}
       </div>
@@ -970,6 +999,7 @@ function UpsellBlock({ cfg, landingPageProducts }) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 function VoicePlayer({ url }) {
+  const { t } = useLandingT();
   const audioRef  = useRef(null);
   const [playing, setPlaying]   = useState(false);
   const [pct,     setPct]       = useState(0);
@@ -994,7 +1024,7 @@ function VoicePlayer({ url }) {
   const toggle = () => {
     const el = audioRef.current;
     if (!el) return;
-    playing ? el.pause() : el.play().catch(() => {});
+    if (playing) el.pause(); else el.play().catch(() => {});
     setPlaying(!playing);
   };
 
@@ -1003,7 +1033,7 @@ function VoicePlayer({ url }) {
   return (
     <div className="flex items-center gap-2 bg-gray-50 rounded-2xl px-3 py-2">
       <audio ref={audioRef} src={url} preload="metadata" />
-      <button onClick={toggle}
+      <button onClick={toggle} aria-label={playing ? t("offer_audio_pause") : t("offer_audio_play")}
         className="w-7 h-7 rounded-full bg-green-500 text-white flex items-center justify-center flex-shrink-0 text-[10px]">
         {playing ? "⏸" : "▶"}
       </button>
@@ -1017,12 +1047,13 @@ function VoicePlayer({ url }) {
         <div className="absolute inset-y-0 left-0 bg-green-500 rounded-full transition-all"
           style={{ width: `${pct}%` }} />
       </div>
-      <span className="text-[9px] text-gray-400 w-8 text-right flex-shrink-0">{fmt(dur)}</span>
+      <span className="text-[9px] text-gray-400 w-8 text-end flex-shrink-0" dir="ltr">{fmt(dur)}</span>
     </div>
   );
 }
 
 function FeedbackBlockDisplay({ cfg, productId: pageProductId }) {
+  const { t } = useLandingT();
   const [items,   setItems]   = useState([]);
   const [loading, setLoading] = useState(true);
   const [lightbox, setLightbox] = useState(null);
@@ -1070,15 +1101,15 @@ function FeedbackBlockDisplay({ cfg, productId: pageProductId }) {
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-700 text-xs font-bold">
-                  {(fb.authorName || fb.name || "م")[0].toUpperCase()}
+                  {(fb.authorName || fb.name || t("offer_avatar_fallback"))[0].toUpperCase()}
                 </div>
                 <div>
                   <p className="text-sm font-semibold text-gray-900 leading-tight">
-                    {fb.authorName || fb.name || "عميل"}
+                    {fb.authorName || fb.name || t("offer_customer_default")}
                   </p>
                   {fb.isVerified && (
                     <span className="text-[10px] text-green-600 font-semibold flex items-center gap-0.5">
-                      <Check className="w-2.5 h-2.5" /> موثّق
+                      <Check className="w-2.5 h-2.5" /> {t("offer_verified")}
                     </span>
                   )}
                 </div>
@@ -1111,7 +1142,7 @@ function FeedbackBlockDisplay({ cfg, productId: pageProductId }) {
       {lightbox && (
         <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4"
           onClick={() => setLightbox(null)}>
-          <button className="absolute top-4 right-4 text-white text-2xl">×</button>
+          <button aria-label={t("common_close")} className="absolute top-4 right-4 text-white text-2xl">×</button>
           <img src={lightbox} alt="" className="max-w-full max-h-[90vh] rounded-xl object-contain" />
         </div>
       )}
@@ -1125,6 +1156,8 @@ function FeedbackBlockDisplay({ cfg, productId: pageProductId }) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 function OfferContent({ initialLandingPage = null, initialProduct = null }) {
+  const { t, dir, lang } = useLandingT();
+  useMarketPaintGate(); // first paint: lift the market gate once this page has rendered in the visitor's market
   const { slug }     = useParams();
   const router       = useRouter();
   const searchParams = useSearchParams();
@@ -1270,14 +1303,14 @@ function OfferContent({ initialLandingPage = null, initialProduct = null }) {
   // Not found
   if (notFound || (!landingPage && !product)) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4" dir={dir} lang={lang} data-market-scope={lang}>
         <div className="text-center">
           <p className="text-5xl mb-4">🔍</p>
-          <h1 className="text-xl font-bold text-gray-900 mb-2">العرض غير متاح</h1>
-          <p className="text-gray-500 text-sm mb-6">هذا العرض غير متاح حالياً أو انتهت صلاحيته.</p>
+          <h1 className="text-xl font-bold text-gray-900 mb-2">{t("offer_not_found_title")}</h1>
+          <p className="text-gray-500 text-sm mb-6">{t("offer_not_found_text")}</p>
           <Link href="/"
             className="inline-flex items-center gap-2 px-5 py-2.5 bg-amber-400 text-white rounded-2xl font-semibold text-sm hover:bg-amber-500 transition-colors">
-            <Home className="w-4 h-4" /> العودة للرئيسية
+            <Home className="w-4 h-4" /> {t("offer_back_home")}
           </Link>
         </div>
       </div>
@@ -1323,7 +1356,7 @@ function OfferContent({ initialLandingPage = null, initialProduct = null }) {
   //  Empty by default — only renders what Builder explicitly added
   // ════════════════════════════════════════════════════════════════════════════
   return (
-    <div className="min-h-screen bg-gray-50 pb-28" dir="rtl">
+    <div className="min-h-screen bg-gray-50 pb-28" dir={dir} lang={lang} data-market-scope={lang}>
       {/* Mobile-first locked layout — max 480 px centred on all screens */}
       <div className="max-w-[480px] mx-auto w-full">
         {sections.map((block) => (

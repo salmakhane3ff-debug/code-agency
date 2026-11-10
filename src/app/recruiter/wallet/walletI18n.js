@@ -1,0 +1,138 @@
+/**
+ * src/app/recruiter/wallet/walletI18n.js
+ * ─────────────────────────────────────────────────────────────────────────────
+ * The recruiter WALLET page's texts in both market languages (MA → Arabic, FR → French), on top of the shared
+ * recruiter dictionary (src/lib/recruiterI18n.js). Money vocabulary (balance, withdrawals, bank details, paid
+ * amounts) lives HERE, in the wallet folder — the only recruiter pages allowed to talk about the recruiter's own
+ * money (scripts/recruiterVisibility.test.mjs, money scope) — so no other page can render it.
+ * Shape: RECRUITER_WALLET_TEXT = { ar, fr } = shared keys + the wallet keys (w_*); both languages have the same keys
+ * (scripts/recruiterI18n.test.mjs). Currency as the site writes it: "درهم" (ar) / "DH" (fr).
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+// Relative import (with extension) so the plain-node test scripts/recruiterI18n.test.mjs can load this module too.
+import { RECRUITER_TEXT } from "../../../lib/recruiterI18n.js";
+
+const ar = {
+  w_subtitle: "رصيدك، طلبات السحب ومعلوماتك البنكية.",
+  w_totals: "المجاميع",
+  w_total_rewards: "إجمالي المكافآت المكتسبة",
+  w_available: "الرصيد المتاح للسحب",
+  w_pending: "طلبات سحب قيد المعالجة",
+  w_paid: "المبلغ المدفوع",
+  w_request_title: "طلب سحب",
+  w_identity_unknown: "حالة التحقق غير متاحة حالياً. يمكنك المتابعة، والتحقق من هويتك يتم عند معالجة الطلب.",
+  w_identity_pending: "التحقق من هويتك قيد المراجعة. يمكنك طلب السحب بعد قبوله.",
+  w_identity_rejected: "تم رفض التحقق من هويتك. أرسل صوراً جديدة لبطاقتك الوطنية لتتمكن من طلب السحب.",
+  w_identity_missing: "يجب التحقق من هويتك (البطاقة الوطنية) قبل طلب أي سحب.",
+  w_identity_page: "صفحة التحقق من الهوية",
+  w_bank_required: "أضف معلوماتك البنكية قبل طلب السحب.",
+  w_nothing_available: "لا يوجد رصيد متاح للسحب حالياً.",
+  w_negative: "رصيدك المتاح سالب لأن مكافآت سُحبت بعد إلغاء أو إرجاع طلبيات. لا يمكن طلب سحب حتى يصبح رصيدك موجباً من جديد.",
+  w_current_balance: "الرصيد الحالي:",
+  w_amount_label: "المبلغ (درهم)",
+  w_max: "الحد الأقصى:",
+  w_request_sent: "تم إرسال طلب السحب",
+  w_request_sent_next: "سيتم معالجته من طرف الإدارة.",
+  w_request_submit: "طلب السحب",
+  w_bank_title: "المعلومات البنكية (RIB)",
+  w_bank_name: "اسم البنك",
+  w_rib: "RIB",
+  w_rib_hint: "من 10 إلى 34 حرفاً/رقماً.",
+  w_account_holder: "صاحب الحساب",
+  w_full_name_placeholder: "الاسم الكامل",
+  w_bank_saved: "تم حفظ معلوماتك البنكية.",
+  w_bank_save: "حفظ المعلومات البنكية",
+  w_history_title: "سجل طلبات السحب",
+  w_history_empty: "لا توجد طلبات سحب بعد.",
+  w_status_pending: "قيد المعالجة",
+  w_status_paid: "مدفوع",
+  w_status_rejected: "مرفوض",
+  w_details_title: "تفاصيل المكافآت",
+  w_rule_title: "قاعدة المكافأة",
+  w_rule_1: "تحصل على مكافأة",
+  w_rule_2: "عن كل أفلييت في شبكتك (أنشأته أنت أو انضم عبر أحد أفلييتك) عندما يصل إلى",
+  w_rule_3: "طلبية حقيقية مسلّمة وتتم الموافقة على بطاقته الوطنية من طرف الإدارة.",
+  w_rewards_off: "المكافآت غير مفعّلة حالياً.",
+  w_rule_hint: "الطلبات التجريبية لا تُحتسب أبداً. المكافأة تُسجَّل فوراً عند تحقق الشرطين.",
+  w_gross_title: "المكافآت: الإجمالي والإلغاءات والصافي",
+  w_gross_unavailable: "تفاصيل الإجمالي والإلغاءات غير متاحة:",
+  w_gross_awarded: "إجمالي المكافآت الممنوحة",
+  w_individual: "فردية:",
+  w_group: "المجموعة:",
+  w_gross_reversed: "المكافآت الملغاة",
+  w_net: "الصافي (إجمالي المكافآت المكتسبة)",
+  w_adjustments: "يشمل تعديلات الإدارة:",
+  w_rewards_history: "سجل المكافآت",
+  w_rewards_empty: "لا توجد مكافآت بعد.",
+  w_reason_awarded: "{n} طلبية حقيقية مسلّمة + بطاقة وطنية مقبولة",
+  w_reason_reversed: "سحب المكافأة: الطلبيات الحقيقية المسلّمة أصبحت أقل من {n} (إلغاء أو إرجاع)",
+  w_reason_admin: "تعديل من طرف الإدارة",
+  w_cycle: "الدورة {n}",
+};
+
+const fr = {
+  w_subtitle: "Votre solde, vos demandes de retrait et vos informations bancaires.",
+  w_totals: "Totaux",
+  w_total_rewards: "Total des récompenses gagnées",
+  w_available: "Solde disponible au retrait",
+  w_pending: "Retraits en cours de traitement",
+  w_paid: "Montant payé",
+  w_request_title: "Demande de retrait",
+  w_identity_unknown: "Le statut de vérification est indisponible pour le moment. Vous pouvez continuer : votre identité sera vérifiée lors du traitement de la demande.",
+  w_identity_pending: "La vérification de votre identité est en cours. Vous pourrez demander un retrait une fois qu'elle sera acceptée.",
+  w_identity_rejected: "La vérification de votre identité a été refusée. Envoyez de nouvelles photos de votre carte nationale pour pouvoir demander un retrait.",
+  w_identity_missing: "Votre identité (carte nationale) doit être vérifiée avant toute demande de retrait.",
+  w_identity_page: "Page de vérification d'identité",
+  w_bank_required: "Ajoutez vos informations bancaires avant de demander un retrait.",
+  w_nothing_available: "Aucun solde disponible au retrait pour le moment.",
+  w_negative: "Votre solde disponible est négatif car des récompenses ont été retirées après l'annulation ou le retour de commandes. Aucun retrait n'est possible tant que votre solde n'est pas redevenu positif.",
+  w_current_balance: "Solde actuel :",
+  w_amount_label: "Montant (DH)",
+  w_max: "Maximum :",
+  w_request_sent: "Demande de retrait envoyée",
+  w_request_sent_next: "Elle sera traitée par l'administration.",
+  w_request_submit: "Demander le retrait",
+  w_bank_title: "Informations bancaires (RIB)",
+  w_bank_name: "Nom de la banque",
+  w_rib: "RIB",
+  w_rib_hint: "De 10 à 34 lettres/chiffres.",
+  w_account_holder: "Titulaire du compte",
+  w_full_name_placeholder: "Nom complet",
+  w_bank_saved: "Vos informations bancaires ont été enregistrées.",
+  w_bank_save: "Enregistrer les informations bancaires",
+  w_history_title: "Historique des demandes de retrait",
+  w_history_empty: "Aucune demande de retrait pour le moment.",
+  w_status_pending: "En cours de traitement",
+  w_status_paid: "Payé",
+  w_status_rejected: "Refusé",
+  w_details_title: "Détails des récompenses",
+  w_rule_title: "Règle de récompense",
+  w_rule_1: "Vous recevez une récompense de",
+  w_rule_2: "pour chaque affilié de votre réseau (créé par vous ou arrivé via l'un de vos affiliés) dès qu'il atteint",
+  w_rule_3: "commandes réelles livrées et que sa carte nationale est validée par l'administration.",
+  w_rewards_off: "Les récompenses ne sont pas activées pour le moment.",
+  w_rule_hint: "Les commandes de test ne sont jamais comptées. La récompense est enregistrée immédiatement dès que les deux conditions sont remplies.",
+  w_gross_title: "Récompenses : brut, annulations et net",
+  w_gross_unavailable: "Le détail du brut et des annulations est indisponible :",
+  w_gross_awarded: "Total des récompenses accordées",
+  w_individual: "Individuelles :",
+  w_group: "Groupe :",
+  w_gross_reversed: "Récompenses annulées",
+  w_net: "Net (total des récompenses gagnées)",
+  w_adjustments: "Inclut des ajustements de l'administration :",
+  w_rewards_history: "Historique des récompenses",
+  w_rewards_empty: "Aucune récompense pour le moment.",
+  w_reason_awarded: "{n} commandes réelles livrées + carte nationale acceptée",
+  w_reason_reversed: "Récompense retirée : les commandes réelles livrées sont passées sous {n} (annulation ou retour)",
+  w_reason_admin: "Ajustement par l'administration",
+  w_cycle: "cycle {n}",
+};
+
+/** Wallet-only keys (w_*) in both languages — exported for scripts/recruiterI18n.test.mjs. */
+export const RECRUITER_WALLET_ONLY_TEXT = Object.freeze({ ar: Object.freeze(ar), fr: Object.freeze(fr) });
+
+/** What the wallet page reads with useMarketLocale: the shared recruiter texts + the wallet texts. */
+export const RECRUITER_WALLET_TEXT = Object.freeze({
+  ar: Object.freeze({ ...RECRUITER_TEXT.ar, ...ar }),
+  fr: Object.freeze({ ...RECRUITER_TEXT.fr, ...fr }),
+});

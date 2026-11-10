@@ -13,7 +13,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, Gift, ImageIcon, Truck, Copy, Check, X, ChevronDown, AlertTriangle, Clock } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
-import { rewardsT, rewardsDir, cancellationNote } from "@/lib/rewardsI18n";
+import { rewardsT, rewardsDir, cancellationNote, REWARDS_TEXT } from "@/lib/rewardsI18n";
+import { knownServerError } from "@/lib/serverText/affiliateServerText";
 
 function authHeaders(json = false) {
   const t = (typeof localStorage !== "undefined" && localStorage.getItem("affiliateToken")) || "";
@@ -52,7 +53,11 @@ export default function RewardsTab() {
   const locale = lang === "ar" ? "ar-MA" : "fr-FR";
   const fmtPts = (n) => `${Number(n || 0).toLocaleString(locale)} ${t("points")}`;
   const fmtDate = (d) => (d ? new Date(d).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" }) : "—");
-  const codeMsg = (code, vars) => (code ? t(`code_${code}`, vars) : t("error_generic"));
+  // Rewards error CODES → rewardsI18n (code_*); any other server answer (generic SERVER_ERROR, auth
+  // middleware…) → the affiliate server-text table; else the generic message (never a raw key).
+  const codeMsg = (code, vars, data) => (code && REWARDS_TEXT.fr[`code_${code}`] !== undefined
+    ? t(`code_${code}`, vars)
+    : knownServerError({ error: data?.error, code }, lang) ?? t("error_generic"));
 
   const [view, setView]         = useState("gifts");
   const [overview, setOverview] = useState(null);
@@ -63,7 +68,7 @@ export default function RewardsTab() {
 
   const loadOverview = useCallback(async () => {
     const r = await call("/api/affiliate/rewards");
-    if (r.ok) { setOverview(r.data); setError(null); } else setError(r.status === 0 ? t("error_network") : codeMsg(r.data?.code));
+    if (r.ok) { setOverview(r.data); setError(null); } else setError(r.status === 0 ? t("error_network") : codeMsg(r.data?.code, undefined, r.data));
   }, [lang]); // eslint-disable-line react-hooks/exhaustive-deps
   const loadRequests = useCallback(async () => {
     const r = await call("/api/affiliate/rewards/redemptions");
@@ -202,7 +207,7 @@ function RequestModal({ gift, spendable, t, fmtPts, codeMsg, dir, onClose, onDon
     setBusy(false);
     if (r.ok) return onDone(r.data.redemption.reference);
     if (r.data?.errors) { setErrors(Object.fromEntries(Object.keys(r.data.errors).map((k) => [k, true]))); setStep("form"); }
-    setError(r.status === 0 ? t("error_network") : r.status === 429 ? t("code_RATE_LIMITED") : codeMsg(r.data?.code, { n: gift.minDeliveredOrders }));
+    setError(r.status === 0 ? t("error_network") : r.status === 429 ? t("code_RATE_LIMITED") : codeMsg(r.data?.code, { n: gift.minDeliveredOrders }, r.data));
   };
 
   const field = (key, label, props = {}) => (
@@ -282,7 +287,7 @@ function RequestsList({ requests, t, lang, fmtPts, fmtDate, codeMsg, onChanged }
     setBusyId(r.id); setError(null);
     const res = await call(`/api/affiliate/rewards/redemptions/${r.id}/cancel`, { method: "POST" });
     setBusyId(null);
-    if (res.ok) onChanged(); else setError(res.status === 429 ? t("code_RATE_LIMITED") : codeMsg(res.data?.code));
+    if (res.ok) onChanged(); else setError(res.status === 429 ? t("code_RATE_LIMITED") : codeMsg(res.data?.code, undefined, res.data));
   };
   const copy = (r) => navigator.clipboard?.writeText(r.trackingNumber).then(() => { setCopied(r.id); setTimeout(() => setCopied(null), 1500); }).catch(() => {});
 

@@ -21,8 +21,12 @@ import LiveActivity from "@/components/LiveActivity";
 import { diffNewItems, shouldPlaySaleSound } from "@/lib/liveFeed";
 import { createSaleSound } from "./saleSound";
 import { resolveSupportLink } from "@/lib/whatsappSupport";
-import { useLanguage } from "@/context/LanguageContext";
+import { useMarketLocale } from "@/context/useMarketLocale";
+import { marketIntlLocale } from "@/lib/marketLocale";
+import { AFFILIATE_DASHBOARD_TEXT } from "@/lib/affiliateDashboardI18n";
 import { orderStatusErrorMessage, shouldRefreshOrdersAfter, orderMessageDir } from "@/lib/affiliateOrderMessages";
+import { localizeServerError, localizeNotification } from "@/lib/serverText/affiliateServerText";
+import { fieldDir } from "@/lib/marketLocale";
 
 // Live feed: the gap BETWEEN background polls (measured after the previous poll
 // finishes, so requests can never stack up). ~3s gives near-instant sale
@@ -30,24 +34,37 @@ import { orderStatusErrorMessage, shouldRefreshOrdersAfter, orderMessageDir } fr
 // tab is hidden. Reuses the interval-polling approach already used elsewhere.
 const LIVE_POLL_MS = 3000;
 
-// Identity verification status → French label + emoji + colour (single source).
+// Identity verification status → label key (AFFILIATE_DASHBOARD_TEXT) + emoji + colour (single source).
 const IDENTITY_UI = {
-  NOT_SUBMITTED: { emoji: "🪪", label: "Identité non vérifiée",  color: "#6b7280", bg: "#f3f4f6" },
-  PENDING:       { emoji: "🟡", label: "Vérification en cours",   color: "#b45309", bg: "#fffbeb" },
-  APPROVED:      { emoji: "✅", label: "Identité vérifiée",       color: "#047857", bg: "#ecfdf5" },
-  REJECTED:      { emoji: "❌", label: "Vérification refusée",    color: "#b91c1c", bg: "#fef2f2" },
+  NOT_SUBMITTED: { emoji: "🪪", labelKey: "identity_not_submitted", color: "#6b7280", bg: "#f3f4f6" },
+  PENDING:       { emoji: "🟡", labelKey: "identity_pending",       color: "#b45309", bg: "#fffbeb" },
+  APPROVED:      { emoji: "✅", labelKey: "identity_approved",      color: "#047857", bg: "#ecfdf5" },
+  REJECTED:      { emoji: "❌", labelKey: "identity_rejected",      color: "#b91c1c", bg: "#fef2f2" },
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function fmtMoney(n) {
+// Unicode isolates: keep numbers / signs / fractions / handles in their LTR order
+// inside Arabic (RTL) sentences, including in plain-text strings (titles, toasts).
+const LRI = "\u2066";
+const PDI = "\u2069";
+const ltr = (v) => `${LRI}${v}${PDI}`;
+const frac = (a, b) => ltr(`${a} / ${b}`);
+
+// Site convention: Arabic « درهم », French « DH » (from the dictionary).
+const currencyLabel = (lang) => (lang === "fr" ? AFFILIATE_DASHBOARD_TEXT.fr.currency : AFFILIATE_DASHBOARD_TEXT.ar.currency);
+
+// Amount + currency in the market language. `grouped` adds thousands separators
+// (market locale); `sign` prefixes "+" / "−". The figure is an LTR island.
+function fmtMoney(n, lang, { sign = "", grouped = false } = {}) {
   if (n == null || isNaN(n)) return "—";
-  return `${Number(n).toFixed(0)} MAD`;
+  const num = grouped ? Math.round(Number(n)).toLocaleString(marketIntlLocale(lang)) : Number(n).toFixed(0);
+  return `${ltr(`${sign}${num}`)} ${currencyLabel(lang)}`;
 }
 
-function fmtDate(iso) {
+function fmtDate(iso, lang) {
   if (!iso) return "—";
-  return new Date(iso).toLocaleDateString("fr-FR", {
+  return new Date(iso).toLocaleDateString(marketIntlLocale(lang), {
     day: "2-digit", month: "2-digit", year: "numeric",
     hour: "2-digit", minute: "2-digit",
   });
@@ -61,16 +78,20 @@ function authHeaders() {
 // ── Status badge ──────────────────────────────────────────────────────────────
 
 const STATUS_CONFIG = {
-  pending:   { label: "En attente",  cls: "bg-yellow-100 text-yellow-700" },
-  confirmed: { label: "Confirmée",   cls: "bg-blue-100   text-blue-700"   },
-  shipped:   { label: "En livraison",cls: "bg-purple-100 text-purple-700" },
-  delivered: { label: "Livrée",      cls: "bg-green-100  text-green-700"  },
-  cancelled: { label: "Annulée",     cls: "bg-red-100    text-red-700"    },
+  pending:   { labelKey: "status_pending",   cls: "bg-yellow-100 text-yellow-700" },
+  confirmed: { labelKey: "status_confirmed", cls: "bg-blue-100   text-blue-700"   },
+  shipped:   { labelKey: "status_shipped",   cls: "bg-purple-100 text-purple-700" },
+  delivered: { labelKey: "status_delivered", cls: "bg-green-100  text-green-700"  },
+  cancelled: { labelKey: "status_cancelled", cls: "bg-red-100    text-red-700"    },
 };
 
+// Status label in the market language (unknown statuses are shown as sent).
+const statusLabel = (status, t) => (STATUS_CONFIG[status] ? t(STATUS_CONFIG[status].labelKey) : status);
+
 function StatusBadge({ status }) {
-  const cfg = STATUS_CONFIG[status] || { label: status, cls: "bg-gray-100 text-gray-600" };
-  return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${cfg.cls}`}>{cfg.label}</span>;
+  const { t } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
+  const cfg = STATUS_CONFIG[status] || { cls: "bg-gray-100 text-gray-600" };
+  return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${cfg.cls}`}>{statusLabel(status, t)}</span>;
 }
 
 // ── Stat card ─────────────────────────────────────────────────────────────────
@@ -116,24 +137,25 @@ function Section({ title, children, icon: Icon }) {
 // ── Progress bar ──────────────────────────────────────────────────────────────
 
 function ProgressBar({ progress, target, remaining, validReferrals }) {
+  const { t } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between text-sm">
-        <span className="font-semibold text-gray-700">Parrainages valides</span>
-        <span className="font-bold text-gray-900">{validReferrals} / {target}</span>
+        <span className="font-semibold text-gray-700">{t("progress_valid_referrals")}</span>
+        <span className="font-bold text-gray-900">{frac(validReferrals, target)}</span>
       </div>
       <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden">
         <div
-          className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full transition-all duration-500"
+          className="h-full bg-gradient-to-r rtl:bg-gradient-to-l from-blue-500 to-blue-600 rounded-full transition-all duration-500"
           style={{ width: `${progress}%` }}
         />
       </div>
       <div className="flex items-center justify-between text-xs text-gray-500">
-        <span className="font-medium text-blue-600">{progress}% complété</span>
+        <span className="font-medium text-blue-600">{t("progress_complete", { n: progress })}</span>
         {remaining > 0 ? (
-          <span>{remaining} parrainage{remaining !== 1 ? "s" : ""} valide{remaining !== 1 ? "s" : ""} restant{remaining !== 1 ? "s" : ""}</span>
+          <span>{t(remaining !== 1 ? "progress_remaining_other" : "progress_remaining_one", { n: remaining })}</span>
         ) : (
-          <span className="text-green-600 font-semibold">✓ Objectif atteint !</span>
+          <span className="text-green-600 font-semibold">{t("progress_reached")}</span>
         )}
       </div>
     </div>
@@ -142,7 +164,8 @@ function ProgressBar({ progress, target, remaining, validReferrals }) {
 
 // ── Copy helper ───────────────────────────────────────────────────────────────
 
-function CopyButton({ text, label = "Copier" }) {
+function CopyButton({ text, label }) {
+  const { t } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
     navigator.clipboard.writeText(text).then(() => {
@@ -156,7 +179,7 @@ function CopyButton({ text, label = "Copier" }) {
       className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl transition-all
         ${copied ? "bg-green-600 text-white" : "bg-gray-900 hover:bg-gray-800 text-white"}`}
     >
-      {copied ? <><Check className="w-3 h-3" />Copié</> : <><Copy className="w-3 h-3" />{label}</>}
+      {copied ? <><Check className="w-3 h-3" />{t("copied")}</> : <><Copy className="w-3 h-3" />{label ?? t("copy")}</>}
     </button>
   );
 }
@@ -165,6 +188,7 @@ function CopyButton({ text, label = "Copier" }) {
 // UI only — copies the SAME existing referral link; the % is read live from the
 // affiliate's referral commission rate (admin setting), never hardcoded.
 function ReferralCta({ link, ratePct }) {
+  const { t } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
   const [copied, setCopied] = useState(false);
   const copy = () => {
     if (!link) return;
@@ -175,18 +199,17 @@ function ReferralCta({ link, ratePct }) {
   };
   return (
     <div
-      dir="rtl"
       className="max-w-[900px] mx-auto w-full rounded-[24px] bg-[#fdf3e3] border border-amber-100/70 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 px-5 py-5 sm:px-8 sm:py-6"
     >
       <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
         {/* Gift */}
         <div className="w-16 h-16 rounded-2xl bg-white shadow-sm flex items-center justify-center text-3xl shrink-0">🎁</div>
         {/* Center */}
-        <div className="flex-1 text-center sm:text-right min-w-0">
-          <h3 className="text-base sm:text-lg font-black text-gray-900">شارك رابط الإحالة ديالك</h3>
-          <p className="text-sm text-gray-600 mt-0.5">اربح على كل طلب من طرف أي شخص</p>
+        <div className="flex-1 text-center sm:text-start min-w-0">
+          <h3 className="text-base sm:text-lg font-black text-gray-900">{t("cta_title")}</h3>
+          <p className="text-sm text-gray-600 mt-0.5">{t("cta_subtitle")}</p>
           <p className="text-xs sm:text-sm text-amber-700 font-bold mt-1.5">
-            كتربح {ratePct}% من العمولة على كل طلب جاي من رابطك
+            {t("cta_rate", { pct: ratePct })}
           </p>
         </div>
         {/* Copy button */}
@@ -197,7 +220,7 @@ function ReferralCta({ link, ratePct }) {
           className={`w-full sm:w-auto shrink-0 inline-flex items-center justify-center gap-2 px-7 py-4 rounded-2xl font-black text-sm shadow-md active:scale-[0.97] transition-all disabled:opacity-60
             ${copied ? "bg-green-500 text-white" : "bg-amber-400 hover:bg-amber-500 text-gray-900"}`}
         >
-          {copied ? <>✅ تم نسخ الرابط</> : <><Copy className="w-4 h-4" /> نسخ الرابط</>}
+          {copied ? <>{t("cta_copied")}</> : <><Copy className="w-4 h-4" /> {t("cta_copy")}</>}
         </button>
       </div>
     </div>
@@ -209,6 +232,7 @@ function ReferralCta({ link, ratePct }) {
 // tabs/actions and the SAME referral link (center button copies it, no new URL).
 function MobileBottomNav({ activeTab, setActiveTab, refLink, onLogout, unread = 0, onOpenNotifications }) {
   const router = useRouter();
+  const { t } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
   const [toast, setToast] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
 
@@ -226,23 +250,23 @@ function MobileBottomNav({ activeTab, setActiveTab, refLink, onLogout, unread = 
   };
 
   const moreItems = [
-    { icon: Package,     label: "الطلبات",        tab: "orders" },
-    { icon: Store,       label: "أنشئ علامتك التجارية", tab: "brand" },
-    { icon: Gift,        label: "المكافآت",       tab: "rewards" },
-    { icon: Video,       label: "UGC",            tab: "ugc" },
-    { icon: Users,       label: "الفريق",         tab: "team" },
-    { icon: Wallet,      label: "الرصيد والسحب",  tab: "payout" },
-    { icon: Wallet,      label: "شحن الرصيد",     tab: "deposit" },
-    { icon: Building2,   label: "المعلومات البنكية", tab: "bank" },
-    { icon: Bell,        label: "الإشعارات",      tab: "notifications", badge: unread },
-    { icon: Settings,    label: "الإعدادات",      tab: "settings" },
+    { icon: Package,     label: t("more_orders"),        tab: "orders" },
+    { icon: Store,       label: t("more_brand"),         tab: "brand" },
+    { icon: Gift,        label: t("more_rewards"),       tab: "rewards" },
+    { icon: Video,       label: t("more_ugc"),           tab: "ugc" },
+    { icon: Users,       label: t("more_team"),          tab: "team" },
+    { icon: Wallet,      label: t("more_payout"),        tab: "payout" },
+    { icon: Wallet,      label: t("more_deposit"),       tab: "deposit" },
+    { icon: Building2,   label: t("more_bank"),          tab: "bank" },
+    { icon: Bell,        label: t("more_notifications"), tab: "notifications", badge: unread },
+    { icon: Settings,    label: t("more_settings"),      tab: "settings" },
   ];
 
   const NavItem = ({ icon: Icon, label, active, onClick, dot }) => (
     <button type="button" onClick={onClick} className="relative flex-1 flex flex-col items-center gap-1 py-1.5 focus:outline-none">
       <span className={`relative flex items-center justify-center w-11 h-8 rounded-2xl transition-all ${active ? "bg-violet-100 text-violet-600" : "text-gray-400"}`}>
         <Icon className="w-[22px] h-[22px]" strokeWidth={active ? 2.5 : 2} />
-        {dot > 0 && <span className="absolute -top-0.5 right-1.5 min-w-[15px] h-[15px] px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">{dot > 9 ? "9+" : dot}</span>}
+        {dot > 0 && <span className="absolute -top-0.5 end-1.5 min-w-[15px] h-[15px] px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">{dot > 9 ? "9+" : dot}</span>}
       </span>
       <span className={`text-[10px] font-bold ${active ? "text-violet-600" : "text-gray-400"}`}>{label}</span>
     </button>
@@ -254,21 +278,21 @@ function MobileBottomNav({ activeTab, setActiveTab, refLink, onLogout, unread = 
       {toast && (
         <div className="md:hidden fixed left-1/2 -translate-x-1/2 z-[70] bg-gray-900 text-white text-xs font-bold px-4 py-2.5 rounded-full shadow-xl animate-[bnToast_0.25s_ease]"
           style={{ bottom: "calc(104px + env(safe-area-inset-bottom))" }}>
-          تم نسخ رابط الإحالة ✅
+          {t("nav_link_copied")}
         </div>
       )}
 
-      {/* "المزيد" bottom sheet */}
+      {/* "More" bottom sheet */}
       {moreOpen && (
         <div className="md:hidden fixed inset-0 z-[70]" onClick={() => setMoreOpen(false)}>
           <div className="absolute inset-0 bg-black/40" />
-          <div dir="rtl" onClick={(e) => e.stopPropagation()}
+          <div onClick={(e) => e.stopPropagation()}
             className="absolute bottom-0 inset-x-0 bg-white rounded-t-[28px] shadow-2xl px-5 pt-4 animate-[bnUp_0.3s_ease]"
             style={{ paddingBottom: "calc(20px + env(safe-area-inset-bottom))" }}>
             <div className="w-10 h-1 rounded-full bg-gray-200 mx-auto mb-4" />
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-black text-gray-900">المزيد</h3>
-              <button type="button" onClick={() => setMoreOpen(false)} className="text-gray-400 hover:text-gray-700"><X className="w-5 h-5" /></button>
+              <h3 className="text-sm font-black text-gray-900">{t("more_title")}</h3>
+              <button type="button" onClick={() => setMoreOpen(false)} aria-label={t("close")} title={t("close")} className="text-gray-400 hover:text-gray-700"><X className="w-5 h-5" /></button>
             </div>
             <div className="grid grid-cols-3 gap-3">
               {moreItems.map(({ icon: Icon, label, tab, badge }) => (
@@ -276,13 +300,13 @@ function MobileBottomNav({ activeTab, setActiveTab, refLink, onLogout, unread = 
                   className={`relative flex flex-col items-center justify-center gap-2 rounded-2xl py-4 px-2 transition-colors ${activeTab === tab ? "bg-violet-50 text-violet-600" : "bg-gray-50 text-gray-600 hover:bg-gray-100"}`}>
                   <Icon className="w-6 h-6" />
                   <span className="text-[11px] font-semibold text-center leading-tight">{label}</span>
-                  {badge > 0 && <span className="absolute top-2 left-2 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">{badge > 9 ? "9+" : badge}</span>}
+                  {badge > 0 && <span className="absolute top-2 end-2 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">{badge > 9 ? "9+" : badge}</span>}
                 </button>
               ))}
               <button type="button" onClick={() => { setMoreOpen(false); onLogout(); }}
                 className="flex flex-col items-center justify-center gap-2 rounded-2xl py-4 px-2 bg-red-50 text-red-600 hover:bg-red-100 transition-colors">
                 <LogOut className="w-6 h-6" />
-                <span className="text-[11px] font-semibold">تسجيل الخروج</span>
+                <span className="text-[11px] font-semibold">{t("logout")}</span>
               </button>
             </div>
           </div>
@@ -290,24 +314,24 @@ function MobileBottomNav({ activeTab, setActiveTab, refLink, onLogout, unread = 
       )}
 
       {/* Bottom nav bar */}
-      <nav dir="rtl"
+      <nav
         className="md:hidden fixed bottom-0 inset-x-0 z-[60] bg-white border-t border-gray-100 rounded-t-[28px] shadow-[0_-6px_24px_rgba(0,0,0,0.08)]"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         <div className="flex items-end justify-around px-1.5 pt-2 pb-1">
-          <NavItem icon={Home}       label="الرئيسية" active={activeTab === "overview"} onClick={() => go("overview")} />
-          <NavItem icon={TrendingUp} label="الأرباح"  active={activeTab === "payout"}   onClick={() => go("payout")} />
+          <NavItem icon={Home}       label={t("nav_home")}     active={activeTab === "overview"} onClick={() => go("overview")} />
+          <NavItem icon={TrendingUp} label={t("nav_earnings")} active={activeTab === "payout"}   onClick={() => go("payout")} />
 
           {/* Center floating action — copies the referral link */}
           <div className="flex-1 flex flex-col items-center">
-            <button type="button" onClick={share} aria-label="مشاركة رابط الإحالة"
+            <button type="button" onClick={share} aria-label={t("nav_share_aria")}
               className="-mt-7 w-14 h-14 rounded-full bg-violet-600 hover:bg-violet-700 active:scale-90 text-white shadow-lg shadow-violet-300 flex items-center justify-center transition-all">
               <Plus className="w-7 h-7" strokeWidth={2.5} />
             </button>
-            <span className="text-[10px] font-bold text-violet-600 mt-1">مشاركة رابط</span>
+            <span className="text-[10px] font-bold text-violet-600 mt-1">{t("nav_share")}</span>
           </div>
 
-          <NavItem icon={ShoppingBag}    label="المنتجات" active={false}                onClick={() => router.push("/products")} />
-          <NavItem icon={MoreHorizontal} label="المزيد"   active={moreOpen}             onClick={() => setMoreOpen(true)} dot={unread} />
+          <NavItem icon={ShoppingBag}    label={t("nav_products")} active={false}    onClick={() => router.push("/products")} />
+          <NavItem icon={MoreHorizontal} label={t("nav_more")}     active={moreOpen} onClick={() => setMoreOpen(true)} dot={unread} />
         </div>
       </nav>
 
@@ -321,7 +345,7 @@ function MobileBottomNav({ activeTab, setActiveTab, refLink, onLogout, unread = 
 
 // ── Product preview (Part 7 — multi-item inline summary) ──────────────────────
 
-function productPreview(order) {
+function productPreview(order, t) {
   const items = order.orderItems;
   if (!items || items.length === 0) return order.productTitle || '—';
   if (items.length === 1) {
@@ -330,7 +354,7 @@ function productPreview(order) {
   }
   const { productName, quantity } = items[0];
   const rest = items.length - 1;
-  return `${productName} ×${quantity} + ${rest} autre${rest > 1 ? 's' : ''}`;
+  return t(rest > 1 ? 'preview_more_other' : 'preview_more_one', { name: productName, qty: quantity, n: rest });
 }
 
 // ── Phone formatter (+212XXXXXXXXX) ──────────────────────────────────────────
@@ -346,6 +370,7 @@ function formatPhone(raw) {
 // ── Order details modal — call-center style (Parts 2–5) ───────────────────────
 
 function OrderDetailsModal({ order, onClose, onStatusChange, updatingOrder }) {
+  const { t, lang } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
   if (!order) return null;
 
   // shippingAddress shape: { name, phone, address: { city, address1 } }
@@ -370,12 +395,12 @@ function OrderDetailsModal({ order, onClose, onStatusChange, updatingOrder }) {
         {/* ── Header ── */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 shrink-0">
           <div>
-            <h3 className="text-sm font-bold text-gray-900">Détails de la commande</h3>
+            <h3 className="text-sm font-bold text-gray-900">{t("order_details_title")}</h3>
             <p className="text-xs text-gray-400 font-mono mt-0.5">
-              {order.orderId ? `#${order.orderId.slice(0, 8).toUpperCase()}` : 'ID non lié'}
+              {order.orderId ? <bdi>{`#${order.orderId.slice(0, 8).toUpperCase()}`}</bdi> : t("order_unlinked")}
             </p>
           </div>
-          <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
+          <button onClick={onClose} aria-label={t("close")} title={t("close")} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
             <XCircle className="w-4 h-4 text-gray-500" />
           </button>
         </div>
@@ -393,21 +418,21 @@ function OrderDetailsModal({ order, onClose, onStatusChange, updatingOrder }) {
               </div>
               <div className="flex flex-col items-end gap-1 shrink-0">
                 <StatusBadge status={order.status} />
-                <span className="text-[10px] text-gray-400">{fmtDate(order.createdAt)}</span>
+                <span className="text-[10px] text-gray-400">{fmtDate(order.createdAt, lang)}</span>
               </div>
             </div>
 
             {/* Phone + action buttons — Part 3 & 4 */}
             {phone && (
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs font-mono text-gray-600 bg-gray-100 px-2.5 py-1 rounded-lg">
+                <span dir="ltr" className="text-xs font-mono text-gray-600 bg-gray-100 px-2.5 py-1 rounded-lg">
                   {phone}
                 </span>
                 <a
                   href={`tel:${phone}`}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition-colors"
                 >
-                  📞 Appeler
+                  {t("call")}
                 </a>
                 <a
                   href={`https://wa.me/${waPhone}`}
@@ -415,7 +440,7 @@ function OrderDetailsModal({ order, onClose, onStatusChange, updatingOrder }) {
                   rel="noopener noreferrer"
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white text-xs font-semibold rounded-xl transition-colors"
                 >
-                  💬 WhatsApp
+                  {t("whatsapp")}
                 </a>
               </div>
             )}
@@ -424,7 +449,7 @@ function OrderDetailsModal({ order, onClose, onStatusChange, updatingOrder }) {
           {/* Products list */}
           <div className="px-5 pt-4 pb-2">
             <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-3">
-              📦 Produits
+              {t("products_heading")}
             </p>
             <div className="space-y-2">
               {order.orderItems && order.orderItems.length > 0 ? (
@@ -443,10 +468,10 @@ function OrderDetailsModal({ order, onClose, onStatusChange, updatingOrder }) {
                     )}
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-gray-800 leading-snug">{item.productName}</p>
-                      <p className="text-xs text-gray-400 mt-0.5">×{item.quantity} — {fmtMoney(item.price)} / u</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{t("item_line", { qty: item.quantity, price: fmtMoney(item.price, lang) })}</p>
                     </div>
                     <p className="text-sm font-bold text-gray-800 whitespace-nowrap shrink-0">
-                      {fmtMoney(item.price * item.quantity)}
+                      {fmtMoney(item.price * item.quantity, lang)}
                     </p>
                   </div>
                 ))
@@ -461,12 +486,12 @@ function OrderDetailsModal({ order, onClose, onStatusChange, updatingOrder }) {
           {/* Totals */}
           <div className="px-5 py-4 border-t border-gray-100 mt-2 space-y-1.5">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-bold text-gray-900">Total commande</span>
-              <span className="text-base font-black text-gray-900">{fmtMoney(order.total)}</span>
+              <span className="text-sm font-bold text-gray-900">{t("order_total")}</span>
+              <span className="text-base font-black text-gray-900">{fmtMoney(order.total, lang)}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-xs text-gray-500">Commission affilié</span>
-              <span className="text-sm font-bold text-green-700">{fmtMoney(order.commissionAmount)}</span>
+              <span className="text-xs text-gray-500">{t("affiliate_commission")}</span>
+              <span className="text-sm font-bold text-green-700">{fmtMoney(order.commissionAmount, lang)}</span>
             </div>
           </div>
         </div>
@@ -480,7 +505,7 @@ function OrderDetailsModal({ order, onClose, onStatusChange, updatingOrder }) {
                 disabled={updatingOrder === order.id}
                 className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl transition-colors disabled:opacity-50"
               >
-                {updatingOrder === order.id ? '...' : '✅ Confirmer'}
+                {updatingOrder === order.id ? '...' : t("confirm_btn")}
               </button>
             )}
             <button
@@ -488,7 +513,7 @@ function OrderDetailsModal({ order, onClose, onStatusChange, updatingOrder }) {
               disabled={updatingOrder === order.id}
               className="flex-1 py-2.5 bg-red-50 hover:bg-red-100 text-red-700 text-sm font-semibold rounded-xl transition-colors disabled:opacity-50"
             >
-              ❌ Annuler
+              {t("cancel_btn")}
             </button>
           </div>
         )}
@@ -500,6 +525,7 @@ function OrderDetailsModal({ order, onClose, onStatusChange, updatingOrder }) {
 // ── Avatar Upload Component ───────────────────────────────────────────────────
 
 function AvatarUpload({ affiliate, authHeaders, onUpdate }) {
+  const { t, lang } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
   const [uploading, setUploading] = useState(false);
   const [preview,   setPreview]   = useState(null);
   const inputRef = useRef(null);
@@ -524,9 +550,9 @@ function AvatarUpload({ affiliate, authHeaders, onUpdate }) {
         body:    form,
       });
       const json = await res.json();
-      if (!res.ok) { alert(json.error || "Erreur upload"); setPreview(null); return; }
+      if (!res.ok) { alert(json.error ? localizeServerError(json, lang) : t("upload_error")); setPreview(null); return; }
       onUpdate(json.affiliate);
-    } catch { alert("Erreur réseau"); setPreview(null); }
+    } catch { alert(t("network_error")); setPreview(null); }
     finally  { setUploading(false); }
   };
 
@@ -537,7 +563,7 @@ function AvatarUpload({ affiliate, authHeaders, onUpdate }) {
       {/* Avatar preview */}
       <div className="relative w-20 h-20 rounded-2xl overflow-hidden bg-gray-100 flex-shrink-0 border border-gray-200">
         {current ? (
-          <img src={current} alt="avatar" className="w-full h-full object-cover" />
+          <img src={current} alt={t("profile_photo")} className="w-full h-full object-cover" />
         ) : (
           <div className="w-full h-full flex items-center justify-center bg-gray-900">
             <Users className="w-8 h-8 text-white" />
@@ -558,9 +584,9 @@ function AvatarUpload({ affiliate, authHeaders, onUpdate }) {
           onClick={() => inputRef.current?.click()}
           className="px-4 py-2 text-sm font-semibold bg-gray-900 text-white rounded-xl hover:bg-gray-700 transition-colors disabled:opacity-50"
         >
-          {uploading ? "Téléversement…" : "Changer la photo"}
+          {uploading ? t("uploading") : t("change_photo")}
         </button>
-        <p className="text-xs text-gray-400">JPG, PNG — max 2 Mo</p>
+        <p className="text-xs text-gray-400">{t("avatar_hint")}</p>
         <input
           ref={inputRef}
           type="file"
@@ -580,9 +606,9 @@ const RANK_MEDALS  = ['🥇', '🥈', '🥉'];
 // Strips a single leading "demo_"; all other usernames are returned unchanged.
 const displayUsername = (u) => (u || "").replace(/^demo_/, "");
 const GROWTH_BADGE = {
-  aggressive: { label: 'Top Performer',  cls: 'bg-red-100 text-red-700'    },
-  consistent: { label: 'Régulier ⚡',    cls: 'bg-blue-100 text-blue-700'  },
-  slow:       { label: 'En croissance',  cls: 'bg-gray-100 text-gray-600'  },
+  aggressive: { labelKey: 'growth_aggressive', cls: 'bg-red-100 text-red-700'    },
+  consistent: { labelKey: 'growth_consistent', cls: 'bg-blue-100 text-blue-700'  },
+  slow:       { labelKey: 'growth_slow',       cls: 'bg-gray-100 text-gray-600'  },
 };
 
 function DemoAvatar({ name, color, url, size = 'md' }) {
@@ -607,6 +633,8 @@ function DemoAvatar({ name, color, url, size = 'md' }) {
 // ── Demo Affiliate Detail Modal ───────────────────────────────────────────────
 
 function DemoAffiliateModal({ affiliateId, onClose }) {
+  const { t, lang } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
+  const money = (v) => fmtMoney(v ?? 0, lang, { grouped: true });
   const [data,      setData]      = useState(null);
   const [loading,   setLoading]   = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
@@ -631,9 +659,9 @@ function DemoAffiliateModal({ affiliateId, onClose }) {
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <h2 className="text-sm font-bold text-gray-800">
-            {'Profil compétiteur'}
+            {t('competitor_profile')}
           </h2>
-          <button onClick={onClose}
+          <button onClick={onClose} aria-label={t('close')} title={t('close')}
             className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200 transition-colors">
             <XCircle className="w-4 h-4" />
           </button>
@@ -645,26 +673,26 @@ function DemoAffiliateModal({ affiliateId, onClose }) {
           </div>
         ) : !data ? (
           <p className="text-center text-sm text-gray-400 py-12">
-            {'Données introuvables'}
+            {t('data_not_found')}
           </p>
         ) : (
           <div className="flex flex-col max-h-[80vh]">
 
             {/* Identity strip */}
-            <div className="flex items-center gap-3 px-5 py-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-100">
+            <div className="flex items-center gap-3 px-5 py-4 bg-gradient-to-r rtl:bg-gradient-to-l from-gray-50 to-white border-b border-gray-100">
               <DemoAvatar name={data.name} color={data.avatarColor} url={data.avatarUrl} size="lg" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <p className="font-black text-gray-900 text-base truncate">{data.name}</p>
                   {data.rank <= 3 && <span className="text-xl">{RANK_MEDALS[data.rank - 1]}</span>}
                 </div>
-                <p className="text-xs text-gray-400 font-mono">@{displayUsername(data.username)}</p>
+                <p className="text-xs text-gray-400 font-mono"><bdi>@{displayUsername(data.username)}</bdi></p>
                 <div className="flex items-center gap-2 mt-1 flex-wrap">
                   <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-900 text-white">
-                    #{data.rank} {'classement'}
+                    {t('rank_label', { rank: data.rank })}
                   </span>
                   <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${GROWTH_BADGE[data.growthType]?.cls}`}>
-                    {GROWTH_BADGE[data.growthType]?.label}
+                    {GROWTH_BADGE[data.growthType] ? t(GROWTH_BADGE[data.growthType].labelKey) : null}
                   </span>
                 </div>
               </div>
@@ -673,16 +701,16 @@ function DemoAffiliateModal({ affiliateId, onClose }) {
             {/* Tabs */}
             <div className="flex border-b border-gray-100 bg-gray-50">
               {[
-                { id: 'overview', label: 'Aperçu' },
-                { id: 'team',     label: 'Équipe'    },
-                { id: 'earnings', label: 'Gains'   },
-              ].map((t) => (
-                <button key={t.id} onClick={() => setActiveTab(t.id)}
+                { id: 'overview', label: t('tab_overview_short') },
+                { id: 'team',     label: t('tab_team_short')     },
+                { id: 'earnings', label: t('tab_earnings_short') },
+              ].map((tb) => (
+                <button key={tb.id} onClick={() => setActiveTab(tb.id)}
                   className={`flex-1 py-2.5 text-xs font-semibold transition-colors border-b-2
-                    ${activeTab === t.id
+                    ${activeTab === tb.id
                       ? 'border-gray-900 text-gray-900 bg-white'
                       : 'border-transparent text-gray-400 hover:text-gray-700'}`}>
-                  {t.label}
+                  {tb.label}
                 </button>
               ))}
             </div>
@@ -696,10 +724,10 @@ function DemoAffiliateModal({ affiliateId, onClose }) {
                   {/* Main stats */}
                   <div className="grid grid-cols-2 gap-2">
                     {[
-                      { label: 'Commandes totales', value: data.totalOrders,     color: 'text-gray-800' },
-                      { label: 'CA total (MAD)', value: `${Math.round(data.totalRevenue).toLocaleString()} MAD`, color: 'text-amber-700' },
-                      { label: 'Confirmées',           value: data.confirmedOrders, color: 'text-green-700' },
-                      { label: 'Annulées',            value: data.cancelledOrders, color: 'text-red-600'   },
+                      { label: t('demo_total_orders'),  value: data.totalOrders,       color: 'text-gray-800' },
+                      { label: t('demo_total_revenue'), value: money(data.totalRevenue), color: 'text-amber-700' },
+                      { label: t('confirmed_plural'),   value: data.confirmedOrders,   color: 'text-green-700' },
+                      { label: t('cancelled_plural'),   value: data.cancelledOrders,   color: 'text-red-600'   },
                     ].map((s) => (
                       <div key={s.label} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
                         <p className={`text-lg font-black ${s.color}`}>{s.value}</p>
@@ -711,18 +739,18 @@ function DemoAffiliateModal({ affiliateId, onClose }) {
                   {/* Today */}
                   <div className="bg-indigo-50 rounded-xl p-3.5 border border-indigo-100">
                     <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-wider mb-2">
-                      {"Aujourd'hui"}
+                      {t('today')}
                     </p>
                     <div className="flex justify-between items-center">
                       <div>
                         <p className="text-2xl font-black text-indigo-800">{data.todayOrders}</p>
-                        <p className="text-[10px] text-indigo-400">{'commandes'}</p>
+                        <p className="text-[10px] text-indigo-400">{t('orders_lower')}</p>
                       </div>
-                      <div className="text-right">
+                      <div className="text-end">
                         <p className="text-xl font-black text-indigo-700">
-                          {Math.round(data.todayRevenue).toLocaleString()} MAD
+                          {money(data.todayRevenue)}
                         </p>
-                        <p className="text-[10px] text-indigo-400">{'CA aujourd\'hui'}</p>
+                        <p className="text-[10px] text-indigo-400">{t('revenue_today')}</p>
                       </div>
                     </div>
                   </div>
@@ -734,10 +762,10 @@ function DemoAffiliateModal({ affiliateId, onClose }) {
                 <div className="p-4 space-y-3">
                   <div className="grid grid-cols-2 gap-2">
                     {[
-                      { label: 'Taille équipe',        value: data.teamSize,       color: 'text-purple-700' },
-                      { label: 'Cmds équipe',      value: data.teamOrders,     color: 'text-gray-800'   },
-                      { label: 'CA équipe (MAD)',    value: `${Math.round(data.teamRevenue).toLocaleString()} MAD`, color: 'text-amber-700'  },
-                      { label: 'Ta commission 5%',         value: `${Math.round(data.teamCommission).toLocaleString()} MAD`, color: 'text-green-700' },
+                      { label: t('team_size'),    value: data.teamSize,             color: 'text-purple-700' },
+                      { label: t('team_orders'),  value: data.teamOrders,           color: 'text-gray-800'   },
+                      { label: t('team_revenue'), value: money(data.teamRevenue),   color: 'text-amber-700'  },
+                      { label: t('your_commission_pct', { pct: 5 }), value: money(data.teamCommission), color: 'text-green-700' },
                     ].map((s) => (
                       <div key={s.label} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
                         <p className={`text-lg font-black ${s.color}`}>{s.value}</p>
@@ -752,14 +780,14 @@ function DemoAffiliateModal({ affiliateId, onClose }) {
               {activeTab === 'earnings' && (
                 <div className="p-4">
                   <p className="text-[10px] font-bold text-violet-500 uppercase tracking-wider mb-3">
-                    {'Gains UGC (vidéos)'}
+                    {t('ugc_earnings_heading')}
                   </p>
                   <div className="grid grid-cols-2 gap-2">
                     {[
-                      { label: "Gains UGC aujourd'hui",  value: `${Math.round(data.ugcTodayEarnings ?? 0).toLocaleString()} MAD`, color: 'text-violet-700' },
-                      { label: "Ventes UGC aujourd'hui", value: data.ugcTodaySales ?? 0, color: 'text-violet-700' },
-                      { label: 'Gains UGC total', value: `${Math.round(data.ugcTotalEarnings ?? 0).toLocaleString()} MAD`, color: 'text-emerald-700' },
-                      { label: 'Ventes UGC total', value: data.ugcTotalSales ?? 0, color: 'text-emerald-700' },
+                      { label: t('ugc_today_earnings'), value: money(data.ugcTodayEarnings), color: 'text-violet-700' },
+                      { label: t('ugc_today_sales'),    value: data.ugcTodaySales ?? 0,      color: 'text-violet-700' },
+                      { label: t('ugc_total_earnings'), value: money(data.ugcTotalEarnings), color: 'text-emerald-700' },
+                      { label: t('ugc_total_sales'),    value: data.ugcTotalSales ?? 0,      color: 'text-emerald-700' },
                     ].map((s) => (
                       <div key={s.label} className="bg-violet-50 rounded-xl p-3 border border-violet-100">
                         <p className={`text-lg font-black ${s.color}`}>{s.value}</p>
@@ -783,6 +811,7 @@ function DemoAffiliateModal({ affiliateId, onClose }) {
 const REFRESH_SEC = 15;
 
 function CompetitionTab() {
+  const { t, lang } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
   const [leaderboard,  setLeaderboard]  = useState([]);
   const [competition,  setCompetition]  = useState(null);
   const [loading,      setLoading]      = useState(true);
@@ -883,18 +912,18 @@ function CompetitionTab() {
           <div className="flex items-center justify-between flex-wrap gap-3">
             <div>
               <p className="text-indigo-300 text-xs font-semibold uppercase tracking-widest mb-1">
-                {`Cycle #${competition?.cycleNum ?? 1}`}
+                {t('cycle', { n: competition?.cycleNum ?? 1 })}
               </p>
               <h2 className="text-white text-xl font-black">
-                {'🏆 Compétition du mois'}
+                {t('competition_title')}
               </h2>
               <p className="text-indigo-300 text-xs mt-1">
-                {`${competition?.totalParticipants ?? 0} participants · ${daysLeft} jours restants`}
+                {t('competition_meta', { p: competition?.totalParticipants ?? 0, d: daysLeft })}
               </p>
             </div>
             <div className="text-center">
               <p className="text-4xl font-black text-white">{daysLeft}</p>
-              <p className="text-indigo-300 text-xs">{'jours'}</p>
+              <p className="text-indigo-300 text-xs">{t('days')}</p>
             </div>
           </div>
           {competition && (() => {
@@ -913,10 +942,10 @@ function CompetitionTab() {
       <Section
         title={
           <div className="flex items-center justify-between w-full">
-            <span>{'Classement du mois'}</span>
+            <span>{t('leaderboard_title')}</span>
             <span className="flex items-center gap-1.5 text-[10px] font-semibold text-gray-400">
               <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-              {`Live · ${countdown}s`}
+              {t('live_countdown', { n: countdown })}
             </span>
           </div>
         }
@@ -925,15 +954,15 @@ function CompetitionTab() {
         {loading ? (
           <div className="flex items-center justify-center py-10 gap-2">
             <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
-            <span className="text-sm text-gray-400">{'Chargement...'}</span>
+            <span className="text-sm text-gray-400">{t('loading')}</span>
           </div>
         ) : leaderboard.length === 0 ? (
           <div className="text-center py-12">
             <p className="text-gray-400 text-sm">
-              {"Aucun participant pour l'instant."}
+              {t('no_participants')}
             </p>
             <p className="text-gray-400 text-xs mt-1">
-              {'Activez la compétition depuis le panneau admin.'}
+              {t('enable_competition_hint')}
             </p>
           </div>
         ) : (
@@ -951,13 +980,13 @@ function CompetitionTab() {
                   key={a.id}
                   type="button"
                   onClick={() => setSelectedId(a.id)}
-                  className={`${flashCls} w-full text-left flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-all duration-500 hover:shadow-sm active:scale-[0.99] ${baseBg}`}
+                  className={`${flashCls} w-full text-start flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-all duration-500 hover:shadow-sm active:scale-[0.99] ${baseBg}`}
                 >
                   {/* Rank number */}
                   <div className="w-7 text-center shrink-0">
                     {i < 3
                       ? <span className="text-xl">{RANK_MEDALS[i]}</span>
-                      : <span className="text-xs font-black text-gray-400">#{i + 1}</span>}
+                      : <span className="text-xs font-black text-gray-400"><bdi>#{i + 1}</bdi></span>}
                   </div>
 
                   {/* Avatar */}
@@ -969,42 +998,42 @@ function CompetitionTab() {
                       <p className="text-sm font-bold text-gray-800 truncate">{a.name}</p>
                       {a.growthType === 'aggressive' && (
                         <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 whitespace-nowrap">
-                          Top 🔥
+                          {t('badge_top')}
                         </span>
                       )}
                       {/* Rank movement badge */}
                       {delta !== 0 && (
-                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full whitespace-nowrap
+                        <span dir="ltr" className={`text-[9px] font-black px-1.5 py-0.5 rounded-full whitespace-nowrap
                           ${delta > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                           {delta > 0 ? `▲ +${delta}` : `▼ ${delta}`}
                         </span>
                       )}
                       {flash === 'new' && (
                         <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 whitespace-nowrap">
-                          Nouveau
+                          {t('badge_new')}
                         </span>
                       )}
                     </div>
-                    <p className="text-[10px] text-gray-400 font-mono">@{displayUsername(a.username)}</p>
+                    <p className="text-[10px] text-gray-400 font-mono"><bdi>@{displayUsername(a.username)}</bdi></p>
                   </div>
 
                   {/* Stats */}
-                  <div className="text-right shrink-0">
+                  <div className="text-end shrink-0">
                     <p className="text-sm font-black text-gray-800">
                       {a.totalOrders}
-                      <span className="text-xs font-normal text-gray-400 ml-1">{'cmds'}</span>
+                      <span className="text-xs font-normal text-gray-400 ms-1">{t('orders_short')}</span>
                     </p>
-                    <p className="text-xs text-amber-700 font-bold">{Math.round(a.totalRevenue).toLocaleString()} MAD</p>
+                    <p className="text-xs text-amber-700 font-bold">{fmtMoney(a.totalRevenue, lang, { grouped: true })}</p>
                   </div>
 
-                  <ChevronDown className="w-4 h-4 text-gray-300 -rotate-90 shrink-0" />
+                  <ChevronDown className="w-4 h-4 text-gray-300 -rotate-90 rtl:rotate-90 shrink-0" />
                 </button>
               );
             })}
           </div>
         )}
         <p className="text-xs text-gray-400 mt-3">
-          {'Mise à jour automatique toutes les 15 s. Cliquez pour les détails.'}
+          {t('leaderboard_hint', { n: REFRESH_SEC })}
         </p>
       </Section>
 
@@ -1025,6 +1054,7 @@ const CIN_ACCEPT = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
 const CIN_MAX = 5 * 1024 * 1024;
 
 function CinField({ label, side, file, preview, onPick, onClear, disabled }) {
+  const { t } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
   const inputId = `cin-${side}`;
   return (
     <div>
@@ -1034,8 +1064,8 @@ function CinField({ label, side, file, preview, onPick, onClear, disabled }) {
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={preview} alt={label} className="w-full h-40 object-contain bg-gray-100" />
           {!disabled && (
-            <button type="button" onClick={onClear}
-              className="absolute top-2 right-2 bg-white/90 hover:bg-white p-1.5 rounded-lg text-red-600 shadow">
+            <button type="button" onClick={onClear} aria-label={t("remove_image")} title={t("remove_image")}
+              className="absolute top-2 end-2 bg-white/90 hover:bg-white p-1.5 rounded-lg text-red-600 shadow">
               <Trash2 className="w-3.5 h-3.5" />
             </button>
           )}
@@ -1044,7 +1074,7 @@ function CinField({ label, side, file, preview, onPick, onClear, disabled }) {
         <label htmlFor={inputId}
           className={`flex flex-col items-center justify-center h-40 border-2 border-dashed rounded-xl cursor-pointer transition-colors ${disabled ? "opacity-50 pointer-events-none" : "border-gray-200 hover:border-indigo-300 bg-gray-50"}`}>
           <Upload className="w-5 h-5 text-gray-400 mb-1" />
-          <span className="text-xs text-gray-500">JPG, PNG, WEBP · max 5 Mo</span>
+          <span className="text-xs text-gray-500">{t("cin_hint")}</span>
         </label>
       )}
       <input id={inputId} type="file" accept={CIN_ACCEPT.join(",")} className="hidden" disabled={disabled}
@@ -1054,11 +1084,12 @@ function CinField({ label, side, file, preview, onPick, onClear, disabled }) {
 }
 
 function IdentityVerificationCard({ token, status, identity, onDone }) {
+  const { t, lang } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
   const [front, setFront]       = useState(null);
   const [back, setBack]         = useState(null);
   const [frontPrev, setFrontPrev] = useState(null);
   const [backPrev, setBackPrev]   = useState(null);
-  const [err, setErr]           = useState(null);
+  const [err, setErr]           = useState(null); // { key } (dictionary) or { text } (server message)
   const [submitting, setSubmitting] = useState(false);
   const [progress, setProgress] = useState(0);
 
@@ -1067,8 +1098,8 @@ function IdentityVerificationCard({ token, status, identity, onDone }) {
 
   const validate = (f) => {
     if (!f) return null;
-    if (!CIN_ACCEPT.includes(f.type)) return "Format non supporté (JPG, PNG ou WEBP).";
-    if (f.size > CIN_MAX) return "Fichier trop volumineux (max 5 Mo).";
+    if (!CIN_ACCEPT.includes(f.type)) return { key: "cin_bad_format" };
+    if (f.size > CIN_MAX) return { key: "cin_too_big" };
     return null;
   };
   const pick = (which) => (f) => {
@@ -1101,48 +1132,50 @@ function IdentityVerificationCard({ token, status, identity, onDone }) {
         setFront(null); setBack(null); setFrontPrev(null); setBackPrev(null); setProgress(0);
         onDone?.();
       } else {
-        let m = "Échec de l'envoi.";
-        try { m = JSON.parse(xhr.responseText)?.error || m; } catch {}
+        let m = { key: "send_failed" };
+        try { const b = JSON.parse(xhr.responseText); if (b?.error) m = { text: b.error, code: b.code }; } catch {}
         setErr(m);
       }
     };
-    xhr.onerror = () => { setSubmitting(false); setErr("Erreur réseau."); };
+    xhr.onerror = () => { setSubmitting(false); setErr({ key: "network_error" }); };
     xhr.send(fd);
   };
 
   return (
-    <Section title="Vérification d'identité" icon={ShieldCheck}>
+    <Section title={t("identity_title")} icon={ShieldCheck}>
       <div className="space-y-4">
         <div className="flex items-center gap-2">
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold"
             style={{ color: ui.color, background: ui.bg }}>
-            <span>{ui.emoji}</span> {ui.label}
+            <span>{ui.emoji}</span> {t(ui.labelKey)}
           </span>
         </div>
 
         <p className="text-xs text-gray-500">
-          Pour sécuriser votre compte et débloquer les retraits, veuillez envoyer une pièce d'identité valide.
+          {t("identity_intro")}
         </p>
 
         {status === "APPROVED" ? (
           <div className="rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm px-4 py-3">
-            ✅ Identité vérifiée{identity?.approvedAt ? ` le ${fmtDate(identity.approvedAt)}` : ""}. Vos documents sont verrouillés.
+            {identity?.approvedAt
+              ? t("identity_approved_on", { date: fmtDate(identity.approvedAt, lang) })
+              : t("identity_approved_nodate")}
           </div>
         ) : status === "PENDING" ? (
           <div className="rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm px-4 py-3">
-            🟡 Votre vérification est en cours d'examen. Vous serez notifié après la décision.
+            {t("identity_pending_msg")}
           </div>
         ) : (
           <>
             {status === "REJECTED" && identity?.rejectionReason && (
               <div className="rounded-xl bg-red-50 border border-red-200 text-red-800 text-sm px-4 py-3">
-                ❌ Refusée — motif : {identity.rejectionReason}. Vous pouvez renvoyer de nouvelles images.
+                {t("identity_rejected_msg", { reason: identity.rejectionReason })}
               </div>
             )}
-            {err && <div className="rounded-lg bg-red-50 text-red-700 text-xs px-3 py-2">{err}</div>}
+            {err && <div className="rounded-lg bg-red-50 text-red-700 text-xs px-3 py-2">{err.key ? t(err.key) : localizeServerError(err, lang)}</div>}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <CinField label="Recto de la CIN" side="front" file={front} preview={frontPrev} onPick={pick("front")} onClear={clear("front")} disabled={locked || submitting} />
-              <CinField label="Verso de la CIN" side="back" file={back} preview={backPrev} onPick={pick("back")} onClear={clear("back")} disabled={locked || submitting} />
+              <CinField label={t("cin_front")} side="front" file={front} preview={frontPrev} onPick={pick("front")} onClear={clear("front")} disabled={locked || submitting} />
+              <CinField label={t("cin_back")} side="back" file={back} preview={backPrev} onPick={pick("back")} onClear={clear("back")} disabled={locked || submitting} />
             </div>
 
             {submitting && (
@@ -1158,7 +1191,7 @@ function IdentityVerificationCard({ token, status, identity, onDone }) {
               className="flex items-center gap-2 px-5 py-2.5 bg-gray-900 hover:bg-black text-white rounded-xl text-sm font-semibold disabled:opacity-50"
             >
               {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
-              {submitting ? `Envoi… ${progress}%` : "Envoyer pour vérification"}
+              {submitting ? t("sending_progress", { n: progress }) : t("send_for_verification")}
             </button>
           </>
         )}
@@ -1167,19 +1200,25 @@ function IdentityVerificationCard({ token, status, identity, onDone }) {
   );
 }
 
+const SUPPORT_TOPIC_KEYS = [
+  "support_topic_orders", "support_topic_commissions", "support_topic_payouts", "support_topic_identity",
+  "support_topic_ugc", "support_topic_competition", "support_topic_tech",
+];
+
 function WhatsappSupportCard({ link }) {
+  const { t } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
   return (
-    <Section title="Support WhatsApp" icon={MessageCircle}>
+    <Section title={t("support_title")} icon={MessageCircle}>
       <div className="space-y-3">
-        <p className="text-xs text-gray-500">Notre équipe est disponible pour vous aider concernant :</p>
+        <p className="text-xs text-gray-500">{t("support_intro")}</p>
         <ul className="text-xs text-gray-600 grid grid-cols-2 gap-1.5">
-          {["Commandes", "Commissions", "Retraits", "Vérification d'identité", "UGC", "Compétition", "Problèmes techniques"].map((t) => (
-            <li key={t} className="flex items-center gap-1.5"><span className="text-green-500">•</span>{t}</li>
+          {SUPPORT_TOPIC_KEYS.map((k) => (
+            <li key={k} className="flex items-center gap-1.5"><span className="text-green-500">•</span>{t(k)}</li>
           ))}
         </ul>
         <a href={link} target="_blank" rel="noopener noreferrer"
           className="inline-flex items-center gap-2 px-5 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold">
-          <MessageCircle className="w-4 h-4" /> Contacter le support WhatsApp
+          <MessageCircle className="w-4 h-4" /> {t("support_contact")}
         </a>
       </div>
     </Section>
@@ -1190,6 +1229,19 @@ function WhatsappSupportCard({ link }) {
 
 export default function AffiliateDashboard() {
   const router = useRouter();
+  // Market language (🇲🇦 → Arabic RTL, 🇫🇷 → French LTR) — the existing site language.
+  const { lang, t, intlLocale } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
+  const money = (n, opts) => fmtMoney(n, lang, opts);
+  const date = (iso) => fmtDate(iso, lang);
+  // Feedback messages are kept as { key, vars } (dictionary — re-rendered in the
+  // current language) or { text, code } (server message, localized at display time:
+  // known server templates → market language, anything else as sent).
+  const msgText = (m) => {
+    if (!m) return null;
+    if (!m.key) return localizeServerError(m, lang);
+    const vars = m.vars && m.vars.amount != null ? { ...m.vars, amount: money(m.vars.amount) } : m.vars;
+    return t(m.key, vars);
+  };
 
   const [affiliateId, setAffiliateId] = useState(null);
   const [token,       setToken]       = useState(null);
@@ -1203,7 +1255,7 @@ export default function AffiliateDashboard() {
   const [claiming,   setClaiming]   = useState(false);
   const [claimMsg,   setClaimMsg]   = useState(null);
   const [loading,    setLoading]    = useState(true);
-  const [error,      setError]      = useState(null);
+  const [error,      setError]      = useState(null);  // dictionary key
 
   // WhatsApp support config (read once from platform settings — no polling).
   const [supportCfg, setSupportCfg] = useState(null);
@@ -1235,8 +1287,8 @@ export default function AffiliateDashboard() {
   const [activeBoosters, setActiveBoosters] = useState([]);
   useEffect(() => {
     if (activeTab !== "payout" && activeTab !== "overview") return;
-    const t = localStorage.getItem("affiliateToken") || "";
-    fetch("/api/affiliate/boosters", { headers: { Authorization: `Bearer ${t}` }, cache: "no-store" })
+    const tk = localStorage.getItem("affiliateToken") || "";
+    fetch("/api/affiliate/boosters", { headers: { Authorization: `Bearer ${tk}` }, cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         setBoosterPurchases(Array.isArray(d?.purchases) ? d.purchases : []);
@@ -1248,7 +1300,6 @@ export default function AffiliateDashboard() {
   // Order status update
   const [updatingOrder, setUpdatingOrder] = useState(null);
   // Feedback when the server refuses a status change (404 not yours / 409 locked).
-  const { lang } = useLanguage();
   const [orderNotice, setOrderNotice] = useState(null);
   const orderNoticeTimer = useRef(null);
   const showOrderNotice = (message) => {
@@ -1352,7 +1403,7 @@ export default function AffiliateDashboard() {
       }
     } catch {
       if (silent) setLiveConnected(false);       // will reconnect on the next tick
-      else setError("Impossible de charger les données. Réessayez.");
+      else setError("load_error");
     } finally {
       if (!silent) setLoading(false);
     }
@@ -1441,7 +1492,7 @@ export default function AffiliateDashboard() {
     const willExpand = !expandedMembers.has(memberId);
     setExpandedMembers((prev) => {
       const next = new Set(prev);
-      willExpand ? next.add(memberId) : next.delete(memberId);
+      if (willExpand) next.add(memberId); else next.delete(memberId);
       return next;
     });
     if (!willExpand) return;
@@ -1524,10 +1575,10 @@ export default function AffiliateDashboard() {
         setBankSuccess(true);
         setTimeout(() => setBankSuccess(false), 3000);
       } else {
-        setBankError(d.error || "Erreur");
+        setBankError(d.error ? { text: d.error, code: d.code } : { key: "error" });
       }
     } catch {
-      setBankError("Erreur réseau");
+      setBankError({ key: "network_error" });
     } finally {
       setBankSaving(false);
     }
@@ -1547,14 +1598,14 @@ export default function AffiliateDashboard() {
       });
       const d = await res.json();
       if (res.ok) {
-        setPayoutMsg({ type: "success", text: "Demande de retrait envoyée avec succès !" });
+        setPayoutMsg({ type: "success", key: "payout_success" });
         setPayoutAmount("");
         fetchAll(token);
       } else {
-        setPayoutMsg({ type: "error", text: d.error || "Erreur" });
+        setPayoutMsg(d.error ? { type: "error", text: d.error, code: d.code } : { type: "error", key: "error" });
       }
     } catch {
-      setPayoutMsg({ type: "error", text: "Erreur réseau" });
+      setPayoutMsg({ type: "error", key: "network_error" });
     } finally {
       setPayoutLoading(false);
     }
@@ -1608,9 +1659,9 @@ export default function AffiliateDashboard() {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl border border-gray-100 p-8 max-w-sm w-full text-center space-y-4">
           <AlertCircle className="w-10 h-10 text-red-400 mx-auto" />
-          <p className="text-gray-700 text-sm">{error}</p>
+          <p className="text-gray-700 text-sm">{t(error)}</p>
           <button onClick={() => fetchAll(token)} className="px-6 py-2 bg-gray-900 text-white rounded-xl text-sm font-semibold">
-            Réessayer
+            {t("retry")}
           </button>
         </div>
       </div>
@@ -1683,17 +1734,17 @@ export default function AffiliateDashboard() {
   // ── Tabs ─────────────────────────────────────────────────────────────────
 
   const tabs = [
-    { id: "overview",      label: "Vue d'ensemble" },
-    { id: "orders",        label: `Commandes (${orders.length})` },
-    { id: "bank",          label: "Coordonnées" },
-    { id: "payout",        label: "Retraits" },
-    { id: "deposit",       label: "💰 Dépôt de solde" },
-    { id: "brand",         label: "🏪 Créez votre marque" },
-    { id: "rewards",       label: "🎁 Récompenses" },
-    { id: "ugc",           label: "💰 Video UGC" },
-    { id: "notifications", label: `Notifs ${unread > 0 ? `(${unread})` : ""}` },
-    { id: "team",          label: `Équipe (${team.length})` },
-    { id: "settings",      label: "Paramètres" },
+    { id: "overview",      label: t("tab_overview") },
+    { id: "orders",        label: t("tab_orders", { n: orders.length }) },
+    { id: "bank",          label: t("tab_bank") },
+    { id: "payout",        label: t("tab_payout") },
+    { id: "deposit",       label: t("tab_deposit") },
+    { id: "brand",         label: t("tab_brand") },
+    { id: "rewards",       label: t("tab_rewards") },
+    { id: "ugc",           label: t("tab_ugc") },
+    { id: "notifications", label: unread > 0 ? t("tab_notifications_count", { n: unread }) : t("tab_notifications") },
+    { id: "team",          label: t("tab_team", { n: team.length }) },
+    { id: "settings",      label: t("tab_settings") },
   ];
 
   return (
@@ -1707,10 +1758,11 @@ export default function AffiliateDashboard() {
             <button
               onClick={() => setActiveTab("settings")}
               className="w-8 h-8 rounded-xl overflow-hidden flex-shrink-0 focus:outline-none"
-              title="Paramètres"
+              title={t("settings")}
+              aria-label={t("settings")}
             >
               {affiliate?.avatarUrl ? (
-                <img src={affiliate.avatarUrl} alt="avatar"
+                <img src={affiliate.avatarUrl} alt={t("profile_photo")}
                   className="w-full h-full object-cover" />
               ) : (
                 <div className="w-full h-full bg-gray-900 flex items-center justify-center">
@@ -1719,8 +1771,8 @@ export default function AffiliateDashboard() {
               )}
             </button>
             <div className="hidden sm:block">
-              <p className="text-sm font-bold text-gray-900 leading-none">Tableau de bord</p>
-              <p className="text-xs text-gray-500">@{affiliate?.username}</p>
+              <p className="text-sm font-bold text-gray-900 leading-none">{t("dashboard_title")}</p>
+              <p className="text-xs text-gray-500"><bdi>@{affiliate?.username}</bdi></p>
             </div>
           </div>
 
@@ -1731,7 +1783,8 @@ export default function AffiliateDashboard() {
                 href={supportLink}
                 target="_blank"
                 rel="noopener noreferrer"
-                title="Support WhatsApp"
+                title={t("support_title")}
+                aria-label={t("support_title")}
                 className="p-2 rounded-xl transition-colors text-green-600 hover:text-green-700 hover:bg-green-50"
               >
                 <MessageCircle className="w-4 h-4" />
@@ -1741,11 +1794,13 @@ export default function AffiliateDashboard() {
             {/* Notifications bell */}
             <button
               onClick={() => { setActiveTab("notifications"); markNotifsRead(); }}
+              title={t("notifications")}
+              aria-label={t("notifications")}
               className="relative p-2 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-xl transition-colors"
             >
               <Bell className="w-4 h-4" />
               {unread > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center">
+                <span className="absolute -top-0.5 -end-0.5 w-4 h-4 bg-red-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center">
                   {unread > 9 ? "9+" : unread}
                 </span>
               )}
@@ -1754,7 +1809,7 @@ export default function AffiliateDashboard() {
             {/* Live indicator — green pulse when the background feed is healthy,
                 amber when the last poll failed (auto-reconnects next tick). */}
             <span
-              title={liveConnected ? "En direct" : "Reconnexion…"}
+              title={liveConnected ? t("live_title") : t("reconnecting")}
               className="hidden sm:inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[11px] font-semibold"
               style={{ color: liveConnected ? "#059669" : "#b45309", background: liveConnected ? "#ecfdf5" : "#fffbeb" }}
             >
@@ -1762,12 +1817,14 @@ export default function AffiliateDashboard() {
                 className={`w-1.5 h-1.5 rounded-full ${liveConnected ? "animate-pulse" : ""}`}
                 style={{ background: liveConnected ? "#10b981" : "#f59e0b" }}
               />
-              {liveConnected ? "Live" : "…"}
+              {liveConnected ? t("live_badge") : "…"}
             </span>
 
             {/* Refresh (manual fallback — always available) */}
             <button
               onClick={() => fetchAll(token)}
+              title={t("refresh")}
+              aria-label={t("refresh")}
               className="p-2 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-xl transition-colors"
             >
               <RefreshCw className="w-4 h-4" />
@@ -1781,7 +1838,8 @@ export default function AffiliateDashboard() {
                   ? "bg-gray-900 text-white"
                   : "text-gray-500 hover:text-gray-800 hover:bg-gray-100"
               }`}
-              title="Paramètres"
+              title={t("settings")}
+              aria-label={t("settings")}
             >
               <Settings className="w-4 h-4" />
             </button>
@@ -1789,10 +1847,11 @@ export default function AffiliateDashboard() {
             {/* Logout */}
             <button
               onClick={handleLogout}
+              aria-label={t("logout")}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-600 bg-red-50 hover:bg-red-100 rounded-xl transition-colors font-semibold"
             >
               <LogOut className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Déconnexion</span>
+              <span className="hidden sm:inline">{t("logout")}</span>
             </button>
           </div>
         </div>
@@ -1802,16 +1861,16 @@ export default function AffiliateDashboard() {
 
         {/* ── Tab nav ── */}
         <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-hide">
-          {tabs.map((t) => (
+          {tabs.map((tb) => (
             <button
-              key={t.id}
-              onClick={() => setActiveTab(t.id)}
+              key={tb.id}
+              onClick={() => setActiveTab(tb.id)}
               className={`whitespace-nowrap px-4 py-2 rounded-xl text-xs font-semibold transition-colors
-                ${activeTab === t.id
+                ${activeTab === tb.id
                   ? "bg-gray-900 text-white"
                   : "bg-white border border-gray-200 text-gray-600 hover:border-gray-400"}`}
             >
-              {t.label}
+              {tb.label}
             </button>
           ))}
         </div>
@@ -1825,22 +1884,22 @@ export default function AffiliateDashboard() {
               <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl p-4 text-white"
                 style={{ background: "linear-gradient(135deg, #0f5f52 0%, #1a7a69 60%, #0d4d43 100%)" }}>
 
-                {/* Left: greeting + reward */}
+                {/* Start side: greeting + reward */}
                 <div className="flex items-center gap-3">
                   <span className="text-4xl select-none">🏆</span>
                   <div>
-                    <p className="text-xs opacity-80">Bonjour, {affiliate.name || affiliate.username}</p>
+                    <p className="text-xs opacity-80">{t("greeting", { name: affiliate.name || affiliate.username })}</p>
                     <h3 className="text-sm font-bold md:text-base">
-                      Gagnez {((affiliate.commissionRate || 0) * 100).toFixed(0)}% sur chaque commande livrée
+                      {t("earn_rate_headline", { pct: ((affiliate.commissionRate || 0) * 100).toFixed(0) })}
                     </h3>
                   </div>
                 </div>
 
-                {/* Right: progress bars */}
+                {/* End side: progress bars */}
                 <div className="flex w-full flex-col gap-2 self-start lg:w-auto lg:min-w-72">
                   <div className="flex items-center justify-between text-xs font-medium opacity-80">
-                    <span>Votre progression</span>
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <span>{t("your_progress")}</span>
+                    <svg className="w-4 h-4 rtl:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M14.43 5.93L20.5 12l-6.07 6.07M3.5 12h16.83"/>
                     </svg>
                   </div>
@@ -1848,7 +1907,7 @@ export default function AffiliateDashboard() {
                   {/* Orders progress */}
                   <div>
                     <p className="mb-1.5 text-xs font-bold">
-                      {stats?.validReferrals ?? 0} / {gami?.target || 5} parrainages valides
+                      {t("valid_referrals_progress", { frac: frac(stats?.validReferrals ?? 0, gami?.target || 5) })}
                     </p>
                     <div className="w-full overflow-hidden rounded-full h-2" style={{ background: "rgba(255,255,255,0.25)" }}>
                       <div className="h-full rounded-full bg-white transition-all duration-700"
@@ -1859,7 +1918,7 @@ export default function AffiliateDashboard() {
                   {/* Orders objective — counts delivered orders only (same basis as commissions) */}
                   <div>
                     <p className="mb-1.5 text-xs font-bold">
-                      {affiliate?.deliveredOrdersCount ?? 0} / {affiliate?.goalOrders || 5} commandes
+                      {t("orders_progress", { frac: frac(affiliate?.deliveredOrdersCount ?? 0, affiliate?.goalOrders || 5) })}
                     </p>
                     <div className="w-full overflow-hidden rounded-full h-2" style={{ background: "rgba(255,255,255,0.25)" }}>
                       <div className="h-full rounded-full bg-white transition-all duration-700"
@@ -1869,10 +1928,10 @@ export default function AffiliateDashboard() {
 
                   {/* UGC validated videos — click → UGC page. Only admin-approved
                       (APPROVED/RUNNING) videos count; pending/rejected excluded. */}
-                  <button onClick={goToUgc} title="Vidéos UGC validées" className="block w-full text-left">
+                  <button onClick={goToUgc} title={t("ugc_progress_title")} className="block w-full text-start">
                     <p className="mb-1.5 text-xs font-bold flex items-center justify-between gap-2">
-                      <span>🎬 {ugcValidated} / {ugcGoal} vidéos UGC validées</span>
-                      <svg className="w-3.5 h-3.5 opacity-80" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+                      <span>{t("ugc_progress", { frac: frac(ugcValidated, ugcGoal) })}</span>
+                      <svg className="w-3.5 h-3.5 opacity-80 rtl:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg>
                     </p>
                     <div className="w-full overflow-hidden rounded-full h-2" style={{ background: "rgba(255,255,255,0.25)" }}>
                       <div className="h-full rounded-full bg-white transition-all duration-700"
@@ -1883,15 +1942,15 @@ export default function AffiliateDashboard() {
                   {/* Identity verification condition — click → Paramètres → Vérification */}
                   <button
                     onClick={goToIdentity}
-                    title="Vérification d'identité"
-                    className="mt-1 flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition-colors"
+                    title={t("identity_title")}
+                    className="mt-1 flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-start transition-colors"
                     style={{ background: "rgba(255,255,255,0.18)" }}
                   >
                     <span className="flex items-center gap-1.5 text-xs font-bold">
                       <span>{IDENTITY_UI[identityStatus].emoji}</span>
-                      <span>{IDENTITY_UI[identityStatus].label}</span>
+                      <span>{t(IDENTITY_UI[identityStatus].labelKey)}</span>
                     </span>
-                    <svg className="w-3.5 h-3.5 opacity-80" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+                    <svg className="w-3.5 h-3.5 opacity-80 rtl:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg>
                   </button>
                 </div>
               </div>
@@ -1903,35 +1962,35 @@ export default function AffiliateDashboard() {
             {/* ── BOUTIQUE (store / order) earnings — unchanged calculations ── */}
             <div className="flex items-center gap-2 px-0.5">
               <ShoppingBag className="w-4 h-4 text-gray-400" />
-              <h2 className="text-sm font-bold text-gray-700">Boutique (commandes)</h2>
+              <h2 className="text-sm font-bold text-gray-700">{t("shop_heading")}</h2>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-              <StatCard icon={ShoppingBag} label="Commandes boutique aujourd'hui" value={stats?.todaySales  ?? "—"} color="blue"   />
-              <StatCard icon={CheckCircle} label="Confirmées"           value={stats?.confirmed   ?? "—"} color="green"  />
-              <StatCard icon={XCircle}     label="Annulées"             value={stats?.cancelled   ?? "—"} color="red"    />
-              <StatCard icon={Truck}       label="En livraison"         value={stats?.shipping    ?? "—"} color="purple" />
-              <StatCard icon={Package}     label="Livrées"              value={stats?.delivered   ?? "—"} color="teal"   />
-              <StatCard icon={TrendingUp}  label="Chiffre d'affaires boutique" value={fmtMoney(stats?.totalRevenue)} color="amber" />
-              <StatCard icon={DollarSign}  label="Gains boutique total" value={fmtMoney(stats?.totalCommission)} color="green"
-                sub={`Taux : ${((affiliate?.commissionRate || 0) * 100).toFixed(0)}%`} />
-              <StatCard icon={CreditCard}  label="Solde disponible"     value={fmtMoney(balance)}                color="blue"   />
+              <StatCard icon={ShoppingBag} label={t("stat_shop_today")}    value={stats?.todaySales  ?? "—"} color="blue"   />
+              <StatCard icon={CheckCircle} label={t("confirmed_plural")}   value={stats?.confirmed   ?? "—"} color="green"  />
+              <StatCard icon={XCircle}     label={t("cancelled_plural")}   value={stats?.cancelled   ?? "—"} color="red"    />
+              <StatCard icon={Truck}       label={t("status_shipped")}     value={stats?.shipping    ?? "—"} color="purple" />
+              <StatCard icon={Package}     label={t("delivered_plural")}   value={stats?.delivered   ?? "—"} color="teal"   />
+              <StatCard icon={TrendingUp}  label={t("stat_shop_revenue")}  value={money(stats?.totalRevenue)} color="amber" />
+              <StatCard icon={DollarSign}  label={t("stat_shop_earnings")} value={money(stats?.totalCommission)} color="green"
+                sub={t("stat_rate", { pct: ((affiliate?.commissionRate || 0) * 100).toFixed(0) })} />
+              <StatCard icon={CreditCard}  label={t("stat_balance")}       value={money(balance)}                color="blue"   />
               {/* Tracking stats */}
-              <StatCard icon={Eye}         label="Total clics"          value={stats?.totalClicks ?? affiliate?.totalClicks ?? "—"} color="blue"   />
-              <StatCard icon={ShoppingBag} label="Ventes boutique total" value={orders.length > 0 ? totalItemsAll : (stats?.totalOrders ?? affiliate?.totalOrders ?? "—")} color="teal" sub="articles commandés" />
-              <StatCard icon={TrendingUp}  label="Taux de conversion"   value={stats?.conversionRate != null ? `${stats.conversionRate}%` : "—"} color="amber"
-                sub="commandes / clics" />
-              <StatCard icon={Users}       label="Commission Équipe"    value={fmtMoney(stats?.teamCommission)} color="teal"
-                sub={`${team.length} membre${team.length !== 1 ? "s" : ""}`} />
+              <StatCard icon={Eye}         label={t("stat_clicks")}        value={stats?.totalClicks ?? affiliate?.totalClicks ?? "—"} color="blue"   />
+              <StatCard icon={ShoppingBag} label={t("stat_shop_sales")}    value={orders.length > 0 ? totalItemsAll : (stats?.totalOrders ?? affiliate?.totalOrders ?? "—")} color="teal" sub={t("stat_items_ordered")} />
+              <StatCard icon={TrendingUp}  label={t("stat_conversion")}    value={stats?.conversionRate != null ? `${stats.conversionRate}%` : "—"} color="amber"
+                sub={t("stat_conversion_sub")} />
+              <StatCard icon={Users}       label={t("stat_team_commission")} value={money(stats?.teamCommission)} color="teal"
+                sub={t(team.length !== 1 ? "members_other" : "members_one", { n: team.length })} />
             </div>
 
             {/* 🚀 Active Booster widget → opens the Booster page */}
             {activeBoosters.map((b) => (
-              <button key={b.id} onClick={() => setActiveTab("booster")} className="w-full text-left">
-                <div dir="rtl" className="rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-600 text-white p-4 hover:brightness-110 transition-all">
+              <button key={b.id} onClick={() => setActiveTab("booster")} className="w-full text-start">
+                <div className="rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-600 text-white p-4 hover:brightness-110 transition-all">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-sm font-black">🚀 {b.packageName}</span>
                     <span className="text-[11px] font-bold bg-white/15 rounded-full px-2 py-0.5">
-                      {b.daysLeft != null ? `ينتهي بعد ${b.daysLeft} يوم` : "نشطة"}
+                      {b.daysLeft != null ? t("booster_ends_in", { n: b.daysLeft }) : t("booster_active")}
                     </span>
                   </div>
                   {b.target ? (
@@ -1940,50 +1999,50 @@ export default function AffiliateDashboard() {
                         <div className="h-full rounded-full bg-white transition-all duration-700" style={{ width: `${b.percent ?? 0}%` }} />
                       </div>
                       <div className="flex items-center justify-between mt-1.5 text-xs font-black">
-                        <span>{b.sales} / {b.target}</span>
+                        <span>{frac(b.sales, b.target)}</span>
                         <span>{b.percent ?? 0}%</span>
                       </div>
                     </>
                   ) : (
-                    <p className="text-xs opacity-80 mt-2">{b.sales} مبيعات منذ التفعيل</p>
+                    <p className="text-xs opacity-80 mt-2">{t("booster_sales_since", { n: b.sales })}</p>
                   )}
                 </div>
               </button>
             ))}
 
             {/* ── 💰 Dépôt de solde — balance top-up (credited after validation) ── */}
-            <button onClick={goToDeposit} className="w-full text-left">
+            <button onClick={goToDeposit} className="w-full text-start">
               <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4 flex items-center justify-between gap-3 hover:bg-indigo-50 transition-colors">
                 <div>
                   <div className="flex items-center gap-2 text-indigo-700 text-xs font-semibold">
-                    <Wallet className="w-4 h-4" /> 💰 Dépôt de solde
+                    <Wallet className="w-4 h-4" /> {t("deposit_title")}
                   </div>
-                  <p className="text-2xl font-black text-gray-900 mt-1">{fmtMoney(deposit.approvedBalance)}</p>
+                  <p className="text-2xl font-black text-gray-900 mt-1">{money(deposit.approvedBalance)}</p>
                   {deposit.pendingTotal > 0 && (
                     <p className="text-[11px] font-semibold text-amber-600 mt-0.5">
-                      En attente de validation : {fmtMoney(deposit.pendingTotal)}
+                      {t("deposit_pending", { amount: money(deposit.pendingTotal) })}
                     </p>
                   )}
-                  <p className="text-[10px] text-gray-400 mt-0.5">Rechargez votre solde disponible · crédité après validation</p>
+                  <p className="text-[10px] text-gray-400 mt-0.5">{t("deposit_hint")}</p>
                 </div>
-                <svg className="w-4 h-4 text-indigo-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+                <svg className="w-4 h-4 text-indigo-400 shrink-0 rtl:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg>
               </div>
             </button>
 
             {/* ── UGC (simulated video sales) — separate source, never mixed ── */}
             <div className="flex items-center gap-2 px-0.5 pt-1">
               <Video className="w-4 h-4 text-violet-500" />
-              <h2 className="text-sm font-bold text-gray-700">UGC (vidéos)</h2>
+              <h2 className="text-sm font-bold text-gray-700">{t("ugc_heading")}</h2>
               <span className="px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-700 text-[10px] font-bold">UGC</span>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-              <StatCard icon={Wallet}      label="Gains UGC aujourd'hui"  value={fmtMoney(ugcStats?.todayEarnings)} color="purple" sub="UGC" />
-              <StatCard icon={Video}       label="Ventes UGC aujourd'hui" value={ugcStats?.todaySales ?? "—"}       color="purple" sub="UGC" />
-              <StatCard icon={DollarSign}  label="Gains UGC total"        value={fmtMoney(ugcStats?.totalEarnings)} color="purple" sub="UGC" />
-              <StatCard icon={TrendingUp}  label="Ventes UGC total"       value={ugcStats?.totalSales ?? "—"}       color="purple" sub="UGC" />
+              <StatCard icon={Wallet}      label={t("ugc_today_earnings")} value={money(ugcStats?.todayEarnings)} color="purple" sub="UGC" />
+              <StatCard icon={Video}       label={t("ugc_today_sales")}    value={ugcStats?.todaySales ?? "—"}    color="purple" sub="UGC" />
+              <StatCard icon={DollarSign}  label={t("ugc_total_earnings")} value={money(ugcStats?.totalEarnings)} color="purple" sub="UGC" />
+              <StatCard icon={TrendingUp}  label={t("ugc_total_sales")}    value={ugcStats?.totalSales ?? "—"}    color="purple" sub="UGC" />
             </div>
 
-            {/* 🔥 النشاط المباشر — same shared server-side Live Activity engine as
+            {/* 🔥 Live activity — same shared server-side Live Activity engine as
                 the landing page (GET /api/live-activity). Placed below the stats. */}
             <LiveActivity windowSize={4} showViewAll />
 
@@ -1996,39 +2055,39 @@ export default function AffiliateDashboard() {
 
             {/* Last 5 orders */}
             {orders.length > 0 && (
-              <Section title="Dernières commandes" icon={ShoppingBag}>
+              <Section title={t("last_orders")} icon={ShoppingBag}>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-gray-100">
-                        {["ID","Client","Nb articles","Produit","Statut","Total","Commission","Date","Voir"].map((h) => (
-                          <th key={h} className="text-left text-xs text-gray-500 font-semibold pb-2 pr-4 whitespace-nowrap">{h}</th>
+                        {["col_id","col_client","col_items","col_product","col_status","col_total","col_commission","col_date","col_view"].map((h) => (
+                          <th key={h} className="text-start text-xs text-gray-500 font-semibold pb-2 pe-4 whitespace-nowrap">{t(h)}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
                       {orders.slice(0, 5).map((o) => (
                         <tr key={o.id} className="hover:bg-gray-50 transition-colors">
-                          <td className="py-2.5 pr-4 font-mono text-xs text-gray-400 whitespace-nowrap">
-                            {o.orderId ? `#${o.orderId.slice(0, 8).toUpperCase()}` : "—"}
+                          <td className="py-2.5 pe-4 font-mono text-xs text-gray-400 whitespace-nowrap">
+                            {o.orderId ? <bdi>{`#${o.orderId.slice(0, 8).toUpperCase()}`}</bdi> : "—"}
                           </td>
-                          <td className="py-2.5 pr-4 text-gray-800 font-medium whitespace-nowrap">{o.clientName || "—"}</td>
-                          <td className="py-2.5 pr-4 whitespace-nowrap">
+                          <td className="py-2.5 pe-4 text-gray-800 font-medium whitespace-nowrap">{o.clientName || "—"}</td>
+                          <td className="py-2.5 pe-4 whitespace-nowrap">
                             <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700">
                               {o.totalItems > 0 ? o.totalItems : 1}
                             </span>
                           </td>
-                          <td className="py-2.5 pr-4 text-gray-600 max-w-[150px] truncate text-xs">{productPreview(o)}</td>
-                          <td className="py-2.5 pr-4"><StatusBadge status={o.status} /></td>
-                          <td className="py-2.5 pr-4 font-semibold whitespace-nowrap">{fmtMoney(o.total)}</td>
-                          <td className="py-2.5 pr-4 text-green-700 font-semibold whitespace-nowrap">{fmtMoney(o.commissionAmount)}</td>
-                          <td className="py-2.5 pr-4 text-xs text-gray-400 whitespace-nowrap">{fmtDate(o.createdAt)}</td>
+                          <td className="py-2.5 pe-4 text-gray-600 max-w-[150px] truncate text-xs">{productPreview(o, t)}</td>
+                          <td className="py-2.5 pe-4"><StatusBadge status={o.status} /></td>
+                          <td className="py-2.5 pe-4 font-semibold whitespace-nowrap">{money(o.total)}</td>
+                          <td className="py-2.5 pe-4 text-green-700 font-semibold whitespace-nowrap">{money(o.commissionAmount)}</td>
+                          <td className="py-2.5 pe-4 text-xs text-gray-400 whitespace-nowrap">{date(o.createdAt)}</td>
                           <td className="py-2.5">
                             <button
                               onClick={() => setDetailsOrder(o)}
                               className="px-2.5 py-1 bg-gray-100 text-gray-700 text-xs font-semibold rounded-lg hover:bg-gray-200 transition-colors whitespace-nowrap"
                             >
-                              Voir
+                              {t("view")}
                             </button>
                           </td>
                         </tr>
@@ -2038,7 +2097,7 @@ export default function AffiliateDashboard() {
                 </div>
                 {orders.length > 5 && (
                   <button onClick={() => setActiveTab("orders")} className="mt-3 text-xs text-blue-600 font-semibold hover:underline">
-                    Voir toutes les commandes →
+                    {t("view_all_orders")}
                   </button>
                 )}
               </Section>
@@ -2048,19 +2107,19 @@ export default function AffiliateDashboard() {
 
         {/* ══ ORDERS ════════════════════════════════════════════════════════ */}
         {activeTab === "orders" && (
-          <Section title="Mes commandes" icon={ShoppingBag}>
+          <Section title={t("my_orders")} icon={ShoppingBag}>
             {orders.length === 0 ? (
               <div className="text-center py-10">
                 <Package className="w-10 h-10 text-gray-200 mx-auto mb-3" />
-                <p className="text-gray-400 text-sm">Aucune commande pour l&apos;instant</p>
+                <p className="text-gray-400 text-sm">{t("no_orders")}</p>
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-100">
-                      {["ID","Client","Nb cmd","Nb articles","Produit","Statut","Total","Commission","Date","Action"].map((h) => (
-                        <th key={h} className="text-left text-xs text-gray-500 font-semibold pb-2.5 pr-4 whitespace-nowrap">{h}</th>
+                      {["col_id","col_client","col_order_count","col_items","col_product","col_status","col_total","col_commission","col_date","col_action"].map((h) => (
+                        <th key={h} className="text-start text-xs text-gray-500 font-semibold pb-2.5 pe-4 whitespace-nowrap">{t(h)}</th>
                       ))}
                     </tr>
                   </thead>
@@ -2070,15 +2129,15 @@ export default function AffiliateDashboard() {
                         key={o.id}
                         className={`transition-colors ${flashOrderIds.has(String(o._id ?? o.id)) ? "bg-emerald-50 animate-pulse" : "hover:bg-gray-50"}`}
                       >
-                        <td className="py-3 pr-4 font-mono text-xs text-gray-400 whitespace-nowrap">
-                          {o.orderId ? `#${o.orderId.slice(0, 8).toUpperCase()}` : "—"}
+                        <td className="py-3 pe-4 font-mono text-xs text-gray-400 whitespace-nowrap">
+                          {o.orderId ? <bdi>{`#${o.orderId.slice(0, 8).toUpperCase()}`}</bdi> : "—"}
                         </td>
-                        <td className="py-3 pr-4 whitespace-nowrap">
+                        <td className="py-3 pe-4 whitespace-nowrap">
                           <div className="flex items-center gap-1.5">
                             <span className="font-medium text-gray-800">{o.clientName || "—"}</span>
                             {o.isSuspicious && (
                               <span
-                                title={o.suspicionReason || "Activité suspecte détectée"}
+                                title={o.suspicionReason || t("suspicious")}
                                 className="text-amber-500 cursor-help"
                               >
                                 <AlertTriangle className="w-3.5 h-3.5" />
@@ -2086,21 +2145,21 @@ export default function AffiliateDashboard() {
                             )}
                           </div>
                         </td>
-                        <td className="py-3 pr-4 whitespace-nowrap">
+                        <td className="py-3 pe-4 whitespace-nowrap">
                           <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-semibold ${(phoneCounts[o.clientPhone] || 1) > 1 ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-500"}`}>
                             {phoneCounts[o.clientPhone] || 1}
                           </span>
                         </td>
-                        <td className="py-3 pr-4 whitespace-nowrap">
+                        <td className="py-3 pe-4 whitespace-nowrap">
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700">
                             {o.totalItems > 0 ? o.totalItems : 1}
                           </span>
                         </td>
-                        <td className="py-3 pr-4 text-gray-600 max-w-[150px] truncate text-xs">{productPreview(o)}</td>
-                        <td className="py-3 pr-4"><StatusBadge status={o.status} /></td>
-                        <td className="py-3 pr-4 font-semibold whitespace-nowrap">{fmtMoney(o.total)}</td>
-                        <td className="py-3 pr-4 text-green-700 font-semibold whitespace-nowrap">{fmtMoney(o.commissionAmount)}</td>
-                        <td className="py-3 pr-4 text-xs text-gray-400 whitespace-nowrap">{fmtDate(o.createdAt)}</td>
+                        <td className="py-3 pe-4 text-gray-600 max-w-[150px] truncate text-xs">{productPreview(o, t)}</td>
+                        <td className="py-3 pe-4"><StatusBadge status={o.status} /></td>
+                        <td className="py-3 pe-4 font-semibold whitespace-nowrap">{money(o.total)}</td>
+                        <td className="py-3 pe-4 text-green-700 font-semibold whitespace-nowrap">{money(o.commissionAmount)}</td>
+                        <td className="py-3 pe-4 text-xs text-gray-400 whitespace-nowrap">{date(o.createdAt)}</td>
                         <td className="py-3">
                           <div className="flex gap-1.5 flex-wrap">
                             {/* Voir — always visible (Part 4) */}
@@ -2108,7 +2167,7 @@ export default function AffiliateDashboard() {
                               onClick={() => setDetailsOrder(o)}
                               className="px-2.5 py-1 bg-gray-100 text-gray-600 text-xs font-semibold rounded-lg hover:bg-gray-200 transition-colors whitespace-nowrap"
                             >
-                              Voir
+                              {t("view")}
                             </button>
                             {/* Confirm / Cancel — Part 6: keep unchanged */}
                             {o.status === "pending" && (
@@ -2117,7 +2176,7 @@ export default function AffiliateDashboard() {
                                 disabled={updatingOrder === o.id}
                                 className="px-2.5 py-1 bg-blue-50 text-blue-700 text-xs font-semibold rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50 whitespace-nowrap"
                               >
-                                {updatingOrder === o.id ? "..." : "Confirmer"}
+                                {updatingOrder === o.id ? "..." : t("confirm")}
                               </button>
                             )}
                             {(o.status === "pending" || o.status === "shipped") && (
@@ -2126,7 +2185,7 @@ export default function AffiliateDashboard() {
                                 disabled={updatingOrder === o.id}
                                 className="px-2.5 py-1 bg-red-50 text-red-700 text-xs font-semibold rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50 whitespace-nowrap"
                               >
-                                Annuler
+                                {t("cancel")}
                               </button>
                             )}
                           </div>
@@ -2142,26 +2201,26 @@ export default function AffiliateDashboard() {
 
         {/* ══ BANK ══════════════════════════════════════════════════════════ */}
         {activeTab === "bank" && (
-          <Section title="Coordonnées bancaires" icon={Building2}>
+          <Section title={t("bank_title")} icon={Building2}>
             <form onSubmit={handleBankSave} className="space-y-4 max-w-sm">
 
               {bankSuccess && (
                 <div className="flex items-center gap-2 bg-green-50 border border-green-100 rounded-xl px-4 py-3 text-sm text-green-700">
                   <CheckCircle className="w-4 h-4 shrink-0" />
-                  Coordonnées enregistrées avec succès !
+                  {t("bank_saved")}
                 </div>
               )}
               {bankError && (
                 <div className="flex items-center gap-2 bg-red-50 border border-red-100 rounded-xl px-4 py-3 text-sm text-red-700">
                   <AlertCircle className="w-4 h-4 shrink-0" />
-                  {bankError}
+                  {msgText(bankError)}
                 </div>
               )}
 
               {[
-                { key: "bankName",    label: "Nom de la banque",  placeholder: "CIH, Attijariwafa, BMCE..." },
-                { key: "rib",         label: "RIB",               placeholder: "XXXXXXXXXXXXXXXXXXXXXXXXXX" },
-                { key: "accountName", label: "Titulaire du compte",placeholder: "Prénom Nom" },
+                { key: "bankName",    label: t("bank_name"),      placeholder: "\u2066CIH, Attijariwafa, BMCE...\u2069" }, // isolated: keeps its LTR order in an RTL field
+                { key: "rib",         label: t("rib"),            placeholder: "XXXXXXXXXXXXXXXXXXXXXXXXXX" },
+                { key: "accountName", label: t("account_holder"), placeholder: t("account_holder_ph") },
               ].map(({ key, label, placeholder }) => (
                 <div key={key}>
                   <label className="block text-xs font-semibold text-gray-600 mb-1.5">{label}</label>
@@ -2171,7 +2230,8 @@ export default function AffiliateDashboard() {
                     onChange={(e) => setBankForm((f) => ({ ...f, [key]: e.target.value }))}
                     placeholder={placeholder}
                     className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:border-gray-400"
-                    dir="ltr"
+                    dir={fieldDir(bankForm[key])}
+                    data-bank-input={key}
                   />
                 </div>
               ))}
@@ -2182,7 +2242,7 @@ export default function AffiliateDashboard() {
                 className="flex items-center gap-2 px-6 py-2.5 bg-gray-900 hover:bg-gray-800 text-white rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
               >
                 {bankSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
-                {bankSaving ? "Enregistrement..." : "Enregistrer"}
+                {bankSaving ? t("saving") : t("save")}
               </button>
             </form>
           </Section>
@@ -2193,32 +2253,32 @@ export default function AffiliateDashboard() {
           <div className="space-y-4">
             {/* ONE wallet total + its breakdown (earnings vs recharged) */}
             <div className="bg-gradient-to-br from-gray-900 to-gray-800 rounded-2xl p-6 text-white">
-              <p className="text-sm font-medium opacity-70 mb-1">Solde total disponible</p>
-              <p className="text-4xl font-black">{fmtMoney(balance)}</p>
+              <p className="text-sm font-medium opacity-70 mb-1">{t("total_balance")}</p>
+              <p className="text-4xl font-black">{money(balance)}</p>
               {(topupAvailable > 0 || pendingPayouts > 0) ? (
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">
                   <div className="rounded-xl bg-white/10 px-3 py-2">
-                    <p className="text-[11px] opacity-70">Gains disponibles pour retrait</p>
-                    <p className="text-base font-black">{fmtMoney(withdrawable)}</p>
+                    <p className="text-[11px] opacity-70">{t("withdrawable_earnings")}</p>
+                    <p className="text-base font-black">{money(withdrawable)}</p>
                   </div>
                   <div className="rounded-xl bg-white/10 px-3 py-2">
-                    <p className="text-[11px] opacity-70">Montant en attente de paiement</p>
-                    <p className="text-base font-black">{fmtMoney(pendingPayouts)}</p>
-                    <p className="text-[10px] opacity-50 mt-0.5">Déjà réservé</p>
+                    <p className="text-[11px] opacity-70">{t("pending_payment_amount")}</p>
+                    <p className="text-base font-black">{money(pendingPayouts)}</p>
+                    <p className="text-[10px] opacity-50 mt-0.5">{t("already_reserved")}</p>
                   </div>
                   <div className="rounded-xl bg-white/10 px-3 py-2">
-                    <p className="text-[11px] opacity-70">Solde rechargé non retirable</p>
-                    <p className="text-base font-black">{fmtMoney(topupAvailable)}</p>
-                    <p className="text-[10px] opacity-50 mt-0.5">Achats uniquement</p>
+                    <p className="text-[11px] opacity-70">{t("topup_non_withdrawable")}</p>
+                    <p className="text-base font-black">{money(topupAvailable)}</p>
+                    <p className="text-[10px] opacity-50 mt-0.5">{t("purchases_only")}</p>
                   </div>
                 </div>
               ) : (
-                <p className="text-xs opacity-50 mt-2">Commissions des commandes livrées</p>
+                <p className="text-xs opacity-50 mt-2">{t("delivered_commissions")}</p>
               )}
             </div>
 
             {/* Request form */}
-            <Section title="Demande de retrait" icon={CreditCard}>
+            <Section title={t("payout_request_title")} icon={CreditCard}>
               <form onSubmit={handlePayout} className="space-y-4 max-w-sm">
                 {payoutMsg && (
                   <div className={`flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium
@@ -2226,18 +2286,18 @@ export default function AffiliateDashboard() {
                       ? "bg-green-50 border border-green-100 text-green-700"
                       : "bg-red-50 border border-red-100 text-red-700"}`}>
                     {payoutMsg.type === "success" ? <CheckCircle className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
-                    {payoutMsg.text}
+                    {msgText(payoutMsg)}
                   </div>
                 )}
                 {!identityApproved && (
                   <div className="rounded-xl px-4 py-3 bg-red-50 border border-red-200 text-red-800 text-sm">
                     <p className="flex items-start gap-2">
                       <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
-                      Votre identité doit être vérifiée avant de pouvoir effectuer un retrait.
+                      {t("identity_required_payout")}
                     </p>
                     <button type="button" onClick={goToIdentity}
                       className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg">
-                      <ShieldCheck className="w-3.5 h-3.5" /> Vérifier maintenant
+                      <ShieldCheck className="w-3.5 h-3.5" /> {t("verify_now")}
                     </button>
                   </div>
                 )}
@@ -2245,17 +2305,17 @@ export default function AffiliateDashboard() {
                   <div className="rounded-xl px-4 py-3 bg-amber-50 border border-amber-200 text-amber-800 text-sm">
                     <p className="flex items-start gap-2">
                       <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                      Veuillez ajouter vos coordonnées bancaires avant de demander un retrait.
+                      {t("bank_required_payout")}
                     </p>
                     <button type="button" onClick={() => setActiveTab("bank")}
                       className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg">
-                      <Building2 className="w-3.5 h-3.5" /> Compléter mes coordonnées
+                      <Building2 className="w-3.5 h-3.5" /> {t("complete_bank")}
                     </button>
                   </div>
                 )}
                 <div>
                   <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                    Montant à retirer (MAD)
+                    {t("payout_amount_label")}
                   </label>
                   <input
                     type="number"
@@ -2271,16 +2331,16 @@ export default function AffiliateDashboard() {
                   {/* Only EARNINGS are withdrawable — the recharged balance is
                       spend-only (also enforced server-side). */}
                   <p className="text-xs text-gray-400 mt-1">
-                    Maximum retirable : <strong>{fmtMoney(withdrawable)}</strong>
+                    {t("max_withdrawable")} <strong>{money(withdrawable)}</strong>
                   </p>
                   {pendingPayouts > 0 && (
                     <p className="text-[11px] text-gray-500 mt-1">
-                      {fmtMoney(pendingPayouts)} déjà réservés par une demande en attente de paiement.
+                      {t("reserved_by_pending", { amount: money(pendingPayouts) })}
                     </p>
                   )}
                   {topupAvailable > 0 && (
                     <p className="text-[11px] text-amber-600 mt-1">
-                      {fmtMoney(topupAvailable)} de solde rechargé ne sont pas retirables (achats de packs et services uniquement).
+                      {t("topup_not_withdrawable_note", { amount: money(topupAvailable) })}
                     </p>
                   )}
                 </div>
@@ -2290,7 +2350,7 @@ export default function AffiliateDashboard() {
                   className="flex items-center gap-2 px-6 py-2.5 bg-gray-900 hover:bg-gray-800 text-white rounded-xl text-sm font-semibold disabled:opacity-50 transition-all"
                 >
                   {payoutLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CreditCard className="w-4 h-4" />}
-                  {payoutLoading ? "Envoi..." : "Demander le retrait"}
+                  {payoutLoading ? t("sending") : t("request_payout")}
                 </button>
               </form>
             </Section>
@@ -2298,7 +2358,7 @@ export default function AffiliateDashboard() {
             {/* Balance history — payouts + Starter Booster purchases, one merged
                 list (the boosters reuse THIS history; no separate page). */}
             {((stats?.payouts?.length || 0) + boosterPurchases.length) > 0 && (
-              <Section title="Historique du solde" icon={TrendingUp}>
+              <Section title={t("balance_history")} icon={TrendingUp}>
                 <div className="space-y-2">
                   {[
                     ...(stats?.payouts || []).map((p) => ({ kind: "payout", ...p })),
@@ -2308,25 +2368,25 @@ export default function AffiliateDashboard() {
                     .map((x) => x.kind === "payout" ? (
                       <div key={`p-${x.id}`} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
                         <div>
-                          <p className="text-sm font-semibold text-gray-800">Retrait · {fmtMoney(x.amount)}</p>
-                          <p className="text-xs text-gray-400">{fmtDate(x.createdAt)}</p>
+                          <p className="text-sm font-semibold text-gray-800">{t("payout_line", { amount: money(x.amount) })}</p>
+                          <p className="text-xs text-gray-400">{date(x.createdAt)}</p>
                         </div>
                         <span className={`px-2.5 py-1 rounded-full text-xs font-semibold
                           ${x.status === "paid" ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}>
-                          {x.status === "paid" ? "Payé" : "En attente"}
+                          {x.status === "paid" ? t("paid") : t("status_pending")}
                         </span>
                       </div>
                     ) : (
                       <div key={`b-${x.id}`} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
                         <div>
-                          <p className="text-sm font-semibold text-gray-800">🚀 {x.packageName} · −{fmtMoney(x.price)}</p>
+                          <p className="text-sm font-semibold text-gray-800">🚀 {x.packageName} · {money(x.price, { sign: "−" })}</p>
                           <p className="text-xs text-gray-400">
-                            {x.paymentMethod === "BALANCE" ? "Payé avec le solde" : "Payé par carte"} · {fmtDate(x.createdAt)}
+                            {x.paymentMethod === "BALANCE" ? t("paid_with_balance") : t("paid_by_card")} · {date(x.createdAt)}
                           </p>
                         </div>
                         <span className={`px-2.5 py-1 rounded-full text-xs font-semibold
                           ${x.status === "ACTIVE" ? "bg-green-100 text-green-700" : x.status === "REJECTED" ? "bg-red-100 text-red-600" : "bg-yellow-100 text-yellow-700"}`}>
-                          {x.status === "ACTIVE" ? "Actif" : x.status === "REJECTED" ? "Refusé" : "En attente"}
+                          {x.status === "ACTIVE" ? t("active") : x.status === "REJECTED" ? t("rejected") : t("status_pending")}
                         </span>
                       </div>
                     ))}
@@ -2336,9 +2396,9 @@ export default function AffiliateDashboard() {
 
             {/* Store bank info for payouts */}
             {storeBankInfo && (storeBankInfo.bankName || storeBankInfo.rib) && (
-              <Section title="Informations bancaires du paiement" icon={Building2}>
+              <Section title={t("payment_bank_info")} icon={Building2}>
                 <p className="text-xs text-gray-400 mb-3">
-                  Vos commissions seront versées sur le compte suivant. Assurez-vous que vos coordonnées bancaires (onglet Banque) sont à jour.
+                  {t("payment_bank_note")}
                 </p>
                 <div className="bg-gray-50 rounded-xl border border-gray-100 divide-y divide-gray-100">
                   {storeBankInfo.bankLogo && (
@@ -2351,15 +2411,15 @@ export default function AffiliateDashboard() {
                     </div>
                   )}
                   {[
-                    { label: "Banque",    value: storeBankInfo.bankName    },
-                    { label: "Titulaire", value: storeBankInfo.accountName },
-                    { label: "RIB",       value: storeBankInfo.rib,    mono: true },
-                    { label: "SWIFT",     value: storeBankInfo.swift,  mono: true },
-                  ].map(({ label, value, mono }) =>
+                    { id: "bank",   label: t("bank_label"),   value: storeBankInfo.bankName    },
+                    { id: "holder", label: t("holder_label"), value: storeBankInfo.accountName },
+                    { id: "rib",    label: t("rib"),          value: storeBankInfo.rib,    mono: true },
+                    { id: "swift",  label: t("swift"),        value: storeBankInfo.swift,  mono: true },
+                  ].map(({ id, label, value, mono }) =>
                     value ? (
-                      <div key={label} className="flex items-center justify-between px-4 py-2.5">
+                      <div key={id} className="flex items-center justify-between px-4 py-2.5">
                         <span className="text-xs text-gray-400 font-medium">{label}</span>
-                        <span className={`text-sm font-semibold text-gray-800 text-right max-w-[200px] break-all ${mono ? "font-mono text-xs" : ""}`}>
+                        <span dir={mono ? "ltr" : undefined} className={`text-sm font-semibold text-gray-800 text-end max-w-[200px] break-all ${mono ? "font-mono text-xs" : ""}`}>
                           {value}
                         </span>
                       </div>
@@ -2373,11 +2433,11 @@ export default function AffiliateDashboard() {
 
         {/* ══ NOTIFICATIONS ═════════════════════════════════════════════════ */}
         {activeTab === "notifications" && (
-          <Section title="Notifications" icon={Bell}>
+          <Section title={t("notifications")} icon={Bell}>
             {notifs.length === 0 ? (
               <div className="text-center py-10">
                 <Bell className="w-10 h-10 text-gray-200 mx-auto mb-3" />
-                <p className="text-gray-400 text-sm">Aucune notification</p>
+                <p className="text-gray-400 text-sm">{t("no_notifications")}</p>
               </div>
             ) : (
               <div className="space-y-2">
@@ -2389,10 +2449,11 @@ export default function AffiliateDashboard() {
                   >
                     <div className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${n.read ? "bg-gray-300" : "bg-blue-500"}`} />
                     <div className="flex-1 min-w-0">
-                      <p className={`text-sm ${n.read ? "text-gray-600" : "text-gray-800 font-medium"}`}>
-                        {n.message}
+                      {/* Stored text from the server templates, re-rendered in the market language (unknown text as stored). */}
+                      <p className={`text-sm whitespace-pre-line ${n.read ? "text-gray-600" : "text-gray-800 font-medium"}`} data-notification-message>
+                        {localizeNotification(n.message, lang)}
                       </p>
-                      <p className="text-xs text-gray-400 mt-0.5">{fmtDate(n.createdAt)}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{date(n.createdAt)}</p>
                     </div>
                   </div>
                 ))}
@@ -2413,12 +2474,12 @@ export default function AffiliateDashboard() {
               });
               const d = await res.json();
               if (res.ok) {
-                setClaimMsg({ type: "success", text: `Félicitations ! ${d.bonus} MAD ajoutés à votre solde.` });
+                setClaimMsg({ type: "success", key: "claim_success", vars: { amount: d.bonus } });
                 fetchAll(token);
               } else {
-                setClaimMsg({ type: "error", text: d.error || ("Erreur") });
+                setClaimMsg(d.error ? { type: "error", text: d.error, code: d.code } : { type: "error", key: "error" });
               }
-            } catch { setClaimMsg({ type: "error", text: "Erreur réseau" }); }
+            } catch { setClaimMsg({ type: "error", key: "network_error" }); }
             finally { setClaiming(false); }
           };
           return (
@@ -2446,18 +2507,18 @@ export default function AffiliateDashboard() {
                     <span className="text-2xl">🏆</span>
                     <div>
                       <p className={`text-sm font-black ${bonusClaimed ? "text-gray-500" : bonusUnlocked ? "text-amber-900" : "text-amber-100"}`}>
-                        {"Bonus d'équipe"}
+                        {t("team_bonus")}
                       </p>
                       <p className={`text-xs font-semibold ${bonusClaimed ? "text-gray-400" : bonusUnlocked ? "text-amber-800" : "text-amber-300"}`}>
                         {bonusClaimed
-                          ? ("Bonus déjà réclamé ✓")
-                          : `Gagnez ${bonusAmount} MAD avec ${bonusGoal} filleuls actifs`}
+                          ? t("bonus_already_claimed")
+                          : t("bonus_earn", { amount: money(bonusAmount), n: bonusGoal })}
                       </p>
                     </div>
                   </div>
-                  <div className={`text-right px-3 py-1.5 rounded-xl ${bonusClaimed ? "bg-gray-200" : bonusUnlocked ? "bg-amber-900/20" : "bg-amber-950/40"}`}>
+                  <div className={`text-end px-3 py-1.5 rounded-xl ${bonusClaimed ? "bg-gray-200" : bonusUnlocked ? "bg-amber-900/20" : "bg-amber-950/40"}`}>
                     <p className={`text-xl font-black ${bonusClaimed ? "text-gray-500" : bonusUnlocked ? "text-amber-900" : "text-amber-100"}`}>
-                      {bonusAmount} <span className="text-sm font-semibold">MAD</span>
+                      {bonusAmount} <span className="text-sm font-semibold">{t("currency")}</span>
                     </p>
                   </div>
                 </div>
@@ -2467,19 +2528,19 @@ export default function AffiliateDashboard() {
                   <div className={`flex-1 rounded-xl p-2.5 text-center ${bonusClaimed ? "bg-gray-200/60" : bonusUnlocked ? "bg-amber-900/15" : "bg-amber-950/40"}`}>
                     <p className={`text-xl font-black ${bonusClaimed ? "text-gray-500" : bonusUnlocked ? "text-amber-900" : "text-amber-100"}`}>{stats?.totalReferrals ?? team.length}</p>
                     <p className={`text-xs ${bonusClaimed ? "text-gray-400" : bonusUnlocked ? "text-amber-800" : "text-amber-300"}`}>
-                      {"Total parrainés"}
+                      {t("total_referred")}
                     </p>
                   </div>
                   <div className={`flex-1 rounded-xl p-2.5 text-center ${bonusClaimed ? "bg-green-100" : bonusUnlocked ? "bg-amber-900/15" : "bg-amber-950/40"}`}>
                     <p className={`text-xl font-black ${bonusClaimed ? "text-green-600" : bonusUnlocked ? "text-amber-900" : "text-amber-100"}`}>{validReferrals}</p>
                     <p className={`text-xs ${bonusClaimed ? "text-green-500" : bonusUnlocked ? "text-amber-800" : "text-amber-300"}`}>
-                      {"Actifs"}
+                      {t("actives")}
                     </p>
                   </div>
                   <div className={`flex-1 rounded-xl p-2.5 text-center ${bonusClaimed ? "bg-gray-200/60" : bonusUnlocked ? "bg-amber-900/15" : "bg-amber-950/40"}`}>
                     <p className={`text-xl font-black ${bonusClaimed ? "text-gray-500" : bonusUnlocked ? "text-amber-900" : "text-amber-100"}`}>{bonusGoal}</p>
                     <p className={`text-xs ${bonusClaimed ? "text-gray-400" : bonusUnlocked ? "text-amber-800" : "text-amber-300"}`}>
-                      {"Objectif"}
+                      {t("goal")}
                     </p>
                   </div>
                 </div>
@@ -2487,12 +2548,12 @@ export default function AffiliateDashboard() {
                 {/* Progress bar */}
                 <div className={`w-full rounded-full h-3 overflow-hidden mb-3 ${bonusClaimed ? "bg-gray-300" : bonusUnlocked ? "bg-amber-900/20" : "bg-amber-950/50"}`}>
                   <div
-                    className={`h-full rounded-full transition-all duration-700 ${bonusClaimed ? "bg-gray-400" : bonusUnlocked ? "bg-amber-900" : "bg-gradient-to-r from-amber-400 to-yellow-300"}`}
+                    className={`h-full rounded-full transition-all duration-700 ${bonusClaimed ? "bg-gray-400" : bonusUnlocked ? "bg-amber-900" : "bg-gradient-to-r rtl:bg-gradient-to-l from-amber-400 to-yellow-300"}`}
                     style={{ width: `${bonusProgress}%` }}
                   />
                 </div>
                 <div className={`flex justify-between text-xs mb-4 ${bonusClaimed ? "text-gray-400" : bonusUnlocked ? "text-amber-800" : "text-amber-300"}`}>
-                  <span>{validReferrals} / {bonusGoal} {"filleuls actifs"}</span>
+                  <span>{t("active_referrals_progress", { frac: frac(validReferrals, bonusGoal) })}</span>
                   <span className="font-semibold">{bonusProgress}%</span>
                 </div>
 
@@ -2500,7 +2561,7 @@ export default function AffiliateDashboard() {
                 {bonusClaimed ? (
                   <div className="flex items-center justify-center gap-2 py-2.5 bg-gray-300 rounded-xl text-gray-500 text-sm font-bold">
                     <CheckCircle className="w-4 h-4" />
-                    {"Bonus réclamé"}
+                    {t("bonus_claimed")}
                   </div>
                 ) : bonusUnlocked ? (
                   <button
@@ -2509,17 +2570,17 @@ export default function AffiliateDashboard() {
                     className="w-full flex items-center justify-center gap-2 py-3 bg-amber-900 hover:bg-amber-950 active:scale-[0.98] text-amber-100 rounded-xl text-sm font-black transition-all shadow-lg disabled:opacity-60"
                   >
                     {claiming ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>🎁</span>}
-                    {"Réclamer la récompense"}
+                    {t("claim_reward")}
                   </button>
                 ) : (
                   <div className="flex items-center justify-center gap-2 py-2.5 bg-amber-950/40 rounded-xl text-amber-300 text-xs font-semibold">
-                    🔒 {`Encore ${Math.max(0, bonusGoal - validReferrals)} filleul(s) actif(s) requis`}
+                    🔒 {t("referrals_needed", { n: Math.max(0, bonusGoal - validReferrals) })}
                   </div>
                 )}
 
                 {claimMsg && (
                   <div className={`mt-2 text-xs text-center font-semibold rounded-xl py-2 ${claimMsg.type === "success" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
-                    {claimMsg.text}
+                    {msgText(claimMsg)}
                   </div>
                 )}
               </div>
@@ -2527,52 +2588,54 @@ export default function AffiliateDashboard() {
 
             {/* ── Commission tiers legend ── */}
             {bonusConfig.commissionTiers?.length > 0 && (
-              <Section title={"Barème de commission dynamique"} icon={TrendingUp}>
+              <Section title={t("commission_scale")} icon={TrendingUp}>
                 <div className="space-y-2">
-                  {bonusConfig.commissionTiers.map((t, i) => (
+                  {bonusConfig.commissionTiers.map((tier, i) => (
                     <div key={i} className="flex items-center justify-between p-2.5 bg-gray-50 rounded-xl">
                       <div className="flex items-center gap-2">
                         <div className="w-7 h-7 rounded-lg bg-blue-50 flex items-center justify-center text-xs font-bold text-blue-600">
                           {i + 1}
                         </div>
                         <span className="text-sm text-gray-700">
-                          {t.maxDelivered == null
-                            ? (`${t.minDelivered}+ livraisons`)
-                            : (`${t.minDelivered}–${t.maxDelivered} livraisons`)}
+                          {t("tier_deliveries", {
+                            range: ltr(tier.maxDelivered == null
+                              ? `${tier.minDelivered}+`
+                              : `${tier.minDelivered}–${tier.maxDelivered}`),
+                          })}
                         </span>
                       </div>
                       <span className="text-sm font-black text-blue-700 bg-blue-50 px-2.5 py-0.5 rounded-full">
-                        {t.commissionPct}%
+                        {tier.commissionPct}%
                       </span>
                     </div>
                   ))}
                 </div>
                 <p className="text-xs text-gray-400 mt-2">
-                  {"La commission augmente automatiquement selon les livraisons du filleul."}
+                  {t("tier_note")}
                 </p>
               </Section>
             )}
 
             {/* ── Invite link ── */}
-            <Section title={"Inviter un partenaire"} icon={UserPlus}>
+            <Section title={t("invite_partner")} icon={UserPlus}>
               <div className="flex gap-2">
-                <div className="flex-1 px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs font-mono text-gray-700 truncate">
+                <div dir="ltr" className="flex-1 px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs font-mono text-gray-700 truncate">
                   {refLink}
                 </div>
                 <CopyButton text={refLink} />
               </div>
               <p className="text-xs text-gray-400 mt-2">
-                {"Partagez ce lien. Les personnes qui s'inscrivent via ce lien rejoindront votre équipe."}
+                {t("invite_note")}
               </p>
             </Section>
 
             {/* ── Team list ── */}
-            <Section title={`${"Mon équipe"} (${team.length})`} icon={Users}>
+            <Section title={t("my_team", { n: team.length })} icon={Users}>
               {team.length === 0 ? (
                 <div className="text-center py-10">
                   <Users className="w-10 h-10 text-gray-200 mx-auto mb-3" />
                   <p className="text-gray-400 text-sm">
-                    {"Votre équipe est vide pour l'instant"}
+                    {t("team_empty")}
                   </p>
                 </div>
               ) : (() => {
@@ -2616,7 +2679,7 @@ export default function AffiliateDashboard() {
                           <button
                             type="button"
                             onClick={() => handleExpandCard(m.id)}
-                            className={`w-full text-left flex items-center justify-between px-3.5 py-2.5 transition-colors cursor-pointer hover:brightness-95
+                            className={`w-full text-start flex items-center justify-between px-3.5 py-2.5 transition-colors cursor-pointer hover:brightness-95
                               ${isFireActive ? "bg-green-50" : isActive ? "bg-green-50/60" : "bg-gray-50"}`}
                           >
                             <div className="flex items-center gap-2.5 min-w-0">
@@ -2627,13 +2690,13 @@ export default function AffiliateDashboard() {
                                   {(m.name || m.username || "?")[0].toUpperCase()}
                                 </div>
                                 {rank === 0 && score > 0 && (
-                                  <span className="absolute -top-1 -right-1 text-[9px] leading-none">🥇</span>
+                                  <span className="absolute -top-1 -end-1 text-[9px] leading-none">🥇</span>
                                 )}
                                 {rank === 1 && score > 0 && (
-                                  <span className="absolute -top-1 -right-1 text-[9px] leading-none">🥈</span>
+                                  <span className="absolute -top-1 -end-1 text-[9px] leading-none">🥈</span>
                                 )}
                                 {rank === 2 && score > 0 && (
-                                  <span className="absolute -top-1 -right-1 text-[9px] leading-none">🥉</span>
+                                  <span className="absolute -top-1 -end-1 text-[9px] leading-none">🥉</span>
                                 )}
                               </div>
 
@@ -2642,24 +2705,24 @@ export default function AffiliateDashboard() {
                                   <p className="text-sm font-bold text-gray-800 truncate">{m.name || m.username}</p>
                                   {isFireActive && (
                                     <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-green-200 text-green-800 whitespace-nowrap">
-                                      Actif 🔥
+                                      {t("badge_active_fire")}
                                     </span>
                                   )}
                                   {isPotential && (
                                     <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 whitespace-nowrap">
-                                      Potentiel 🔥
+                                      {t("badge_potential")}
                                     </span>
                                   )}
                                 </div>
-                                <p className="text-xs text-gray-400 font-mono">@{m.username}</p>
+                                <p className="text-xs text-gray-400 font-mono"><bdi>@{m.username}</bdi></p>
                               </div>
                             </div>
 
-                            <div className="flex items-center gap-2 shrink-0 ml-2">
+                            <div className="flex items-center gap-2 shrink-0 ms-2">
                               {/* Score badge */}
                               {score > 0 && (
                                 <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 whitespace-nowrap">
-                                  {"Score"} {score}
+                                  {t("score", { n: score })}
                                 </span>
                               )}
 
@@ -2667,8 +2730,8 @@ export default function AffiliateDashboard() {
                               <span className={`text-xs px-2.5 py-1 rounded-full font-bold whitespace-nowrap
                                 ${isActive ? "bg-green-200 text-green-800" : "bg-amber-100 text-amber-700"}`}>
                                 {isActive
-                                  ? ("Actif")
-                                  : ("En attente")}
+                                  ? t("active")
+                                  : t("status_pending")}
                               </span>
 
                               {/* Expand chevron */}
@@ -2681,17 +2744,17 @@ export default function AffiliateDashboard() {
                           <div className="grid grid-cols-4 divide-x divide-gray-100 bg-white">
                             <div className="text-center py-2.5 px-1.5">
                               <p className="text-base font-black text-gray-800">{m.deliveredOrdersCount ?? 0}</p>
-                              <p className="text-xs text-gray-400">{"Livrées"}</p>
+                              <p className="text-xs text-gray-400">{t("delivered_plural")}</p>
                             </div>
                             <div className="text-center py-2.5 px-1.5">
                               <p className="text-base font-black text-blue-700">{commPct}%</p>
-                              <p className="text-xs text-gray-400">{"Commission"}</p>
+                              <p className="text-xs text-gray-400">{t("commission")}</p>
                             </div>
                             <div className="text-center py-2.5 px-1.5">
                               <p className="text-base font-black text-amber-700">
-                                {revenue.toFixed(0)} <span className="text-[10px] font-semibold">MAD</span>
+                                {revenue.toFixed(0)} <span className="text-[10px] font-semibold">{t("currency")}</span>
                               </p>
-                              <p className="text-xs text-gray-400">{"CA généré"}</p>
+                              <p className="text-xs text-gray-400">{t("revenue_generated")}</p>
                             </div>
                             <div className="text-center py-2.5 px-1.5">
                               <p className="text-[11px] font-black leading-tight">
@@ -2699,7 +2762,7 @@ export default function AffiliateDashboard() {
                                 <span className="text-gray-300 mx-0.5">/</span>
                                 <span className="text-amber-500">{sub.pending}</span>
                               </p>
-                              <p className="text-xs text-gray-400">{"Filleuls"}</p>
+                              <p className="text-xs text-gray-400">{t("referrals")}</p>
                             </div>
                           </div>
 
@@ -2707,9 +2770,9 @@ export default function AffiliateDashboard() {
                           {isActive && (
                             <div className="flex items-center justify-between px-3.5 py-2 bg-blue-50 border-t border-blue-100">
                               <span className="text-xs text-blue-700">
-                                {"Vos gains de ce filleul"}
+                                {t("your_earnings_from_member")}
                               </span>
-                              <span className="text-sm font-black text-blue-800">+{parentEarn.toFixed(0)} MAD</span>
+                              <span className="text-sm font-black text-blue-800">{money(parentEarn, { sign: "+" })}</span>
                             </div>
                           )}
 
@@ -2733,7 +2796,7 @@ export default function AffiliateDashboard() {
                                         : "border-transparent text-gray-400 hover:text-gray-700"}`}
                                   >
                                     <Package className="w-3.5 h-3.5 shrink-0" />
-                                    {"Commandes"}
+                                    {t("orders_word")}
                                     <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black
                                       ${activeTab === 'orders' ? "bg-gray-900 text-white" : "bg-gray-200 text-gray-500"}`}>
                                       {m.deliveredOrdersCount ?? 0}
@@ -2750,7 +2813,7 @@ export default function AffiliateDashboard() {
                                           : "border-transparent text-gray-400 hover:text-gray-700"}`}
                                     >
                                       <Users className="w-3.5 h-3.5 shrink-0" />
-                                      {"Équipe"}
+                                      {t("team_word")}
                                       <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black
                                         ${activeTab === 'team' ? "bg-gray-900 text-white" : "bg-gray-200 text-gray-500"}`}>
                                         {sub.active + sub.pending}
@@ -2767,7 +2830,7 @@ export default function AffiliateDashboard() {
                                     <div className="flex items-center gap-2 px-3.5 pt-3 pb-2">
                                       <Package className="w-3.5 h-3.5 text-gray-400 shrink-0" />
                                       <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-                                        {"Commandes"}
+                                        {t("orders_word")}
                                       </span>
                                     </div>
 
@@ -2775,14 +2838,14 @@ export default function AffiliateDashboard() {
                                       <div className="flex items-center justify-center gap-2 py-6 bg-white mx-3 mb-3 rounded-xl border border-gray-100">
                                         <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
                                         <span className="text-xs text-gray-400">
-                                          {"Chargement..."}
+                                          {t("loading")}
                                         </span>
                                       </div>
                                     ) : !memberOrders || memberOrders.length === 0 ? (
                                       <div className="flex flex-col items-center py-8 bg-white mx-3 mb-3 rounded-xl border border-dashed border-gray-200">
                                         <Package className="w-8 h-8 text-gray-200 mb-2" />
                                         <p className="text-xs font-semibold text-gray-400">
-                                          {"Aucune commande pour l'instant"}
+                                          {t("no_orders")}
                                         </p>
                                       </div>
                                     ) : (() => {
@@ -2798,25 +2861,25 @@ export default function AffiliateDashboard() {
                                             <div className="text-center py-2.5 px-2">
                                               <p className="text-sm font-black text-gray-800">{totalOrders}</p>
                                               <p className="text-[10px] text-gray-400">
-                                                {"Commandes"}
+                                                {t("orders_word")}
                                               </p>
                                             </div>
                                             <div className="text-center py-2.5 px-2">
                                               <p className="text-sm font-black text-amber-700">
                                                 {totalRevenue.toFixed(0)}
-                                                <span className="text-[9px] font-semibold ml-0.5">MAD</span>
+                                                <span className="text-[9px] font-semibold ms-0.5">{t("currency")}</span>
                                               </p>
                                               <p className="text-[10px] text-gray-400">
-                                                {"CA total"}
+                                                {t("total_revenue_short")}
                                               </p>
                                             </div>
                                             <div className="text-center py-2.5 px-2">
                                               <p className="text-sm font-black text-green-700">
-                                                +{totalEarnings.toFixed(0)}
-                                                <span className="text-[9px] font-semibold ml-0.5">MAD</span>
+                                                <bdi>+{totalEarnings.toFixed(0)}</bdi>
+                                                <span className="text-[9px] font-semibold ms-0.5">{t("currency")}</span>
                                               </p>
                                               <p className="text-[10px] text-gray-400">
-                                                {"Vos gains"}
+                                                {t("your_earnings")}
                                               </p>
                                             </div>
                                           </div>
@@ -2824,10 +2887,10 @@ export default function AffiliateDashboard() {
                                           {/* ── Order mini-cards ── */}
                                           <div className="px-3 pb-3 space-y-2 max-h-80 overflow-y-auto">
                                             {memberOrders.map((o) => {
-                                              const sCfg    = STATUS_CONFIG[o.status] || { label: o.status, cls: "bg-gray-100 text-gray-600" };
+                                              const sCfg    = STATUS_CONFIG[o.status] || { cls: "bg-gray-100 text-gray-600" };
                                               const shortId = o.orderId || o.id.slice(0, 8).toUpperCase();
                                               const dateStr = new Date(o.createdAt).toLocaleDateString(
-                                                "fr-FR",
+                                                intlLocale,
                                                 { day: "2-digit", month: "2-digit", year: "numeric" }
                                               );
                                               const isDelivered = o.status === "delivered";
@@ -2842,18 +2905,18 @@ export default function AffiliateDashboard() {
                                                   {/* Line 1: product name + status badge */}
                                                   <div className="flex items-start justify-between gap-2 mb-2">
                                                     <p className="text-xs font-bold text-gray-800 leading-tight truncate">
-                                                      {o.productTitle || ("Produit")}
+                                                      {o.productTitle || t("product_fallback")}
                                                     </p>
                                                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold shrink-0 ${sCfg.cls}`}>
-                                                      {sCfg.label}
+                                                      {statusLabel(o.status, t)}
                                                     </span>
                                                   </div>
 
                                                   {/* Line 2: meta (ID · date · client) */}
                                                   <p className="text-[10px] text-gray-400 font-mono mb-2.5 truncate">
-                                                    #{shortId}
+                                                    <bdi>#{shortId}</bdi>
                                                     <span className="mx-1 text-gray-300">·</span>
-                                                    {dateStr}
+                                                    <bdi>{dateStr}</bdi>
                                                     {o.clientName && (
                                                       <>
                                                         <span className="mx-1 text-gray-300">·</span>
@@ -2862,19 +2925,19 @@ export default function AffiliateDashboard() {
                                                     )}
                                                   </p>
 
-                                                  {/* Line 3: total (left) + commission (right) */}
+                                                  {/* Line 3: total (start) + commission (end) */}
                                                   <div className="flex items-center justify-between pt-2 border-t border-gray-100">
                                                     <div className="flex items-center gap-1">
                                                       <span className="text-[10px] text-gray-400">
-                                                        {"Total"}
+                                                        {t("total")}
                                                       </span>
                                                       <span className="text-xs font-black text-gray-700">
-                                                        {o.total.toFixed(0)} MAD
+                                                        {money(o.total)}
                                                       </span>
                                                     </div>
                                                     <span className={`text-xs font-black
                                                       ${isDelivered ? "text-green-700" : "text-gray-500"}`}>
-                                                      {isDelivered ? "+" : ""}{o.commissionAmount.toFixed(0)} MAD
+                                                      {money(o.commissionAmount, { sign: isDelivered ? "+" : "" })}
                                                     </span>
                                                   </div>
                                                 </div>
@@ -2894,20 +2957,20 @@ export default function AffiliateDashboard() {
                                       <div className="flex items-center justify-center gap-2 py-4">
                                         <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
                                         <span className="text-xs text-gray-400">
-                                          {"Chargement..."}
+                                          {t("loading")}
                                         </span>
                                       </div>
                                     ) : !subMembers || subMembers.length === 0 ? (
                                       <div className="flex flex-col items-center py-6">
                                         <Users className="w-7 h-7 text-gray-200 mb-2" />
                                         <p className="text-xs text-gray-400">
-                                          {"Aucun filleul enregistré"}
+                                          {t("no_referrals")}
                                         </p>
                                       </div>
                                     ) : (
                                       <div className="px-3.5 py-2.5 space-y-1.5">
                                         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">
-                                          {`Équipe de @${m.username}`}
+                                          {t("team_of", { user: ltr(`@${m.username}`) })}
                                         </p>
                                         {subMembers.map((s) => {
                                           const sActive = s.referralStatus === "active";
@@ -2920,18 +2983,18 @@ export default function AffiliateDashboard() {
                                                   ${sActive ? "bg-green-200 text-green-800" : "bg-gray-200 text-gray-500"}`}>
                                                   {(s.name || s.username || "?")[0].toUpperCase()}
                                                 </div>
-                                                <span className="font-semibold text-gray-700 truncate">@{s.username}</span>
+                                                <span className="font-semibold text-gray-700 truncate"><bdi>@{s.username}</bdi></span>
                                                 {s.deliveredOrdersCount > 0 && (
                                                   <span className="text-gray-400 shrink-0">
-                                                    · {s.deliveredOrdersCount} {"liv."}
+                                                    · {s.deliveredOrdersCount} {t("deliveries_short")}
                                                   </span>
                                                 )}
                                               </div>
-                                              <span className={`px-2 py-0.5 rounded-full font-bold shrink-0 ml-2
+                                              <span className={`px-2 py-0.5 rounded-full font-bold shrink-0 ms-2
                                                 ${sActive ? "bg-green-200 text-green-800" : "bg-amber-100 text-amber-700"}`}>
                                                 {sActive
-                                                  ? ("Actif")
-                                                  : ("En attente")}
+                                                  ? t("active")
+                                                  : t("status_pending")}
                                               </span>
                                             </div>
                                           );
@@ -2952,7 +3015,7 @@ export default function AffiliateDashboard() {
                 );
               })()}
               <p className="text-xs text-gray-400 mt-3">
-                {"Triés par performance. Cliquez sur un membre pour voir ses commandes et son équipe."}
+                {t("team_sort_hint")}
               </p>
             </Section>
           </div>
@@ -2981,7 +3044,7 @@ export default function AffiliateDashboard() {
           <div className="space-y-5 max-w-md">
 
             {/* ── Profile Picture ── */}
-            <Section title="Photo de profil" icon={Users}>
+            <Section title={t("profile_photo")} icon={Users}>
               <AvatarUpload
                 affiliate={affiliate}
                 authHeaders={authHeaders}
@@ -3003,7 +3066,7 @@ export default function AffiliateDashboard() {
             {supportLink && <WhatsappSupportCard link={supportLink} />}
 
             {/* ── Edit Profile ── */}
-            <Section title="Modifier le profil" icon={Star}>
+            <Section title={t("edit_profile")} icon={Star}>
               <form onSubmit={async (e) => {
                 e.preventDefault();
                 const fd = new FormData(e.target);
@@ -3016,57 +3079,57 @@ export default function AffiliateDashboard() {
                     body: JSON.stringify({ type: "profile", name, phone: phone || undefined }),
                   });
                   const json = await res.json();
-                  if (!res.ok) { alert(json.error || "Erreur"); return; }
+                  if (!res.ok) { alert(json.error ? localizeServerError(json, lang) : t("error")); return; }
                   setData(d => ({ ...d, affiliate: json.affiliate }));
-                  alert("Profil mis à jour ✓");
-                } catch { alert("Erreur réseau"); }
+                  alert(t("profile_updated"));
+                } catch { alert(t("network_error")); }
               }} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">Nom complet</label>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">{t("full_name")}</label>
                   <input name="name" defaultValue={affiliate?.name || ""}
                     className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:border-gray-400"
-                    placeholder="Votre nom" required />
+                    placeholder={t("your_name")} required />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">Nom d'utilisateur</label>
-                  <input value={affiliate?.username ?? ""} disabled
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">{t("username")}</label>
+                  <input value={affiliate?.username ?? ""} disabled dir="ltr"
                     className="w-full px-4 py-2.5 text-sm border border-gray-100 rounded-xl bg-gray-100 text-gray-400 cursor-not-allowed" />
-                  <p className="text-xs text-gray-400 mt-1">Le nom d'utilisateur ne peut pas être modifié.</p>
+                  <p className="text-xs text-gray-400 mt-1">{t("username_locked")}</p>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">Numéro de téléphone</label>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">{t("phone_number")}</label>
                   {affiliate?.phone ? (
                     <>
-                      <input value={affiliate.phone ?? ""} disabled
+                      <input value={affiliate.phone ?? ""} disabled dir="auto"
                         className="w-full px-4 py-2.5 text-sm border border-gray-100 rounded-xl bg-gray-100 text-gray-400 cursor-not-allowed font-mono" />
-                      <p className="text-xs text-gray-400 mt-1">Le numéro de téléphone ne peut pas être modifié.</p>
+                      <p className="text-xs text-gray-400 mt-1">{t("phone_locked")}</p>
                     </>
                   ) : (
                     <>
                       <input name="phone" type="tel"
                         className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:border-gray-400 font-mono"
-                        placeholder="0612345678" dir="ltr" />
-                      <p className="text-xs text-amber-500 mt-1">⚠ Une fois enregistré, le numéro ne pourra plus être modifié.</p>
+                        placeholder="0612345678" dir="auto" />
+                      <p className="text-xs text-amber-500 mt-1">{t("phone_once")}</p>
                     </>
                   )}
                 </div>
                 <button type="submit"
                   className="w-full py-2.5 bg-gray-900 text-white text-sm font-semibold rounded-xl hover:bg-gray-700 transition-colors">
-                  Enregistrer le profil
+                  {t("save_profile")}
                 </button>
               </form>
             </Section>
 
             {/* ── Change Password ── */}
-            <Section title="Changer le mot de passe" icon={AlertCircle}>
+            <Section title={t("change_password")} icon={AlertCircle}>
               <form onSubmit={async (e) => {
                 e.preventDefault();
                 const fd = new FormData(e.target);
                 const currentPassword = fd.get("currentPassword");
                 const newPassword     = fd.get("newPassword");
                 const confirmPassword = fd.get("confirmPassword");
-                if (newPassword !== confirmPassword) { alert("Les mots de passe ne correspondent pas"); return; }
-                if (newPassword.length < 6) { alert("Le mot de passe doit contenir au moins 6 caractères"); return; }
+                if (newPassword !== confirmPassword) { alert(t("pw_mismatch")); return; }
+                if (newPassword.length < 6) { alert(t("pw_too_short")); return; }
                 try {
                   const res = await fetch("/api/affiliate/me", {
                     method: "PUT",
@@ -3074,34 +3137,34 @@ export default function AffiliateDashboard() {
                     body: JSON.stringify({ type: "profile", currentPassword, newPassword }),
                   });
                   const json = await res.json();
-                  if (!res.ok) { alert(json.error || "Erreur"); return; }
+                  if (!res.ok) { alert(json.error ? localizeServerError(json, lang) : t("error")); return; }
                   // The change revoked every other session; keep THIS one with its fresh token.
                   if (typeof json.token === "string" && json.token) { localStorage.setItem("affiliateToken", json.token); setToken(json.token); }
                   e.target.reset();
-                  alert("Mot de passe changé ✓");
-                } catch { alert("Erreur réseau"); }
+                  alert(t("pw_changed"));
+                } catch { alert(t("network_error")); }
               }} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">Mot de passe actuel</label>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">{t("current_password")}</label>
                   <input name="currentPassword" type="password" required
                     className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:border-gray-400"
                     placeholder="••••••••" />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">Nouveau mot de passe</label>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">{t("new_password")}</label>
                   <input name="newPassword" type="password" required minLength={6}
                     className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:border-gray-400"
                     placeholder="••••••••" />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">Confirmer le mot de passe</label>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">{t("confirm_password")}</label>
                   <input name="confirmPassword" type="password" required minLength={6}
                     className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:border-gray-400"
                     placeholder="••••••••" />
                 </div>
                 <button type="submit"
                   className="w-full py-2.5 bg-red-600 text-white text-sm font-semibold rounded-xl hover:bg-red-700 transition-colors">
-                  Changer le mot de passe
+                  {t("change_password")}
                 </button>
               </form>
             </Section>
@@ -3125,7 +3188,7 @@ export default function AffiliateDashboard() {
           className="fixed left-1/2 -translate-x-1/2 z-[75] w-[calc(100%-32px)] max-w-md bg-gray-900 text-white text-xs font-semibold px-4 py-3 rounded-2xl shadow-xl flex items-start gap-3 bottom-[calc(104px+env(safe-area-inset-bottom))] md:bottom-6">
           <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-300" />
           <span className="flex-1 leading-snug">{orderNotice}</span>
-          <button type="button" onClick={() => setOrderNotice(null)} className="text-white/60 hover:text-white" aria-label="×"><X className="w-4 h-4" /></button>
+          <button type="button" onClick={() => setOrderNotice(null)} className="text-white/60 hover:text-white" aria-label={t("close")} title={t("close")}><X className="w-4 h-4" /></button>
         </div>
       )}
 

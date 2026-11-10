@@ -8,19 +8,19 @@
  *   • total earned and the balance available for withdrawal (MAD cents, the ledger is the source of truth; the
  *     wallet read reconciles the recruiter's rewards first, exactly as on the wallet page) ← GET /api/recruiter/wallet
  * plus a one-line hint when the identity (CIN) is not approved yet (the status the app shell already loaded).
- * Arabic, RTL. 401 (and 403 RECRUITER_DISABLED with its notice) → back to the login page; 5xx / 429 / network
+ * Market language (MA → Arabic RTL, FR → French LTR; RECRUITER_TEXT, switches live). 401 (and 403 RECRUITER_DISABLED with its notice) → back to the login page; 5xx / 429 / network
  * failures show an error with a retry button. The shell (menu, header, alerts, logout) is mounted once by the
  * recruiter layout (RecruiterAppShell); this page renders its content only.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Users, UserPlus, ShoppingCart, PackageCheck, Coins, Wallet, ShieldAlert, ArrowLeft } from "lucide-react";
+import { Users, UserPlus, ShoppingCart, PackageCheck, Coins, Wallet, ShieldAlert } from "lucide-react";
 import { toRecruiterError, toRecruiterNetworkStatsView, toRecruiterWalletView } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel } from "./errorLabels";
 import { authAction, fmtMadCents, permsFromMe } from "./recruiterUiState";
 import { useRecruiterSession } from "./_components/RecruiterAppShell";
-import { CenteredNotice, RetryError, StatCard } from "./_components/ui";
+import { CenteredNotice, ForwardArrow, RetryError, StatCard, useRecruiterLocale } from "./_components/ui";
 import { fmt } from "./network/networkUi";
 
 /** GET a recruiter API → { ok, status, code, body } (never throws; only the error CODE is kept). */
@@ -34,15 +34,15 @@ async function getApi(url) {
   }
 }
 
-const num = (n) => (Number.isInteger(n) ? fmt(n) : "—");
 const LOADING = "…";
 
 export default function RecruiterDashboardPage() {
   const router = useRouter();
   const session = useRecruiterSession();
+  const { t: tr, lang, dir, intlLocale } = useRecruiterLocale();
   const [me, setMe] = useState(null);
   const [perms, setPerms] = useState(null); // { canViewOrders, canCreateAffiliates } (Phase 6 part 4)
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState(""); // error CODE (RECRUITER_DISABLED), rendered in the market language
   const [meError, setMeError] = useState(null); // error code of /me (not 401): shown with a retry
   const [stats, setStats] = useState({ data: null, error: null });
   const [wallet, setWallet] = useState({ data: null, error: null });
@@ -54,7 +54,7 @@ export default function RecruiterDashboardPage() {
     const action = authAction(r.status, r.code);
     if (action === "login") { router.replace("/recruiter/login"); return true; }
     if (action === "disabled") {
-      setNotice(recruiterErrorLabel(r.code));
+      setNotice(r.code);
       if (!noticeTimer.current) noticeTimer.current = setTimeout(() => { if (aliveRef.current) router.replace("/recruiter/login"); }, 2500);
       return true;
     }
@@ -107,22 +107,23 @@ export default function RecruiterDashboardPage() {
   if (!me) {
     return (
       <div data-recruiter-dashboard>
-        <h1 className="sr-only">لوحة التحكم</h1>
+        <h1 className="sr-only">{tr("nav_home")}</h1>
         {notice
-          ? <CenteredNotice hook="data-dashboard-notice">{notice}</CenteredNotice>
+          ? <CenteredNotice hook="data-dashboard-notice">{recruiterErrorLabel(notice, lang)}</CenteredNotice>
           : meError
             ? <div className="max-w-sm mx-auto py-16" data-dashboard-error><RetryError code={meError} onRetry={loadMe} hook="me" /></div>
-            : <p className="py-16 text-center text-sm text-gray-500" aria-live="polite">جارٍ التحميل…</p>}
+            : <p className="py-16 text-center text-sm text-gray-500" aria-live="polite">{tr("common_loading")}</p>}
       </div>
     );
   }
 
+  const num = (n) => (Number.isInteger(n) ? fmt(n, intlLocale) : "—");
   const canViewOrders = perms?.canViewOrders === true;
   const s = stats.data;
   const t = wallet.data?.totals ?? null;
   const real = s?.orders?.real ?? null;
   const orderValue = (k) => (!canViewOrders ? "—" : stats.error ? "—" : !s ? LOADING : real ? num(real[k]) : "—");
-  const ordersSub = !canViewOrders || (s && !real) ? "عرض الطلبات معطّل لحسابك" : "طلبات حقيقية فقط";
+  const ordersSub = !canViewOrders || (s && !real) ? tr("dash_orders_off") : tr("dash_orders_real_only");
   const identity = session?.identity ?? null;
   const showKyc = identity && identity.status !== "APPROVED";
   const available = t ? t.availableCents : null;
@@ -130,32 +131,32 @@ export default function RecruiterDashboardPage() {
   return (
     <div className="space-y-5" data-recruiter-dashboard>
       <div className="min-w-0">
-        <h1 className="text-lg font-bold text-gray-900">لوحة التحكم</h1>
-        <p className="text-xs text-gray-500 mt-0.5">نظرة سريعة على شبكتك وأرباحك.</p>
+        <h1 className="text-lg font-bold text-gray-900">{tr("nav_home")}</h1>
+        <p className="text-xs text-gray-500 mt-0.5">{tr("dash_subtitle")}</p>
       </div>
 
-      {notice && <p role="alert" className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700" data-dashboard-notice>{notice}</p>}
+      {notice && <p role="alert" className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700" data-dashboard-notice>{recruiterErrorLabel(notice, lang)}</p>}
 
       {showKyc && (
         <Link href="/recruiter/verification" data-kyc-hint
           className="flex items-center gap-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800 hover:bg-amber-100 min-h-11">
           <ShieldAlert className="w-5 h-5 shrink-0" aria-hidden="true" />
           <span className="flex-1 min-w-0">
-            {identity.status === "PENDING" ? "بطاقتك الوطنية قيد المراجعة." : identity.status === "REJECTED" ? "تم رفض بطاقتك الوطنية: أعد إرسالها." : "أرسل بطاقتك الوطنية: التحقق مطلوب قبل أي طلب سحب."}
+            {identity.status === "PENDING" ? tr("dash_kyc_pending") : identity.status === "REJECTED" ? tr("dash_kyc_rejected") : tr("dash_kyc_missing")}
           </span>
-          <ArrowLeft className="w-4 h-4 shrink-0" aria-hidden="true" />
+          <ForwardArrow dir={dir} className="w-4 h-4 shrink-0" aria-hidden="true" />
         </Link>
       )}
 
-      <section aria-label="أهم الأرقام" className="grid grid-cols-2 lg:grid-cols-3 gap-3" data-kpis>
-        <StatCard Icon={Users} color="purple" label="كل الأفلييت في شبكتك" value={stats.error ? "—" : s ? num(s.totals.affiliates) : LOADING} hook="network-total" sub="جميع المستويات" />
-        <StatCard Icon={UserPlus} color="blue" label="الأفلييت المباشرون" value={stats.error ? "—" : s ? num(s.totals.direct) : LOADING} hook="network-direct" sub="المستوى 1" />
-        <StatCard Icon={ShoppingCart} color="amber" label="مجموع الطلبات" value={orderValue("total")} hook="orders-total" sub={ordersSub} />
-        <StatCard Icon={PackageCheck} color="green" label="الطلبات المسلّمة" value={orderValue("delivered")} hook="orders-delivered" sub={ordersSub} />
-        <StatCard Icon={Coins} color="teal" label="إجمالي الأرباح" value={wallet.error ? "—" : t ? fmtMadCents(t.earnedCents) : LOADING} hook="earned" valueLtr />
-        <StatCard Icon={Wallet} color={available !== null && available < 0 ? "red" : "gray"} label="الرصيد المتاح للسحب"
-          value={wallet.error ? "—" : t ? fmtMadCents(available) : LOADING} hook="available" valueLtr
-          sub={available !== null && available < 0 ? "سالب بعد إلغاء مكافآت" : null} />
+      <section aria-label={tr("dash_kpis")} className="grid grid-cols-2 lg:grid-cols-3 gap-3" data-kpis>
+        <StatCard Icon={Users} color="purple" label={tr("dash_network_total")} value={stats.error ? "—" : s ? num(s.totals.affiliates) : LOADING} hook="network-total" sub={tr("dash_all_levels")} />
+        <StatCard Icon={UserPlus} color="blue" label={tr("dash_network_direct")} value={stats.error ? "—" : s ? num(s.totals.direct) : LOADING} hook="network-direct" sub={tr("dash_level_one")} />
+        <StatCard Icon={ShoppingCart} color="amber" label={tr("dash_orders_total")} value={orderValue("total")} hook="orders-total" sub={ordersSub} />
+        <StatCard Icon={PackageCheck} color="green" label={tr("dash_orders_delivered")} value={orderValue("delivered")} hook="orders-delivered" sub={ordersSub} />
+        <StatCard Icon={Coins} color="teal" label={tr("dash_total_rewards")} value={wallet.error ? "—" : t ? fmtMadCents(t.earnedCents, lang) : LOADING} hook="earned" valueLtr />
+        <StatCard Icon={Wallet} color={available !== null && available < 0 ? "red" : "gray"} label={tr("dash_available")}
+          value={wallet.error ? "—" : t ? fmtMadCents(available, lang) : LOADING} hook="available" valueLtr
+          sub={available !== null && available < 0 ? tr("dash_available_negative") : null} />
       </section>
 
       {stats.error && <RetryError code={stats.error} onRetry={loadStats} hook="stats" />}

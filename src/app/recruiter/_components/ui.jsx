@@ -7,11 +7,25 @@
  * accent, Rubik, touch targets ≥ 44 px). Every authenticated recruiter page is rendered inside RecruiterShell
  * (sidebar / header / bottom bar / "المزيد" sheet) and builds its content from these primitives — no per-page
  * design system. Presentation only: no fetch, no data, no business rule.
+ * Market language (MA → Arabic RTL, FR → French LTR): useRecruiterLocale() = useMarketLocale(RECRUITER_TEXT) —
+ * the ONE place the recruiter components read the language, direction and Intl locale.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import Link from "next/link";
-import { ArrowRight, Info, RefreshCw } from "lucide-react";
+import { ArrowLeft, ArrowRight, Info, RefreshCw } from "lucide-react";
+import { useMarketLocale } from "@/context/useMarketLocale";
+import { RECRUITER_TEXT } from "@/lib/recruiterI18n";
 import { recruiterErrorLabel } from "../errorLabels";
+
+/** { lang, dir, market, t, intlLocale } of the recruiter area (the visitor's market; switches live). */
+export function useRecruiterLocale() {
+  return useMarketLocale(RECRUITER_TEXT);
+}
+
+/** The "back" arrow points to the start side: right in RTL, left in LTR. */
+export const BackArrow = ({ dir, ...props }) => (dir === "rtl" ? <ArrowRight {...props} /> : <ArrowLeft {...props} />);
+/** The "forward / open" arrow points to the end side: left in RTL, right in LTR. */
+export const ForwardArrow = ({ dir, ...props }) => (dir === "rtl" ? <ArrowLeft {...props} /> : <ArrowRight {...props} />);
 
 /** Class tokens (Tailwind) shared by every recruiter page. */
 export const ui = {
@@ -68,14 +82,16 @@ export function CardTitle({ Icon, tone = "text-gray-400", title, id, aside }) {
  * icon tile, h1 title, subtitle, optional actions (rendered ONCE: beside the title from sm, under it on a
  * phone) and an optional row under it (tabs, filters).
  */
-export function PageHeader({ Icon, title, subtitle, back = { href: "/recruiter", label: "الرجوع للوحة" }, actions, children }) {
+export function PageHeader({ Icon, title, subtitle, back = { href: "/recruiter" }, actions, children }) {
+  const { t, dir } = useRecruiterLocale();
+  const backLabel = back?.label ?? t("common_back_dashboard");
   return (
     <div className="flex flex-col gap-4 min-w-0" data-page-header>
       <div className="flex flex-wrap sm:flex-nowrap items-start gap-3 min-w-0">
         {back && (
-          <Link href={back.href} aria-label={back.label} title={back.label} data-back
+          <Link href={back.href} aria-label={backLabel} title={backLabel} data-back
             className="grid place-items-center w-11 h-11 shrink-0 rounded-xl bg-white border border-gray-200 text-gray-600 hover:border-gray-400">
-            <ArrowRight className="w-5 h-5" aria-hidden="true" />
+            <BackArrow dir={dir} className="w-5 h-5" aria-hidden="true" />
           </Link>
         )}
         {Icon && (
@@ -134,13 +150,14 @@ const STAT_COLORS = {
 };
 /** The affiliate dashboard's StatCard: icon tile, number, label, optional sub-line; `hook` → data-* on the value. */
 export function StatCard({ Icon, label, value, sub, color = "gray", hook, valueLtr = false }) {
+  const { dir } = useRecruiterLocale();
   return (
     <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-2.5 min-w-0" {...(hook ? { "data-stat": hook } : {})}>
       <span className={`w-9 h-9 rounded-xl flex items-center justify-center ${STAT_COLORS[color] ?? STAT_COLORS.gray}`}>
         <Icon className="w-[18px] h-[18px]" aria-hidden="true" />
       </span>
       <div className="min-w-0">
-        <p className="text-lg sm:text-xl font-bold text-gray-900 leading-tight break-words" dir={valueLtr ? "ltr" : undefined} style={valueLtr ? { textAlign: "right" } : undefined}
+        <p className="text-lg sm:text-xl font-bold text-gray-900 leading-tight break-words" dir={valueLtr ? "ltr" : undefined} style={valueLtr ? { textAlign: dir === "rtl" ? "right" : "left" } : undefined}
           {...(hook ? { [`data-${hook}`]: "" } : {})}>{value}</p>
         <p className="text-xs text-gray-500 mt-1">{label}</p>
         {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
@@ -176,12 +193,13 @@ export function EmptyState({ Icon = Info, text, hook = "", children }) {
 }
 
 export function RetryError({ code, onRetry, hook = "" }) {
+  const { t, lang } = useRecruiterLocale();
   return (
     <div role="alert" className="rounded-xl border border-red-100 bg-red-50 p-4 text-sm text-red-700 flex flex-wrap items-center justify-between gap-3" data-error={hook}>
-      <span className="min-w-0">{recruiterErrorLabel(code)}</span>
+      <span className="min-w-0">{recruiterErrorLabel(code, lang)}</span>
       <button type="button" onClick={onRetry} data-retry={hook}
         className="shrink-0 inline-flex items-center gap-1.5 min-h-10 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100">
-        <RefreshCw className="w-4 h-4" aria-hidden="true" /> إعادة المحاولة
+        <RefreshCw className="w-4 h-4" aria-hidden="true" /> {t("common_retry")}
       </button>
     </div>
   );
@@ -197,10 +215,11 @@ export function CenteredNotice({ children, hook = "data-page-notice" }) {
 }
 
 /** Loading line (screen-reader friendly) with a soft skeleton block. */
-export function LoadingBlock({ label = "جارٍ التحميل…", hook = "data-loading" }) {
+export function LoadingBlock({ label, hook = "data-loading" }) {
+  const { t } = useRecruiterLocale();
   return (
     <div className="space-y-3" aria-live="polite">
-      <p className="text-sm text-gray-500" {...{ [hook]: "" }}>{label}</p>
+      <p className="text-sm text-gray-500" {...{ [hook]: "" }}>{label ?? t("common_loading")}</p>
       <div className="h-24 rounded-2xl bg-white border border-gray-100 animate-pulse" aria-hidden="true" />
     </div>
   );

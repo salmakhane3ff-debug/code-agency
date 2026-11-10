@@ -1,6 +1,7 @@
 "use client";
 /**
- * /recruiter/password — the recruiter changes their OWN password (Phase 6 part 2). Arabic, RTL.
+ * /recruiter/password — the recruiter changes their OWN password (Phase 6 part 2). Market language
+ * (MA → Arabic RTL, FR → French LTR); errors are kept as CODES in state and rendered in the current language.
  *
  *   • PUT /api/recruiter/password { currentPassword, newPassword, newPasswordConfirm }
  *     → 200: every OTHER session is revoked; this one continues (the server refreshed the cookie).
@@ -17,12 +18,13 @@ import { CheckCircle2, Eye, EyeOff, KeyRound, Lock } from "lucide-react";
 import { toRecruiterError } from "@/lib/recruiterVisibility";
 import { recruiterErrorLabel, recruiterFieldErrorLabel } from "../errorLabels";
 import { authAction } from "../recruiterUiState";
-import { CenteredNotice, LoadingBlock, PageHeader, RetryError, Section, ui } from "../_components/ui";
+import { CenteredNotice, LoadingBlock, PageHeader, RetryError, Section, ui, useRecruiterLocale } from "../_components/ui";
 
 const MIN = 8;
 const MAX = 128;
 const EMPTY = { currentPassword: "", newPassword: "", newPasswordConfirm: "" };
-const WRONG_CURRENT = "كلمة السر الحالية غير صحيحة";
+/** Page-level error code (not a server code): the CURRENT password is wrong (INVALID_CREDENTIALS on this page). */
+const WRONG_CURRENT = "WRONG_CURRENT";
 
 /** Client-side hints with the same rules as the server (8–128 characters, confirmation). */
 function localErrors(f) {
@@ -35,12 +37,13 @@ function localErrors(f) {
 
 export default function RecruiterPasswordPage() {
   const router = useRouter();
+  const { t, lang } = useRecruiterLocale();
   const [ready, setReady] = useState(false);
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState(""); // error CODE (RECRUITER_DISABLED)
   const [form, setForm] = useState(EMPTY);
   const [show, setShow] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
-  const [error, setError] = useState("");
+  const [error, setError] = useState(""); // error CODE (or WRONG_CURRENT)
   const [done, setDone] = useState(false);
   const [busy, setBusy] = useState(false);
   const [checkError, setCheckError] = useState(null); // session check failed (not 401): retry
@@ -49,7 +52,7 @@ export default function RecruiterPasswordPage() {
 
   const toLogin = useCallback((code) => {
     if (code === "RECRUITER_DISABLED") {
-      setNotice(recruiterErrorLabel(code));
+      setNotice(code);
       setTimeout(() => { if (aliveRef.current) router.replace("/recruiter/login"); }, 2500);
     } else {
       router.replace("/recruiter/login");
@@ -87,8 +90,8 @@ export default function RecruiterPasswordPage() {
   const fieldMessage = (field) => {
     const c = fieldErrors[field];
     if (!c) return "";
-    if (field === "currentPassword") return c === "WRONG" ? WRONG_CURRENT : "أدخل كلمة السر الحالية.";
-    return recruiterFieldErrorLabel(field, c);
+    if (field === "currentPassword") return c === "WRONG" ? t("pw_wrong_current") : t("pw_enter_current");
+    return recruiterFieldErrorLabel(field, c, lang);
   };
 
   async function submit(e) {
@@ -97,7 +100,7 @@ export default function RecruiterPasswordPage() {
     setError("");
     setDone(false);
     const local = localErrors(form);
-    if (Object.keys(local).length) { setFieldErrors(local); setError(recruiterErrorLabel("INVALID_INPUT")); return; }
+    if (Object.keys(local).length) { setFieldErrors(local); setError("INVALID_INPUT"); return; }
     setFieldErrors({});
     busyRef.current = true;
     setBusy(true);
@@ -122,9 +125,9 @@ export default function RecruiterPasswordPage() {
         return;
       }
       if (err.fields) setFieldErrors(err.fields);
-      setError(recruiterErrorLabel(err.code));
+      setError(err.code);
     } catch {
-      if (aliveRef.current) setError(recruiterErrorLabel(null));
+      if (aliveRef.current) setError("SERVER_ERROR");
     } finally {
       busyRef.current = false;
       if (aliveRef.current) setBusy(false);
@@ -135,7 +138,7 @@ export default function RecruiterPasswordPage() {
     return (
       <div className="min-w-0">
         {notice
-          ? <CenteredNotice hook="data-page-notice">{notice}</CenteredNotice>
+          ? <CenteredNotice hook="data-page-notice">{recruiterErrorLabel(notice, lang)}</CenteredNotice>
           : checkError
             ? <div className="max-w-sm mx-auto py-16"><RetryError code={checkError} onRetry={checkSession} /></div>
             : <LoadingBlock />}
@@ -145,24 +148,24 @@ export default function RecruiterPasswordPage() {
 
   return (
     <div className="space-y-5 min-w-0" data-recruiter-password>
-      <PageHeader Icon={KeyRound} title="تغيير كلمة السر" />
+      <PageHeader Icon={KeyRound} title={t("pw_title")} />
 
       <div className="max-w-2xl space-y-4 min-w-0">
         {done && (
           <p role="status" className="flex items-start gap-2 rounded-xl border border-green-100 bg-green-50 p-4 text-sm text-green-700" data-password-success>
             <CheckCircle2 className="w-5 h-5 shrink-0" aria-hidden="true" />
-            <span className="min-w-0">تم تغيير كلمة السر. تم تسجيل الخروج من جميع الأجهزة الأخرى.</span>
+            <span className="min-w-0">{t("pw_success")}</span>
           </p>
         )}
 
-        <Section Icon={Lock} title="كلمة السر">
+        <Section Icon={Lock} title={t("common_password")}>
           <form onSubmit={submit} noValidate className="space-y-4 min-w-0">
             <p className={ui.hint}>
-              بعد تغيير كلمة السر، سيتم تسجيل الخروج من جميع الأجهزة الأخرى، وتبقى متصلاً على هذا الجهاز.
+              {t("pw_hint")}
             </p>
 
             <div>
-              <label htmlFor="currentPassword" className={ui.label}>كلمة السر الحالية</label>
+              <label htmlFor="currentPassword" className={ui.label}>{t("pw_current")}</label>
               <input id="currentPassword" type={show ? "text" : "password"} autoComplete="current-password" dir="ltr"
                 value={form.currentPassword} onChange={(e) => set("currentPassword", e.target.value)} maxLength={MAX}
                 className={`${ui.input} min-w-0`} data-current-password />
@@ -170,22 +173,22 @@ export default function RecruiterPasswordPage() {
             </div>
 
             <div>
-              <label htmlFor="newPassword" className={ui.label}>كلمة السر الجديدة</label>
+              <label htmlFor="newPassword" className={ui.label}>{t("pw_new")}</label>
               <div className="flex items-stretch gap-2 min-w-0">
                 <input id="newPassword" type={show ? "text" : "password"} autoComplete="new-password" dir="ltr"
                   value={form.newPassword} onChange={(e) => set("newPassword", e.target.value)} maxLength={MAX}
                   className={`${ui.input} min-w-0`} data-new-password />
-                <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "إخفاء كلمة السر" : "إظهار كلمة السر"}
+                <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? t("common_hide_password") : t("common_show_password")}
                   className="shrink-0 grid place-items-center min-h-11 w-11 rounded-xl border border-gray-200 bg-white text-gray-600 hover:border-gray-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300" data-toggle-password>
                   {show ? <EyeOff className="w-4 h-4" aria-hidden="true" /> : <Eye className="w-4 h-4" aria-hidden="true" />}
                 </button>
               </div>
-              <p className={`mt-1.5 ${ui.hint}`}>من {MIN} إلى {MAX} حرفاً.</p>
+              <p className={`mt-1.5 ${ui.hint}`}>{t("pw_length_hint", { min: MIN, max: MAX })}</p>
               {fieldErrors.newPassword && <p className="mt-1 text-xs text-red-700" data-field-error="newPassword">{fieldMessage("newPassword")}</p>}
             </div>
 
             <div>
-              <label htmlFor="newPasswordConfirm" className={ui.label}>تأكيد كلمة السر الجديدة</label>
+              <label htmlFor="newPasswordConfirm" className={ui.label}>{t("pw_confirm")}</label>
               <input id="newPasswordConfirm" type={show ? "text" : "password"} autoComplete="new-password" dir="ltr"
                 value={form.newPasswordConfirm} onChange={(e) => set("newPasswordConfirm", e.target.value)} maxLength={MAX}
                 className={`${ui.input} min-w-0`} data-confirm-password />
@@ -193,11 +196,11 @@ export default function RecruiterPasswordPage() {
             </div>
 
             {fieldErrors.body && <p className="text-xs text-red-700" data-field-error="body">{fieldMessage("body")}</p>}
-            {error && <p role="alert" className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl px-3 py-2" data-password-error>{error}</p>}
+            {error && <p role="alert" className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl px-3 py-2" data-password-error>{error === WRONG_CURRENT ? t("pw_wrong_current") : recruiterErrorLabel(error, lang)}</p>}
 
             <button type="submit" disabled={busy} data-password-submit className={`${ui.btnPrimary} w-full`}>
               <Lock className="w-4 h-4" aria-hidden="true" />
-              {busy ? "جارٍ الحفظ…" : "تغيير كلمة السر"}
+              {busy ? t("common_saving") : t("pw_title")}
             </button>
           </form>
         </Section>

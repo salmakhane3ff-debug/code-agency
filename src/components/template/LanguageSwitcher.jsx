@@ -7,7 +7,9 @@ const LANGS = [
   { code: "fr", flag: "🇫🇷", label: "Switch to French" },
 ];
 
-export default function LanguageSwitcher() {
+// `labels` (optional, { ar, fr }): localized button labels for the market-scoped areas. Without it — every storefront
+// usage — the existing labels below are used unchanged.
+export default function LanguageSwitcher({ labels = null }) {
   const { lang, setLang } = useLanguage();
 
   return (
@@ -16,8 +18,8 @@ export default function LanguageSwitcher() {
         <button
           key={code}
           onClick={() => setLang(code)}
-          aria-label={label}
-          title={label}
+          aria-label={labels?.[code] ?? label}
+          title={labels?.[code] ?? label}
           suppressHydrationWarning
           className={`w-7 h-7 flex items-center justify-center rounded-md text-lg transition-all duration-150
             ${lang === code

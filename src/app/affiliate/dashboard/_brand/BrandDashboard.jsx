@@ -214,7 +214,7 @@ function Hero({ access, t, d, closed, locale }) {
   );
 }
 
-/** Simulated money of one training order → "1 234,5 MAD" (money from BrandTab), or "—". */
+/** Simulated money of one training order → "1 234,5 DH" / Arabic label (money from BrandTab), or "—". */
 const fmtMoney = (money, v) => (typeof v === "number" && Number.isFinite(v) ? money(v) : "—");
 
 /** SIMULATED balance / profit / revenue of the selected period (same orders as the counts below). */

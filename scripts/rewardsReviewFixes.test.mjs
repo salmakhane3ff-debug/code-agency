@@ -77,7 +77,7 @@ console.log("\n1. Order status feedback");
   ok("…refreshes the list on 404/409", /if \(shouldRefreshOrdersAfter\(res\.status\)\) fetchAll\(token, \{ silent: true \}\);/.test(handler));
   ok("…and reports network failures", /catch \{\s*showOrderNotice\(orderStatusErrorMessage\(0, lang\)\);/.test(handler));
   ok("notice rendered as an alert in the site language direction",
-    /role="alert" dir=\{orderMessageDir\(lang\)\}/.test(page) && /\{orderNotice\}/.test(page) && /const \{ lang \} = useLanguage\(\);/.test(page));
+    /role="alert" dir=\{orderMessageDir\(lang\)\}/.test(page) && /\{orderNotice\}/.test(page) && /const \{ lang, t, intlLocale \} = useMarketLocale\(AFFILIATE_DASHBOARD_TEXT\);/.test(page));
 }
 
 // ── 2. Rewards for ACTIVE affiliates only ────────────────────────────────────

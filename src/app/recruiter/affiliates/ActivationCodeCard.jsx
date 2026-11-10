@@ -9,12 +9,13 @@
  * (#code=…), which browsers never send to the server.
  * Also exports requestNewActivationCode(): POST /api/recruiter/affiliates/<id>/activation-code.
  * Phase 2 (UI only): styled with the recruiter area's shared ui.jsx tokens.
+ * Texts (and the WhatsApp message) in the market language; the code and the link are LTR islands.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { useState } from "react";
 import { Copy, KeyRound, MessageCircle } from "lucide-react";
 import { toRecruiterActivationCodeView, toRecruiterError } from "@/lib/recruiterVisibility";
-import { ui } from "../_components/ui";
+import { ui, useRecruiterLocale } from "../_components/ui";
 
 /** Issue a new code for one of the recruiter's affiliates → { ok, status, activation?, code? }. */
 export async function requestNewActivationCode(affiliateId) {
@@ -50,19 +51,20 @@ async function copyText(text) {
   }
 }
 
-const fmtDate = (iso) => {
+const fmtDate = (iso, locale) => {
   const d = iso ? new Date(iso) : null;
   return d && Number.isFinite(d.getTime())
-    ? d.toLocaleString("ar-MA", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    ? d.toLocaleString(locale, { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })
     : "";
 };
 
 export default function ActivationCodeCard({ activation }) {
+  const { t, intlLocale } = useRecruiterLocale();
   const [copied, setCopied] = useState("");
   const code = typeof activation?.code === "string" ? activation.code : "";
   if (!code) return null;
   const link = `${typeof window !== "undefined" ? window.location.origin : ""}/affiliate/activate#code=${encodeURIComponent(code)}`;
-  const share = `https://wa.me/?text=${encodeURIComponent(`مرحباً، هذا رابط تفعيل حسابك كأفلييت. افتحه واختر كلمة السر الخاصة بك (صالح لمدة 24 ساعة):\n${link}`)}`;
+  const share = `https://wa.me/?text=${encodeURIComponent(`${t("code_share_text")}\n${link}`)}`;
   const doCopy = async (what, text) => { setCopied((await copyText(text)) ? what : "fail"); };
 
   return (
@@ -71,50 +73,49 @@ export default function ActivationCodeCard({ activation }) {
         <span className="grid place-items-center w-9 h-9 shrink-0 rounded-xl bg-violet-50 text-violet-600" aria-hidden="true">
           <KeyRound className="w-[18px] h-[18px]" />
         </span>
-        <h3 className="text-sm font-bold text-gray-700">رمز التفعيل</h3>
+        <h3 className="text-sm font-bold text-gray-700">{t("code_title")}</h3>
       </div>
 
       <p className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3.5 py-2.5 leading-relaxed" role="note" data-activation-warning>
-        يظهر هذا الرمز مرة واحدة فقط. أرسله للأفلييت بنفسك عبر واتساب أو أي وسيلة أخرى. لا تستعمله أنت ولا تشاركه مع أي شخص آخر.
-        الأفلييت سيختار كلمة السر الخاصة به، ولن يتم تفعيل الحساب إلا بعد موافقة الإدارة.
+        {t("code_warning")}
       </p>
 
       <div className="min-w-0">
-        <p className="text-xs font-semibold text-gray-500 mb-1.5">الرمز</p>
+        <p className="text-xs font-semibold text-gray-500 mb-1.5">{t("code_code")}</p>
         <code dir="ltr" className="block w-full min-w-0 select-all break-all rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 font-mono text-sm text-left text-gray-900" data-activation-code>
           {code}
         </code>
         <button type="button" onClick={() => doCopy("code", code)} data-copy-code className={`${ui.btnSecondary} mt-2`}>
           <Copy className="w-4 h-4" aria-hidden="true" />
-          نسخ الرمز
+          {t("code_copy_code")}
         </button>
       </div>
 
       <div className="min-w-0">
-        <p className="text-xs font-semibold text-gray-500 mb-1.5">رابط التفعيل</p>
+        <p className="text-xs font-semibold text-gray-500 mb-1.5">{t("code_link")}</p>
         <code dir="ltr" className="block w-full min-w-0 select-all break-all rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 font-mono text-xs text-left text-gray-700" data-activation-link>
           {link}
         </code>
         <div className="mt-2 flex flex-wrap gap-2">
           <button type="button" onClick={() => doCopy("link", link)} data-copy-link className={ui.btnSecondary}>
             <Copy className="w-4 h-4" aria-hidden="true" />
-            نسخ الرابط
+            {t("code_copy_link")}
           </button>
           <a href={share} target="_blank" rel="noopener noreferrer" data-share-whatsapp
             className="inline-flex items-center justify-center gap-2 min-h-11 rounded-xl bg-green-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-green-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-300">
             <MessageCircle className="w-4 h-4" aria-hidden="true" />
-            مشاركة عبر واتساب
+            {t("code_share_whatsapp")}
           </a>
         </div>
       </div>
 
       {copied && (
         <p className={`text-xs font-semibold ${copied === "fail" ? "text-red-700" : "text-green-700"}`} aria-live="polite" data-copy-status>
-          {copied === "fail" ? "تعذّر النسخ، انسخ النص يدوياً." : copied === "code" ? "تم نسخ الرمز." : "تم نسخ الرابط."}
+          {copied === "fail" ? t("code_copy_failed") : copied === "code" ? t("code_copied_code") : t("code_copied_link")}
         </p>
       )}
       {activation?.expiresAt && (
-        <p className={ui.hint} data-activation-expiry>صالح لمدة 24 ساعة، حتى {fmtDate(activation.expiresAt)}</p>
+        <p className={ui.hint} data-activation-expiry>{t("code_valid_until")} <bdi>{fmtDate(activation.expiresAt, intlLocale)}</bdi></p>
       )}
     </div>
   );

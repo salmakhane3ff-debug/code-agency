@@ -20,11 +20,16 @@
  *     preview and prefers-reduced-motion; prev / next buttons, dots (≤ 10 proofs) or
  *     an "i / total" counter, arrow keys
  *     and swipe (mirrored in Arabic RTL); click → full-size preview dialog
+ *   • language: the visitor's market (useMarketLocale → AFFILIATE_TABS_TEXT,
+ *     proofs_* keys): MA → Arabic / RTL, FR → French / LTR. The optional `lang`
+ *     prop is accepted for compatibility but the market is the source of truth
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, X, BadgeCheck, ZoomIn, Loader2 } from "lucide-react";
+import { useMarketLocale } from "@/context/useMarketLocale";
+import { AFFILIATE_TABS_TEXT } from "@/lib/affiliateTabsI18n";
 
 const ROTATE_MS = 5000;
 const REFRESH_MIN_MS = 5 * 60 * 1000;
@@ -52,38 +57,24 @@ function mergeUnique(a, b) {
   return [...a, ...b.filter((p) => !seen.has(p.token) && seen.add(p.token))];
 }
 
-const TEXT = {
-  fr: {
-    title: "Preuves de paiement récentes",
-    caption: "Paiements des dernières 72 h",
-    prev: "Preuve précédente",
-    next: "Preuve suivante",
-    open: "Agrandir le reçu",
-    close: "Fermer",
-    goTo: (n) => `Afficher la preuve ${n}`,
-    position: (i, n) => `Preuve ${i} sur ${n}`,
-    receiptOf: (name) => `Reçu de paiement — ${name}`,
-    paid: "Payé",
-    unavailable: "Reçu indisponible",
-    ago: (h) => (h < 1 ? "il y a moins d’une heure" : `il y a ${h} h`),
-    currency: "MAD",
-  },
-  ar: {
-    title: "إثباتات الدفع الأخيرة",
-    caption: "مدفوعات آخر 72 ساعة",
-    prev: "الإثبات السابق",
-    next: "الإثبات التالي",
-    open: "تكبير الوصل",
-    close: "إغلاق",
-    goTo: (n) => `عرض الإثبات ${n}`,
-    position: (i, n) => `الإثبات ${i} من ${n}`,
-    receiptOf: (name) => `وصل الدفع — ${name}`,
-    paid: "تم الدفع",
-    unavailable: "الوصل غير متوفر",
-    ago: (h) => (h < 1 ? "منذ أقل من ساعة" : `منذ ${h} ساعة`),
-    currency: "درهم",
-  },
-};
+/** The slider's texts for the current market (same shape the component always used). */
+function sliderText(t) {
+  return {
+    title: t("proofs_title"),
+    caption: t("proofs_caption"),
+    prev: t("proofs_prev"),
+    next: t("proofs_next"),
+    open: t("proofs_open"),
+    close: t("proofs_close"),
+    goTo: (n) => t("proofs_go_to", { n }),
+    position: (i, n) => t("proofs_position", { i, n }),
+    receiptOf: (name) => t("proofs_receipt_of", { name }),
+    paid: t("proofs_paid"),
+    unavailable: t("proofs_unavailable"),
+    ago: (h) => (h < 1 ? t("proofs_ago_lt1") : t("proofs_ago_h", { h })),
+    currency: t("proofs_currency"),
+  };
+}
 
 function authHeader() {
   try {
@@ -94,10 +85,10 @@ function authHeader() {
   }
 }
 
-function fmtAmount(n, lang, cur) {
+function fmtAmount(n, locale, cur) {
   const v = Number(n);
   if (!Number.isFinite(v)) return "—";
-  return `${v.toLocaleString(lang === "ar" ? "ar-MA" : "fr-FR", { maximumFractionDigits: 2 })} ${cur}`;
+  return `${v.toLocaleString(locale, { maximumFractionDigits: 2 })} ${cur}`;
 }
 
 function hoursSince(iso) {
@@ -167,7 +158,7 @@ function usePrefersReducedMotion() {
   return reduced;
 }
 
-function ReceiptPreview({ proof, url, t, lang, onClose }) {
+function ReceiptPreview({ proof, url, t, dir, locale, onClose }) {
   const closeRef = useRef(null);
   useEffect(() => {
     const opener = document.activeElement;
@@ -181,13 +172,13 @@ function ReceiptPreview({ proof, url, t, lang, onClose }) {
   }, [onClose]);
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-gray-950/85 p-4" onClick={onClose} data-proof-preview>
-      <div role="dialog" aria-modal="true" aria-label={t.receiptOf(proof.name)} dir={lang === "ar" ? "rtl" : "ltr"}
+      <div role="dialog" aria-modal="true" aria-label={t.receiptOf(proof.name)} dir={dir}
         onClick={(e) => e.stopPropagation()}
         className="relative flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
         <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-3">
           <div className="min-w-0">
-            <p className="truncate text-sm font-bold text-gray-900">{proof.name}</p>
-            <p className="text-sm font-black text-emerald-600">{fmtAmount(proof.amount, lang, t.currency)}</p>
+            <p className="truncate text-sm font-bold text-gray-900" dir="auto">{proof.name}</p>
+            <p className="text-sm font-black text-emerald-600"><bdi>{fmtAmount(proof.amount, locale, t.currency)}</bdi></p>
           </div>
           <button ref={closeRef} type="button" onClick={onClose} aria-label={t.close}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400">
@@ -205,9 +196,11 @@ function ReceiptPreview({ proof, url, t, lang, onClose }) {
   );
 }
 
-export default function PaymentProofsSlider({ lang = "fr" }) {
-  const t = TEXT[lang === "ar" ? "ar" : "fr"];
-  const rtl = lang === "ar";
+export default function PaymentProofsSlider() {
+  const market = useMarketLocale(AFFILIATE_TABS_TEXT);
+  const { dir, intlLocale } = market;
+  const t = sliderText(market.t);
+  const rtl = dir === "rtl";
   const [proofs, setProofs] = useState([]);
   const [total, setTotal] = useState(0);
   const [nextCursor, setNextCursor] = useState(null);
@@ -317,7 +310,7 @@ export default function PaymentProofsSlider({ lang = "fr" }) {
   const NextIcon = rtl ? ChevronLeft : ChevronRight;
 
   return (
-    <section dir={rtl ? "rtl" : "ltr"} aria-roledescription="carousel" aria-label={t.title} data-payment-proofs
+    <section dir={dir} aria-roledescription="carousel" aria-label={t.title} data-payment-proofs
       className="overflow-hidden rounded-2xl border border-gray-100 bg-white p-4 shadow-sm"
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
       onFocus={() => setFocused(true)}
@@ -345,7 +338,7 @@ export default function PaymentProofsSlider({ lang = "fr" }) {
         )}
       </div>
 
-      <div role="group" aria-roledescription="slide" aria-label={`${index + 1} / ${shownTotal}`} aria-live={paused ? "polite" : "off"}
+      <div role="group" aria-roledescription="slide" aria-label={t.position(index + 1, shownTotal)} aria-live={paused ? "polite" : "off"}
         className="flex flex-col gap-3 sm:flex-row sm:items-center"
         onTouchStart={(e) => { setTouching(true); touchX.current = e.touches[0]?.clientX ?? null; }}
         onTouchEnd={(e) => {
@@ -372,8 +365,8 @@ export default function PaymentProofsSlider({ lang = "fr" }) {
           </span>
         </button>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-bold text-gray-900" data-proof-name>{current.name}</p>
-          <p className="text-xl font-black text-emerald-600" data-proof-amount>{fmtAmount(current.amount, lang, t.currency)}</p>
+          <p className="truncate text-sm font-bold text-gray-900" dir="auto" data-proof-name>{current.name}</p>
+          <p className="text-xl font-black text-emerald-600" data-proof-amount><bdi>{fmtAmount(current.amount, intlLocale, t.currency)}</bdi></p>
           <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
             <span className="rounded-full bg-emerald-50 px-2 py-0.5 font-semibold text-emerald-700">{t.paid}</span>
             <span>{t.ago(hoursSince(current.publishedAt))}</span>
@@ -391,11 +384,11 @@ export default function PaymentProofsSlider({ lang = "fr" }) {
       )}
       {shownTotal > MAX_DOTS && (
         <p className="mt-3 text-center text-xs font-semibold text-gray-500 tabular-nums" aria-label={t.position(index + 1, shownTotal)} data-proof-counter>
-          <bdi>{index + 1} / {shownTotal}</bdi>
+          <bdi dir="ltr">{index + 1} / {shownTotal}</bdi>
         </p>
       )}
 
-      {preview && <ReceiptPreview proof={current} url={url} t={t} lang={lang} onClose={closePreview} />}
+      {preview && <ReceiptPreview proof={current} url={url} t={t} dir={dir} locale={intlLocale} onClose={closePreview} />}
     </section>
   );
 }

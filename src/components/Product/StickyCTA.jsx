@@ -105,7 +105,8 @@ export default function StickyCTA({ cfg = {}, onOrder, buying = false, hideWhenI
 
   return (
     <div role="complementary" aria-label={buttonText || "CTA"} className={barCls}>
-      <div dir="rtl" className={innerCls} style={{ background: barBg }}>
+      {/* Direction is inherited from the landing page (market: RTL for MA, LTR for FR). */}
+      <div className={innerCls} style={{ background: barBg }}>
         {headingText && (
           <p className="flex-1 min-w-0 text-sm font-black text-gray-900 leading-snug line-clamp-2">
             {headingText}

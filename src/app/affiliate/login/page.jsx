@@ -1,11 +1,21 @@
 "use client";
-
+/**
+ * /affiliate/login — affiliate sign-in. Language follows the visitor's market
+ * (useMarketLocale → AFFILIATE_TABS_TEXT, login_* keys): MA → Arabic / RTL,
+ * FR → French / LTR. The username/phone and password inputs stay LTR islands
+ * (the password field and its show/hide button are positioned physically,
+ * consistently with that LTR input). Auth logic unchanged.
+ */
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Users, Lock, Loader2, AlertCircle, Eye, EyeOff } from "lucide-react";
+import { useMarketLocale } from "@/context/useMarketLocale";
+import { AFFILIATE_TABS_TEXT } from "@/lib/affiliateTabsI18n";
+import { localizeServerError } from "@/lib/serverText/affiliateServerText";
 
 export default function AffiliateLoginPage() {
   const router = useRouter();
+  const { t, lang } = useMarketLocale(AFFILIATE_TABS_TEXT);
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -43,10 +53,11 @@ export default function AffiliateLoginPage() {
         localStorage.setItem("affiliateName",     data.affiliate.name || data.affiliate.username);
         router.push("/affiliate/dashboard");
       } else {
-        setError(data.error || "Erreur de connexion");
+        // Server text (+ code) kept as sent and localized at display time; our own fallback is a key.
+        setError(data.error ? { text: data.error, code: data.code } : { key: "login_err_default" });
       }
     } catch {
-      setError("Impossible de se connecter au serveur. Vérifiez votre connexion.");
+      setError({ key: "login_err_server" });
     } finally {
       setLoading(false);
     }
@@ -61,8 +72,8 @@ export default function AffiliateLoginPage() {
           <div className="inline-flex items-center justify-center w-16 h-16 bg-white/10 rounded-2xl mb-4 backdrop-blur">
             <Users className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-white">Espace Partenaires</h1>
-          <p className="text-gray-400 text-sm mt-1">Connectez-vous à votre tableau de bord</p>
+          <h1 className="text-2xl font-bold text-white">{t("login_title")}</h1>
+          <p className="text-gray-400 text-sm mt-1">{t("login_subtitle")}</p>
         </div>
 
         {/* Card */}
@@ -72,7 +83,7 @@ export default function AffiliateLoginPage() {
           {error && (
             <div className="flex items-start gap-2.5 bg-red-50 border border-red-100 rounded-2xl px-4 py-3">
               <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-              <p className="text-sm text-red-600">{error}</p>
+              <p className="text-sm text-red-600">{error.key ? t(error.key) : localizeServerError(error, lang)}</p>
             </div>
           )}
 
@@ -80,14 +91,15 @@ export default function AffiliateLoginPage() {
 
             {/* Username / Phone */}
             <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                Téléphone ou nom d&apos;utilisateur
+              <label htmlFor="aff-login-username" className="block text-xs font-semibold text-gray-600 mb-1.5">
+                {t("login_username")}
               </label>
               <input
+                id="aff-login-username"
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="0612345678 ou votre-identifiant"
+                placeholder={t("login_username_placeholder")}
                 required
                 autoFocus
                 className="w-full px-4 py-3 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:border-gray-400 font-mono"
@@ -97,11 +109,12 @@ export default function AffiliateLoginPage() {
 
             {/* Password */}
             <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                Mot de passe
+              <label htmlFor="aff-login-password" className="block text-xs font-semibold text-gray-600 mb-1.5">
+                {t("login_password")}
               </label>
-              <div className="relative">
+              <div className="relative" dir="ltr">
                 <input
+                  id="aff-login-password"
                   type={showPwd ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -113,6 +126,7 @@ export default function AffiliateLoginPage() {
                 <button
                   type="button"
                   onClick={() => setShowPwd(!showPwd)}
+                  aria-label={showPwd ? t("login_hide_password") : t("login_show_password")}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                 >
                   {showPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -127,21 +141,21 @@ export default function AffiliateLoginPage() {
               className="w-full flex items-center justify-center gap-2 py-3 bg-gray-900 hover:bg-gray-800 text-white rounded-xl font-bold text-sm transition-all disabled:opacity-50 active:scale-[0.99]"
             >
               {loading ? (
-                <><Loader2 className="w-4 h-4 animate-spin" /> Connexion...</>
+                <><Loader2 className="w-4 h-4 animate-spin" /> {t("login_loading")}</>
               ) : (
-                <><Lock className="w-4 h-4" /> Se connecter</>
+                <><Lock className="w-4 h-4" /> {t("login_submit")}</>
               )}
             </button>
           </form>
 
           <p className="text-center text-xs text-gray-400 pt-1">
-            Pas encore partenaire ?{" "}
-            <span className="text-gray-600 font-medium">Contactez l&apos;administration</span>
+            {t("login_not_partner")}{" "}
+            <span className="text-gray-600 font-medium">{t("login_contact")}</span>
           </p>
         </div>
 
         <p className="text-center text-xs text-gray-500 mt-6">
-          © {new Date().getFullYear()} — Plateforme Partenaires
+          © <bdi>{new Date().getFullYear()}</bdi> — {t("login_footer")}
         </p>
       </div>
     </div>

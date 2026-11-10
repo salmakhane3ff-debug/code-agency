@@ -15,6 +15,7 @@
 const fr = {
   title: "Créez votre marque",
   subtitle: "Simulateur de marque — une expérience de formation.",
+  currency: "DH", // site rule (LanguageContext.formatPrice): French « DH », Arabic « درهم »
   training_badge: "Formation · simulation",
   disabled: "Ce service n'est pas disponible pour le moment.",
   what_title: "Ce que vous achetez",
@@ -208,6 +209,7 @@ const fr = {
 const ar = {
   title: "أنشئ علامتك التجارية",
   subtitle: "محاكي العلامة التجارية — تجربة تدريبية.",
+  currency: "درهم",
   training_badge: "تدريب · محاكاة",
   disabled: "هذه الخدمة غير متوفرة حالياً.",
   what_title: "ما الذي تشتريه",
