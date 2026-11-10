@@ -30,6 +30,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { DEMO_COMP_MODELS, demoCompPinsHold } from './lib/demoCompetitionAllowance.mjs';
 
 const R = await import('../src/lib/recruiterSettings.js');
 
@@ -479,7 +480,13 @@ console.log('\n3. Prisma schema (vs pre-recruiter base ef79c6b)');
   };
   const H = blocks(head), N = blocks(now);
   const NEW_MODELS = ['Recruiter', 'RecruiterAffiliateLink', 'RecruiterRewardLedger', 'RecruiterAuditLog', 'RecruiterSettingsVersion'].map((m) => `model ${m}`);
-  const added = [...N.keys()].filter((k) => !H.has(k));
+  // Demo Competition (simulation only, separate feature): its exactly 7 DemoComp* models are listed apart and their text
+  // is SHA-256 pinned in scripts/lib/demoCompetitionAllowance.mjs (asserted just below); every other check is unchanged.
+  const DEMO = DEMO_COMP_MODELS.map((m) => `model ${m}`);
+  const addedAll = [...N.keys()].filter((k) => !H.has(k));
+  const added = addedAll.filter((k) => !DEMO.includes(k));
+  { const pins = demoCompPinsHold(); ok('Demo Competition allowance: exactly its 7 DemoComp* models were added besides, with the pinned text and migration',
+    eq(addedAll.filter((k) => DEMO.includes(k)).sort(), [...DEMO].sort()) && pins.schema && pins.migration, { pins }); }
   const removed = [...H.keys()].filter((k) => !N.has(k));
   // Phase 6 part 1 (documented in docs/recruiter-system.md): + model AffiliateActivationCode (migration 20261107)
   // and + model AffiliateActivationRecovery (admin activation recovery, migration 20261108).

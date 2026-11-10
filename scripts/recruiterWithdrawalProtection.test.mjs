@@ -30,6 +30,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { makeRecruiterFakeDb } from './lib/recruiterFakeDb.mjs';
+import { DEMO_COMP_MIGRATION_DIR, isDemoCompPrisma, withoutDemoCompDiffLines, demoCompPinsHold } from './lib/demoCompetitionAllowance.mjs';
 
 const RS = await import('../src/lib/services/recruiterRewardService.js');
 const WS = await import('../src/lib/services/recruiterWalletService.js');
@@ -687,13 +688,16 @@ console.log('\n8. Static: UI texts, service shape, scope');
   const migNew = [...new Set([
     ...migStatus.filter(([st]) => st === 'A').map(([, p]) => p),
     ...git(['ls-files', '--others', '--exclude-standard', '--', 'prisma/migrations']).split('\n').filter(Boolean),
-  ])].sort();
-  const migDirs = readdirSync(join(ROOT, 'prisma/migrations')).filter((d) => /^\d/.test(d)).sort();
+  // Demo Competition (simulation only, separate feature): its new migration 20261113 is dropped from both checks below
+  // (it is the only one after 20261112) and SHA-256 pinned with its schema blocks in scripts/lib/demoCompetitionAllowance.mjs.
+  ])].filter((f) => !isDemoCompPrisma(f)).sort();
+  const migDirs = readdirSync(join(ROOT, 'prisma/migrations')).filter((d) => /^\d/.test(d) && d !== DEMO_COMP_MIGRATION_DIR).sort();
+  { const pins = demoCompPinsHold(); ok('Demo Competition allowance: its schema blocks and migration are exactly the pinned ones', pins.schema && pins.migration, pins); }
   ok('no new migration besides 20261110_recruiter_reward_cycles (Part 3a), 20261111_recruiter_identity_verifications (Part 3c) and 20261112_recruiter_group_rewards (Phase 7); no existing migration edited',
     migChanged.length === 0 && eq(migNew, ['prisma/migrations/20261110_recruiter_reward_cycles/migration.sql', 'prisma/migrations/20261111_recruiter_identity_verifications/migration.sql',
       'prisma/migrations/20261112_recruiter_group_rewards/migration.sql'])
     && migDirs.at(-1) === '20261112_recruiter_group_rewards', big({ migChanged, migNew, last: migDirs.at(-1) }));
-  const schemaDiff = git(['diff', PART3_BASE, '--', 'prisma/schema.prisma']).split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l));
+  const schemaDiff = withoutDemoCompDiffLines(git(['diff', PART3_BASE, '--', 'prisma/schema.prisma']).split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l)));
   // Part 3a: the ledger `cycle Int` column (+ 3 comment lines). Part 3c: the Recruiter back-relation
   // (+ its comment) and the RecruiterIdentityVerification model — exactly these added lines, nothing removed.
   const PART3C_SCHEMA = [

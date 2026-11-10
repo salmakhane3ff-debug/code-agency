@@ -1,0 +1,175 @@
+/*
+ * Demo Competition (Top Members / Top Brands) — component-scoped styles.
+ * Every class is prefixed "dc-" so nothing leaks into the rest of the storefront.
+ *
+ * Approved design: white rounded cards on a light background; the Top 3 get a
+ * SUBTLE glow keyed on the CURRENT rank (--1 gold, --2 silver, --3 bronze) — a
+ * coloured border + soft outer glow painted by a pseudo-element behind the card
+ * (opacity-only animation on #1: cheap to composite). prefers-reduced-motion →
+ * static glow, no breathing, no crown bob.
+ */
+
+.dc-card {
+  position: relative;
+  isolation: isolate;
+  border-radius: 1rem;
+  border: 1px solid #eef0f4;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 14px rgba(15, 23, 42, 0.06);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+a:hover > .dc-card { box-shadow: 0 2px 4px rgba(15, 23, 42, 0.06), 0 10px 24px rgba(15, 23, 42, 0.09); }
+
+/* Top-3 glow (class names kept: dc-flame / dc-flame--N, from flameClass(rank)). */
+.dc-flame { border-width: 1.5px; }
+.dc-flame::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px var(--dc-glow-ring, transparent), 0 6px 22px var(--dc-glow, transparent);
+  opacity: var(--dc-glow-opacity, 1);
+}
+/* Faint tint along the top edge of the card (static). */
+.dc-flame::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 40%;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(180deg, var(--dc-tint, transparent), transparent);
+}
+.dc-flame--1 {
+  border-color: #fbbf24;
+  --dc-glow-ring: rgba(251, 191, 36, 0.35);
+  --dc-glow: rgba(245, 158, 11, 0.38);
+  --dc-tint: rgba(254, 243, 199, 0.55);
+}
+.dc-flame--1::before { animation: dc-breathe 3.2s ease-in-out infinite alternate; }
+.dc-flame--2 {
+  border-color: #dfe3ea;
+  --dc-glow-ring: rgba(148, 163, 184, 0.18);
+  --dc-glow: rgba(100, 116, 139, 0.16);
+  --dc-tint: rgba(241, 245, 249, 0.6);
+}
+.dc-flame--3 {
+  border-color: #f6dcc4;
+  --dc-glow-ring: rgba(234, 145, 74, 0.18);
+  --dc-glow: rgba(217, 119, 6, 0.14);
+  --dc-tint: rgba(255, 237, 213, 0.45);
+}
+
+/* Room above the #1 row for its crown (rows 2 / 3 need none). */
+.dc-flame-space--1 { margin-top: 12px; }
+.dc-flame-space--2 { margin-top: 0; }
+.dc-flame-space--3 { margin-top: 0; }
+
+@keyframes dc-breathe {
+  0%   { opacity: 0.7; }
+  100% { opacity: 1; }
+}
+
+/* Crown above the #1 avatar. */
+.dc-crown {
+  position: absolute;
+  top: -15px;
+  left: 50%;
+  width: 26px;
+  height: 22px;
+  transform: translateX(-50%);
+  color: #f59e0b;
+  filter: drop-shadow(0 1px 1px rgba(146, 64, 14, 0.25));
+  pointer-events: none;
+}
+
+/* "Online" dot on the avatar (= live demo activity in the last minutes). */
+.dc-online-dot {
+  position: absolute;
+  bottom: 1px;
+  inset-inline-end: 1px;
+  width: 13px;
+  height: 13px;
+  border-radius: 9999px;
+  background: #22c55e;
+  box-shadow: 0 0 0 2.5px #fff;
+}
+
+/* Homepage compact rows (CompactLeaderboard): same structure for every rank; the Top 3 only
+   get a gold / silver / bronze tint + border (no oversized card, no glow animation). */
+.dc-row {
+  background: #fff;
+  border-color: #eef0f4;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+}
+.dc-row:hover { box-shadow: 0 2px 10px rgba(15, 23, 42, 0.07); }
+.dc-row--1 { background: #fffbeb; border-color: #fcd34d; box-shadow: 0 1px 6px rgba(245, 158, 11, 0.18); }
+.dc-row--2 { background: #f8fafc; border-color: #d9dee6; }
+.dc-row--3 { background: #fff7ed; border-color: #f8c99a; }
+.dc-online-dot--sm {
+  width: 10px;
+  height: 10px;
+  bottom: 0;
+  inset-inline-end: 0;
+  box-shadow: 0 0 0 2px #fff;
+}
+
+/* Live badge: pulsing dot. */
+.dc-live-dot {
+  position: relative;
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: #ef4444;
+}
+.dc-live-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: inherit;
+  animation: dc-ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+/* Section "updated live" dot (green) next to the compact panel title. */
+.dc-live-dot--green { width: 7px; height: 7px; background: #22c55e; flex-shrink: 0; }
+
+@keyframes dc-ping {
+  0%   { transform: scale(1); opacity: 0.7; }
+  80%, 100% { transform: scale(2.6); opacity: 0; }
+}
+
+/* Temporary highlight after a value change (~1.5 s). */
+.dc-highlight {
+  animation: dc-highlight 1.5s ease-out;
+}
+@keyframes dc-highlight {
+  /* Inset shadow: works on any background and stays under the text. */
+  0%   { box-shadow: inset 0 0 0 999px rgba(250, 204, 21, 0.32); }
+  100% { box-shadow: inset 0 0 0 999px rgba(250, 204, 21, 0); }
+}
+
+/* History chart bars. */
+.dc-bar {
+  transition: height 0.4s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dc-flame::before,
+  .dc-flame::after,
+  .dc-live-dot::after {
+    animation: none;
+  }
+  .dc-flame::before { opacity: 1; }
+  .dc-card,
+  .dc-row { transition: none; }
+  .dc-highlight {
+    animation: none;
+    outline: 2px solid rgba(250, 204, 21, 0.8);
+    outline-offset: -2px;
+  }
+  .dc-bar { transition: none; }
+}

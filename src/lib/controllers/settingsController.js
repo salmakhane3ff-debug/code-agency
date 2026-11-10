@@ -25,8 +25,11 @@ import { BRAND_SETTING_ID, BRAND_TERMS_SETTING_ID } from '../brandProgram.js';
  * 'brand-program-config' is saved only through brandProgramService.saveBrandConfig
  * (strict validation, audit log); 'brand-refund-terms' only through the draft /
  * publish actions, so published terms always come from an admin approval.
+ * 'homepage_layout' is saved only through PUT /api/admin/homepage-layout
+ * (homepageLayoutService: revision check, so the Homepage Builder and the Demo
+ * Competition homepage settings never overwrite each other). Reading it stays public.
  */
-const RESERVED_SETTING_TYPES = new Set([REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID, BRAND_SETTING_ID, BRAND_TERMS_SETTING_ID]);
+const RESERVED_SETTING_TYPES = new Set([REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID, BRAND_SETTING_ID, BRAND_TERMS_SETTING_ID, 'homepage_layout']);
 
 // ── Generic settings (/api/setting) ──────────────────────────────────────────
 

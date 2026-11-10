@@ -28,6 +28,7 @@ export const STATUS_COLOR = {
 };
 
 export function SimulatedBadge({ t }) {
+  if (!t("dash_badge")) return null; // neutral-wording preview (src/lib/neutralWording.js): no empty pill
   return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[11px] font-bold whitespace-nowrap">
       <FlaskConical className="w-3 h-3" aria-hidden="true" />{t("dash_badge")}

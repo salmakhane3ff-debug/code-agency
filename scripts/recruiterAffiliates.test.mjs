@@ -43,6 +43,7 @@ import { randomUUID } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { makeRecruiterFakeDb } from './lib/recruiterFakeDb.mjs';
+import { isDemoCompPrisma, withoutDemoCompDiffLines, demoCompPinsHold } from './lib/demoCompetitionAllowance.mjs';
 
 const { recruiterAffiliateHandlers, RECRUITER_CREATE_RATE } = await import('../src/lib/recruiterAffiliateRouteHandlers.js');
 const S = await import('../src/lib/services/recruiterAffiliateService.js');
@@ -692,7 +693,9 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
   const prismaFiles = [...new Set([
     ...gitOut(['diff', '--name-only', '63abd2d42577570cad31082901f18b8544a0b38f', '--', 'prisma']).split('\n'),
     ...gitOut(['ls-files', '--others', '--exclude-standard', '--', 'prisma']).split('\n'),
-  ].filter(Boolean))].sort();
+  // Demo Competition (simulation only, separate feature): its migration 20261113 is dropped from this exact list and
+  // its 7 schema blocks from schemaDiff below; both are SHA-256 pinned in scripts/lib/demoCompetitionAllowance.mjs.
+  ].filter(Boolean).filter((f) => !isDemoCompPrisma(f)))].sort();
   ok('prisma/ changed since 63abd2d ONLY by the Phase 5 files (schema.prisma + migration 20261106), the Phase 6 part 1 migrations 20261107 (activation codes) + 20261108 (admin activation recovery), the Phase 6 part 2 migration 20261109 (session version), the Phase 6 part 3a migration 20261110 (reward cycles) and the Phase 6 part 3c migration 20261111 (recruiter KYC)',
     eq(prismaFiles, ['prisma/migrations/20261106_recruiter_rewards_withdrawals/migration.sql', 'prisma/migrations/20261107_affiliate_activation_codes/migration.sql',
       'prisma/migrations/20261108_affiliate_activation_recovery/migration.sql', 'prisma/migrations/20261109_account_token_version/migration.sql',
@@ -700,8 +703,9 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
       // Phase 7 (Reward B — the recruiter group reward): exactly its migration 20261112.
       'prisma/migrations/20261112_recruiter_group_rewards/migration.sql',
       'prisma/schema.prisma']), prismaFiles.join(','));
-  const schemaDiff = gitOut(['diff', '63abd2d42577570cad31082901f18b8544a0b38f', '--', 'prisma/schema.prisma']).split('\n')
-    .filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l)).map((l) => l[0] + l.slice(1).replace(/\s+/g, ' ').trim());
+  const schemaDiff = withoutDemoCompDiffLines(gitOut(['diff', '63abd2d42577570cad31082901f18b8544a0b38f', '--', 'prisma/schema.prisma']).split('\n')
+    .filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l)).map((l) => l[0] + l.slice(1).replace(/\s+/g, ' ').trim()));
+  { const pins = demoCompPinsHold(); ok('Demo Competition allowance: its schema blocks and migration are exactly the pinned ones', pins.schema && pins.migration, pins); }
   const removedLines = schemaDiff.filter((l) => l.startsWith('-')).sort();
   // Phase 6 part 1 (documented): the AffiliateActivationCode model block (+ its /// doc comment) and the
   // Affiliate back-relation line. Everything else must be exactly the Phase 5 lines below.

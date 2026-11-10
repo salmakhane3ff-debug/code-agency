@@ -4,6 +4,7 @@ import {
   GripVertical, Plus, Trash2, ChevronUp, ChevronDown, Eye, EyeOff,
   Image as ImageIcon, Type, Video, ShoppingBag, Layers, Star,
   Timer, MousePointer, LayoutGrid, Zap, Heart, Phone, Save, Check, MapPin, Copy,
+  Trophy, Award,
 } from "lucide-react";
 import SingleImageSelect from "@/components/block/ImageSelector";
 import { STORE_MAP_DEFAULTS, linkCoordStatus, extractLatLng } from "@/lib/storeMap";
@@ -29,6 +30,8 @@ const SECTION_TYPES = [
   { type: "before_after",       icon: Zap,          color: "from-rose-400 to-orange-400",    label: "Avant / Après",       desc: "Slider avant/après avec produit lié" },
   { type: "contact",            icon: Phone,        color: "from-slate-500 to-gray-700",     label: "Contact",             desc: "Contact info & social links" },
   { type: "store_map",          icon: MapPin,       color: "from-red-500 to-rose-600",       label: "📍 Store Map",        desc: "Google Map + store info & directions" },
+  { type: "top_members",        icon: Trophy,       color: "from-amber-500 to-orange-600",   label: "Top Members (démo)",  desc: "Aperçu du classement démo des membres — simulation" },
+  { type: "top_brands",         icon: Award,        color: "from-orange-500 to-red-600",     label: "Top Brands (démo)",   desc: "Aperçu du classement démo des marques — simulation" },
 ];
 
 const TYPE_META = Object.fromEntries(SECTION_TYPES.map((t) => [t.type, t]));
@@ -51,6 +54,8 @@ const DEFAULTS = {
   reels:              {},
   contact:            { title: "Contact Us", phone: "", email: "", address: "" },
   store_map:          { ...STORE_MAP_DEFAULTS },
+  top_members:        { title: "", previewCount: 5, showViewAll: true },
+  top_brands:         { title: "", previewCount: 5, showViewAll: true },
 };
 
 let _seq = 0;
@@ -523,6 +528,29 @@ function EditBeforeAfter({ data, onChange }) {
   );
 }
 
+// Demo Competition previews: title (empty = default "Top Membres" / "Top Marques" in the
+// visitor's language), number of rows shown (1..max) and the "View all" link.
+function EditDemoLeaderboard({ data, onChange, max, placeholder, page }) {
+  const count = Math.min(max, Math.max(1, Number.parseInt(data.previewCount, 10) || 5));
+  return (
+    <div className="space-y-3">
+      <Field label="Titre de la section (vide = titre par défaut)">
+        <input className="field" placeholder={placeholder} value={data.title || ""} onChange={e => onChange({ ...data, title: e.target.value })} />
+      </Field>
+      <Field label={`Nombre affiché (1 à ${max})`}>
+        <input type="number" min={1} max={max} className="field w-24" value={count}
+          onChange={e => onChange({ ...data, previewCount: Math.min(max, Math.max(1, Number.parseInt(e.target.value, 10) || 1)) })} />
+      </Field>
+      <label className="flex items-center gap-2 text-sm cursor-pointer">
+        <input type="checkbox" checked={data.showViewAll !== false} onChange={e => onChange({ ...data, showViewAll: e.target.checked })} /> Lien « Voir tout » vers {page}
+      </label>
+      <p className="text-xs text-gray-400">Données de démonstration (simulation) : la section l&apos;indique toujours aux visiteurs.</p>
+    </div>
+  );
+}
+function EditTopMembers(props) { return <EditDemoLeaderboard {...props} max={21} placeholder="Top Membres" page="/top-members" />; }
+function EditTopBrands(props)  { return <EditDemoLeaderboard {...props} max={20} placeholder="Top Marques" page="/top-brands" />; }
+
 const EDIT_FORMS = {
   hero: EditHero, products: EditProducts, image: EditImage,
   video: EditVideo, text: EditText, cta: EditCta,
@@ -530,6 +558,8 @@ const EDIT_FORMS = {
   collection_section: EditCollectionSection,
   shoppable_reels: EditShoppableReels,
   before_after: EditBeforeAfter,
+  top_members: EditTopMembers,
+  top_brands: EditTopBrands,
 };
 
 // ── Helper components ─────────────────────────────────────────────────────────
@@ -542,6 +572,37 @@ function Field({ label, children }) {
   );
 }
 
+// ── Layout API ────────────────────────────────────────────────────────────────
+// Admin endpoint with an optimistic-concurrency revision, shared with Demo Competition → Homepage Settings:
+// GET → { sections: Array|null, revision }; PUT { sections, revision } → 200 { sections, revision }
+// | 409 { code: "LAYOUT_CONFLICT", sections, revision } | 400 { code: "INVALID_LAYOUT" }.
+// (The public homepage keeps reading GET /api/setting?type=homepage_layout.)
+const LAYOUT_URL = "/api/admin/homepage-layout";
+
+const CONFLICT_TEXT = "La mise en page a été modifiée ailleurs (ex. Demo Competition → Homepage Settings). Rechargez pour récupérer la dernière version — vos modifications non enregistrées seraient perdues.";
+
+async function layoutRequest(method = "GET", body) {
+  try {
+    const res = await fetch(LAYOUT_URL, {
+      method,
+      cache: "no-store",
+      headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    return { ok: res.ok, status: res.status, data: await res.json().catch(() => ({})) };
+  } catch {
+    return { ok: false, status: 0, data: null };
+  }
+}
+
+const defaultSections = () => [
+  { id: uid(), type: "slider",            visible: true, data: {} },
+  { id: uid(), type: "products",          visible: true, data: { ...DEFAULTS.products } },
+  { id: uid(), type: "collection_section",visible: true, data: {} },
+  { id: uid(), type: "reviews",           visible: true, data: {} },
+  { id: uid(), type: "support",           visible: true, data: {} },
+];
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function HomepageBuilder() {
   const [sections,    setSections]    = useState([]);
@@ -550,38 +611,48 @@ export default function HomepageBuilder() {
   const [saved,       setSaved]       = useState(false);
   const [addOpen,     setAddOpen]     = useState(false);
   const [editId,      setEditId]      = useState(null);
+  const [revision,    setRevision]    = useState(null);  // layout revision the edits are based on
+  const [conflict,    setConflict]    = useState(false); // 409: saved elsewhere meanwhile
+  const [error,       setError]       = useState(null);  // load / save error (French)
 
   // ── Fetch ────────────────────────────────────────────────────────────────────
-  useEffect(() => {
-    fetch("/api/setting?type=homepage_layout", { cache: "no-store" })
-      .then(r => r.ok ? r.json() : {})
-      .then(d => {
-        if (Array.isArray(d?.sections)) setSections(d.sections);
-        else setSections([
-          { id: uid(), type: "slider",            visible: true, data: {} },
-          { id: uid(), type: "products",          visible: true, data: { ...DEFAULTS.products } },
-          { id: uid(), type: "collection_section",visible: true, data: {} },
-          { id: uid(), type: "reviews",           visible: true, data: {} },
-          { id: uid(), type: "support",           visible: true, data: {} },
-        ]);
-      })
-      .catch(() => setSections([]))
-      .finally(() => setLoading(false));
+  const load = useCallback(async () => {
+    setLoading(true);
+    const r = await layoutRequest("GET");
+    if (r.ok && typeof r.data?.revision === "string") {
+      setSections(Array.isArray(r.data.sections) ? r.data.sections : defaultSections());
+      setRevision(r.data.revision);
+      setConflict(false);
+      setError(null);
+    } else {
+      setError(r.status === 401 || r.status === 403
+        ? "Session admin expirée — reconnectez-vous."
+        : "Impossible de charger la mise en page : l'enregistrement est désactivé. Rechargez la page.");
+    }
+    setLoading(false);
   }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   // ── Save ─────────────────────────────────────────────────────────────────────
   const save = async () => {
+    if (!revision || conflict) return;
     setSaving(true);
-    try {
-      await fetch("/api/setting?type=homepage_layout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sections }),
-      });
+    setError(null);
+    const r = await layoutRequest("PUT", { sections, revision });
+    setSaving(false);
+    if (r.ok && typeof r.data?.revision === "string") {
+      setRevision(r.data.revision);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch (e) { console.error(e); }
-    finally { setSaving(false); }
+    } else if (r.status === 409 && r.data?.code === "LAYOUT_CONFLICT") {
+      setConflict(true); // never overwrite silently: the admin reloads explicitly
+    } else {
+      setError(r.status === 401 || r.status === 403 ? "Session admin expirée — reconnectez-vous."
+        : r.data?.code === "INVALID_LAYOUT" ? "Mise en page refusée par le serveur (format invalide) : rien n'a été enregistré."
+          : r.status === 0 ? "Erreur réseau : la mise en page n'a pas été enregistrée."
+            : `Échec de l'enregistrement (${r.status}) : la mise en page n'a pas été enregistrée.`);
+    }
   };
 
   // ── Section ops ──────────────────────────────────────────────────────────────
@@ -646,12 +717,29 @@ export default function HomepageBuilder() {
         </div>
         <div className="flex items-center gap-3">
           <a href="/" target="_blank" className="text-xs text-gray-500 hover:text-gray-700 underline">Preview →</a>
-          <button onClick={save} disabled={saving}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all ${saved ? "bg-green-500 text-white" : "bg-black text-white hover:bg-gray-800"}`}>
+          <button onClick={save} disabled={saving || !revision || conflict}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed ${saved ? "bg-green-500 text-white" : "bg-black text-white hover:bg-gray-800"}`}>
             {saved ? <><Check size={15} /> Saved!</> : saving ? "Saving..." : <><Save size={15} /> Save Layout</>}
           </button>
         </div>
       </div>
+
+      {(conflict || error) && (
+        <div className="max-w-4xl mx-auto px-4 pt-6 space-y-2">
+          {conflict && (
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <span className="flex-1 min-w-[220px]">{CONFLICT_TEXT}</span>
+              <button onClick={load} className="px-4 py-2 rounded-lg bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700">Recharger</button>
+            </div>
+          )}
+          {error && (
+            <div role="alert" className="flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <span>{error}</span>
+              {revision && <button onClick={() => setError(null)} className="font-bold opacity-60 hover:opacity-100" aria-label="Fermer">×</button>}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="max-w-4xl mx-auto px-4 py-8 flex gap-6">
         {/* Section List */}

@@ -76,6 +76,17 @@ module.exports = {
       ...engineDefaults,
     },
     {
+      // Demo Competition engine (Top Members / Top Brands) — SIMULATION ONLY:
+      // generates demo sale events into demo_comp_* tables only, never an order,
+      // commission, payout, wallet or reward. A no-op until an admin enables it
+      // (Admin → Demo Competition → Live Engine). Own advisory lock ("DCMP") —
+      // never scale. Add to a live host with:
+      //   pm2 start ecosystem.config.js --only demo-leaderboard-engine && pm2 save
+      name:   'demo-leaderboard-engine',
+      script: 'scripts/demo-leaderboard-engine.mjs',
+      ...engineDefaults,
+    },
+    {
       // Payment Proofs publisher (admin-managed display feed of the affiliate
       // dashboard slider). Publishes due proofs exactly once; writes only
       // payment_proofs / payment_proof_events. Own advisory lock ("PPPF") —

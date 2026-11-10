@@ -21,6 +21,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${BASE_URL}/blog`,          lastModified: new Date(), changeFrequency: "weekly",  priority: 0.7 },
     { url: `${BASE_URL}/contact`,       lastModified: new Date(), changeFrequency: "monthly", priority: 0.5 },
     { url: `${BASE_URL}/faqs`,          lastModified: new Date(), changeFrequency: "monthly", priority: 0.5 },
+    { url: `${BASE_URL}/top-members`,   lastModified: new Date(), changeFrequency: "daily",   priority: 0.5 },
+    { url: `${BASE_URL}/top-brands`,    lastModified: new Date(), changeFrequency: "daily",   priority: 0.5 },
   ];
 
   const prisma = getPrisma();
