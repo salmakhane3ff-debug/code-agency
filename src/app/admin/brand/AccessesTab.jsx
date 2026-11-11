@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { api, inputCls, btnPrimary, btnGhost } from "./ui";
+import SpeedPanel from "./SpeedPanel";
 import BrandSimStats from "@/components/brand/BrandSimStats";
 import { brandT } from "@/lib/brandI18n";
 import { displayBreakdown } from "@/lib/brandPricing";
@@ -221,6 +222,7 @@ function AccessRow({ a, onChanged }) {
         </div>
       )}
       {mode === "sim" && <SimView id={a.id} />}
+      <SpeedPanel accessId={a.id} status={a.status} />
       {a.status === "CLOSED" && <Authorizations affiliateId={a.affiliateId} refresh={authRefresh} />}
     </div>
   );

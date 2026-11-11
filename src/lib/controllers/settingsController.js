@@ -15,6 +15,7 @@ import {
 import { badRequest, serverError } from '../utils/apiResponse.js';
 import { REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID } from '../rewards.js';
 import { BRAND_SETTING_ID, BRAND_TERMS_SETTING_ID } from '../brandProgram.js';
+import { BRAND_SIM_SPEED_SETTING_ID } from '../brandSimSpeed.js';
 
 /**
  * Settings rows that have their own service and must never be written raw:
@@ -26,7 +27,8 @@ import { BRAND_SETTING_ID, BRAND_TERMS_SETTING_ID } from '../brandProgram.js';
  * (strict validation, audit log); 'brand-refund-terms' only through the draft /
  * publish actions, so published terms always come from an admin approval.
  */
-const RESERVED_SETTING_TYPES = new Set([REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID, BRAND_SETTING_ID, BRAND_TERMS_SETTING_ID]);
+// 'brand-sim-speed' (per-brand simulation speed) is written only by brandSimSpeedService (validated, versioned, audited).
+const RESERVED_SETTING_TYPES = new Set([REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID, BRAND_SETTING_ID, BRAND_TERMS_SETTING_ID, BRAND_SIM_SPEED_SETTING_ID]);
 
 // ── Generic settings (/api/setting) ──────────────────────────────────────────
 

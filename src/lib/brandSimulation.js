@@ -385,7 +385,7 @@ export function simOrderMoney(status, price) {
  * reference, displayed status, one of the brand's selected products
  * (deterministic) and its simulated money (null without a price).
  */
-export function simulatedOrders(seed, { fromMs, nowMs, countedHours, liveHour = null, sim, products = [], price = null }) {
+export function simulatedOrders(seed, { fromMs, nowMs, countedHours, liveHour = null, sim, products = [], price = null, plan = null }) {
   // Same selection as forEachSimulatedOrder (counted hours + live hour, fromMs ≤ at ≤ nowMs, statusAt at nowMs);
   // the per-day facts (time, position, reference, product hash) come from the memo, status and money are computed here.
   const paramsFor = typeof sim === 'function' ? sim : () => sim;
@@ -396,7 +396,7 @@ export function simulatedOrders(seed, { fromMs, nowMs, countedHours, liveHour = 
   for (const day of [...days].sort((a, b) => a - b)) {
     const daySim = paramsFor(day);
     if (!daySim) continue;
-    for (const o of simulatedDayOrders(seed, day, daySim)) {
+    for (const o of planDayOrders(seed, day, daySim, plan)) {
       if (o.at < fromMs || o.at > nowMs) continue;
       if (!(counted.has(o.hourStart) || (liveHour !== null && o.hourStart === liveHour))) continue;
       const status = statusAt(o.outcome, (nowMs - o.at) / HOUR_MS, daySim);
@@ -495,6 +495,24 @@ export function simulatedDayOrders(seed, dayMs, sim) {
   return list;
 }
 
+/**
+ * The orders of one UTC day for one brand: the daily generator's, except for hours under the brand's
+ * own speed (plan.custom(h)) whose orders come from plan.hourOrders(h, daySim) (brandSimSpeed). No plan
+ * (or no custom hour that day) → exactly simulatedDayOrders.
+ */
+export function planDayOrders(seed, dayMs, daySim, plan) {
+  const day = floorDay(dayMs);
+  const base = simulatedDayOrders(seed, day, daySim);
+  if (!plan) return base;
+  const custom = [];
+  for (let h = day; h < day + DAY_MS; h += HOUR_MS) if (plan.custom(h)) custom.push(h);
+  if (!custom.length) return base;
+  const set = new Set(custom);
+  const out = base.filter((o) => !set.has(o.hourStart));
+  for (const h of custom) out.push(...plan.hourOrders(h, daySim));
+  return out.sort((a, b) => a.at - b.at || a.index - b.index);
+}
+
 /** Memo size (tests / benchmarks). */
 export function simulationCacheStats() { return { days: dayCache.size, orders: dayCacheOrders }; }
 /** Empty the memo (tests / benchmarks; never needed for correctness). */
@@ -511,7 +529,7 @@ export function clearSimulationCache() { dayCache.clear(); dayCacheOrders = 0; }
  * statusAt, as the order list does. Days without settings are skipped, like
  * forEachSimulatedOrder.
  */
-export function deliveredInRows(seed, { rows, nowMs, sim, beforeMs = Infinity }) {
+export function deliveredInRows(seed, { rows, nowMs, sim, beforeMs = Infinity, plan = null }) {
   const paramsFor = typeof sim === 'function' ? sim : () => sim;
   let delivered = 0;
   const young = new Map(); // day → Set(hourStart)
@@ -528,7 +546,7 @@ export function deliveredInRows(seed, { rows, nowMs, sim, beforeMs = Infinity })
   }
   for (const [day, hours] of young) {
     const daySim = paramsFor(day);
-    for (const o of simulatedDayOrders(seed, day, daySim)) {
+    for (const o of planDayOrders(seed, day, daySim, plan)) {
       if (hours.has(o.hourStart) && o.at < beforeMs && o.at <= nowMs && statusAt(o.outcome, (nowMs - o.at) / HOUR_MS, daySim) === 'delivered') delivered++;
     }
   }

@@ -165,6 +165,11 @@ const ALLOWED = [
 const BRAND_FINAL_DESIGN = [
   "src/app/admin/brand/PackagesTab.jsx", "src/app/admin/brand/ProductsTab.jsx", "src/app/admin/brand/AccessesTab.jsx", "src/app/admin/brand/ui.jsx",
   "src/lib/brandProgram.js", "src/lib/services/brandAccessService.js",
+  // Per-brand simulation speed (approved): admin panel + API route, pure rules, admin service, the generator / dashboard
+  // using each brand's own limits, the admin handlers, and the reserved settings row. No other service, API or migration.
+  "src/app/admin/brand/SpeedPanel.jsx", "src/app/api/admin/brand/accesses/[id]/simulation-speed/route.js",
+  "src/lib/brandSimSpeed.js", "src/lib/services/brandSimSpeedService.js", "src/lib/services/brandSimulationService.js",
+  "src/lib/brandSimulation.js", "src/lib/brandRouteHandlers.js", "src/lib/controllers/settingsController.js",
 ];
 const isBrandFinal = (f) => BRAND_FINAL_DESIGN.includes(f);
 const outside = [...changed, ...untracked].filter((f) => !ALLOWED.some((re) => re.test(f)) && !isBrandFinal(f));

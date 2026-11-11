@@ -814,6 +814,12 @@ console.log('\n4. Regression and scope');
     'src/app/admin/brand/AccessesTab.jsx', 'src/app/admin/brand/PackagesTab.jsx', 'src/app/admin/brand/ProductsTab.jsx', 'src/app/admin/brand/ui.jsx',
     'src/app/affiliate/dashboard/_brand/BrandPreview.jsx', 'src/app/affiliate/dashboard/_brand/PackGallery.jsx', 'src/app/affiliate/dashboard/_brand/Stepper.jsx',
     'src/lib/brandProgram.js', 'src/lib/services/brandAccessService.js',
+    // Per-brand simulation speed (approved): admin panel + API route, pure rules + admin service, the generator / dashboard
+    // honouring each brand's limits, admin handlers, the reserved settings row. SIMULATED orders only — no wallet,
+    // commission, payout or reward file.
+    'src/app/admin/brand/SpeedPanel.jsx', 'src/app/api/admin/brand/accesses/[id]/simulation-speed/route.js',
+    'src/lib/brandSimSpeed.js', 'src/lib/services/brandSimSpeedService.js', 'src/lib/services/brandSimulationService.js',
+    'src/lib/brandSimulation.js', 'src/lib/brandRouteHandlers.js', 'src/lib/controllers/settingsController.js',
     // Phase 7 Stage F (approved clarification): an affiliate with children cannot be deleted — the deletion helper and the
     // 409 mapping of the admin DELETE route and of the legacy controller (pinned in recruiterAffiliates.test.mjs).
     'src/app/api/admin/affiliates/route.js', 'src/lib/affiliateDeletion.js', 'src/lib/controllers/affiliateController.js',

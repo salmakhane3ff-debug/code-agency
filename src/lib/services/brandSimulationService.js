@@ -35,11 +35,57 @@ import {
 } from '../brandSimulation.js';
 import { accessWindows, generableHours, incompleteRanges, dayParams, hourEnabled } from '../brandSimTimeline.js';
 import { getSettingsTimeline, advisoryXactLock, accessLockKey } from './brandSimSettingsService.js';
+import {
+  BRAND_SIM_SPEED_SETTING_ID, normalizeSpeedConfig, speedEnabledAt, speedLimitsAt, speedHourCount, speedHourOrders, speedHourRowCounts, prevWindow, SPEED_HISTORY_HOURS,
+} from '../brandSimSpeed.js';
 import { ACCESS_STATUS, getAffiliateAccessRow } from './brandAccessService.js';
 
 export const SIM_BATCH_DAYS = 7;
 export const SIM_MAX_CATCHUP_DAYS = 90;
 export const BRAND_SIM_ENGINE_LOCK_KEY = 0x4252534d; // "BRSM" — distinct from the other engines
+
+/** One access's per-brand speed versions ([] = global behaviour), read with the given client (inside a tx: under its lock). */
+async function speedVersionsOf(db, accessId) {
+  const row = await db.setting.findUnique({ where: { id: BRAND_SIM_SPEED_SETTING_ID } }).catch(() => null);
+  return normalizeSpeedConfig(row?.data).accesses[accessId] || [];
+}
+
+/**
+ * Rows of the hours to generate, in hour order. Hours under the brand's own limits get a count from
+ * brandSimSpeed.speedHourCount over the 24 previous hours (`history` = Map(hourStart → created) of the
+ * stored hours before them, updated as rows are built); the others come from the daily generator.
+ */
+function buildSpeedAwareRows(accessId, hours, { versions, paramsFor, history }) {
+  const counts = new Map(history);
+  const rows = [];
+  for (const h of hours) {
+    const limits = speedLimitsAt(versions, h);
+    let row;
+    if (limits) {
+      const daySim = paramsFor(h);
+      const w = prevWindow(counts, h);
+      const n = speedHourCount(accessId, h, limits, w);
+      row = { accessId, hourStart: new Date(h), ...speedHourRowCounts(speedHourOrders(accessId, h, n, daySim.distribution)) };
+    } else {
+      row = buildHourRows(accessId, accessId, [h], paramsFor)[0];
+    }
+    rows.push(row);
+    counts.set(h, row.created);
+  }
+  return rows;
+}
+
+/** Plan for the order list: hours under the brand's own limits use `counts` (stored rows + the live hour's planned count). */
+function speedPlan(accessId, versions, counts) {
+  if (!versions.length) return null;
+  return {
+    custom: (h) => !!speedLimitsAt(versions, h),
+    hourOrders: (h, daySim) => {
+      const n = Number(counts.get(h)) || 0;
+      return n ? speedHourOrders(accessId, h, n, daySim.distribution) : [];
+    },
+  };
+}
 
 const err = (code, message) => Object.assign(new Error(message), { code });
 const ms = (d) => (d ? new Date(d).getTime() : null);
@@ -74,10 +120,18 @@ export async function materializeAccessSimulation(access, {
       const cursor = fresh.generatedThrough ? ms(fresh.generatedThrough) : floorHour(windows[0].from);
       if (cursor >= target) return { done: true, through: cursor };
       const chunkEnd = Math.min(cursor + batchDays * DAY_MS, target);
-      const hours = generableHours(tl, windows, cursor, chunkEnd);
-      const count = hours.length
-        ? (await tx.brandSimHour.createMany({ data: buildHourRows(access.id, access.id, hours, (d) => dayParams(tl, d)), skipDuplicates: true })).count
-        : 0;
+      // Per-brand speed (read under the access lock — a save takes the same lock): a paused brand's hours are not generated.
+      const versions = await speedVersionsOf(tx, access.id);
+      const hours = generableHours(tl, windows, cursor, chunkEnd).filter((h) => speedEnabledAt(versions, h));
+      let data = [];
+      if (hours.length && hours.some((h) => speedLimitsAt(versions, h))) {
+        const prev = await tx.brandSimHour.findMany({ where: { accessId: access.id, hourStart: { gte: new Date(hours[0] - SPEED_HISTORY_HOURS * 3_600_000), lt: new Date(hours[0]) } } });
+        const history = new Map(prev.map((r) => [ms(r.hourStart), Number(r.created) || 0]));
+        data = buildSpeedAwareRows(access.id, hours, { versions, paramsFor: (d) => dayParams(tl, d), history });
+      } else if (hours.length) {
+        data = buildHourRows(access.id, access.id, hours, (d) => dayParams(tl, d));
+      }
+      const count = data.length ? (await tx.brandSimHour.createMany({ data, skipDuplicates: true })).count : 0;
       await tx.brandAccess.updateMany({ where: { id: access.id }, data: { generatedThrough: new Date(chunkEnd) } });
       return { done: chunkEnd >= target, through: chunkEnd, count, days: (chunkEnd - cursor) / DAY_MS };
     });
@@ -130,12 +184,28 @@ export async function getSimulationDashboard(access, { db = prisma, now = new Da
     }),
   ]);
 
-  // Live (unfinished) hour: active access only, inside the open period, settings enabled + verified.
+  // Live (unfinished) hour: active access only, inside the open period, settings enabled + verified,
+  // and the brand not paused by its own speed setting.
+  const versions = await speedVersionsOf(db, access.id);
+  const counts = new Map(rows.map((r) => [ms(r.hourStart), Number(r.created) || 0]));
   const liveHour = floorHour(at);
   const open = windows.find((w) => w.open);
-  const running = !closed && !!open && hourEnabled(timeline, liveHour);
+  const running = !closed && !!open && hourEnabled(timeline, liveHour) && speedEnabledAt(versions, liveHour);
   const liveParams = running && liveHour >= ceilHour(open.from) ? dayParams(timeline, liveHour) : null;
-  const live = liveParams ? liveHourCounts(access.id, at, liveParams) : null;
+  const liveLimits = liveParams ? speedLimitsAt(versions, liveHour) : null;
+  let live = null;
+  if (liveParams && liveLimits) {
+    // Same count the generator will store for this hour (same 24 previous stored hours, read here: the
+    // window's rows may start later); only orders up to now show.
+    const prev = await db.brandSimHour.findMany({ where: { accessId: access.id, hourStart: { gte: new Date(liveHour - SPEED_HISTORY_HOURS * 3_600_000), lt: new Date(liveHour) } } });
+    const w = prevWindow(new Map(prev.map((r) => [ms(r.hourStart), Number(r.created) || 0])), liveHour);
+    const n = speedHourCount(access.id, liveHour, liveLimits, w);
+    counts.set(liveHour, n);
+    live = { hourStart: new Date(liveHour), created: speedHourOrders(access.id, liveHour, n, liveParams.distribution).filter((o) => o.at <= at).length };
+  } else if (liveParams) {
+    live = liveHourCounts(access.id, at, liveParams);
+  }
+  const plan = speedPlan(access.id, versions, counts);
 
   const products = Array.isArray(access.selectedProducts)
     ? access.selectedProducts.map((p) => ({ id: p.id, title: p.title || '', image: p.image || null }))
@@ -147,13 +217,13 @@ export async function getSimulationDashboard(access, { db = prisma, now = new Da
   const price = snapshotSimPrice(access);
   const sim = (d) => dayParams(timeline, d);
   const liveAt = live?.created ? liveHour : null;
-  const orders = simulatedOrders(access.id, { fromMs: b.from, nowMs: anchor, countedHours: counted, liveHour: liveAt, sim, products, price });
+  const orders = simulatedOrders(access.id, { fromMs: b.from, nowMs: anchor, countedHours: counted, liveHour: liveAt, sim, products, price, plan });
   const stats = ordersStats(orders, anchor, window, price);
   // Balance = every delivered order since the start: settled history (SUM) + orders created before the
   // window start (settled hour → stored count, else order by order; a clock hour straddling the start
   // only contributes its orders before it) + the window's delivered orders (the list).
   const delivered = (Number(settled?._sum?.delivered) || 0)
-    + deliveredInRows(access.id, { rows: rows.filter((r) => ms(r.hourStart) < b.from), nowMs: anchor, sim, beforeMs: b.from })
+    + deliveredInRows(access.id, { rows: rows.filter((r) => ms(r.hourStart) < b.from), nowMs: anchor, sim, beforeMs: b.from, plan })
     + stats.byStatus.delivered;
   const bal = simulatedBalanceOf(delivered, price);
   const pageNo = Math.max(1, Math.min(Number.isInteger(page) ? page : 1, Math.max(1, Math.ceil(orders.length / SIM_ORDERS_PAGE_SIZE))));

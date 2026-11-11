@@ -40,6 +40,12 @@ export const ERROR_TEXT = {
   INVALID_IMAGE: "Image invalide (URL https://… ou /uploads/…)",
   TOO_MANY_IMAGES: "Trop d’images (10 au maximum)",
   TOO_MANY_SPECIFICATIONS: "Trop de spécifications (20 au maximum)",
+  HOUR_RANGE: "Le minimum par heure doit être inférieur ou égal au maximum par heure",
+  DAY_RANGE: "Le minimum sur 24 h doit être inférieur ou égal au maximum sur 24 h",
+  HOUR_MIN_OVER_DAY_MAX: "Limites incompatibles : 24 × le minimum par heure dépasse le maximum sur 24 h",
+  HOUR_MAX_UNDER_DAY_MIN: "Limites incompatibles : 24 × le maximum par heure est inférieur au minimum sur 24 h",
+  DAY_RANGE_TOO_NARROW: "Limites incompatibles : l’écart entre le minimum et le maximum sur 24 h est trop faible pour garantir le maximum sur toute période de 24 h — augmentez le maximum sur 24 h ou baissez le minimum",
+  ACCESS_NOT_EDITABLE: "La vitesse ne peut être réglée que pour une marque demandée ou active",
 };
 
 export const errText = (code) => (code ? ERROR_TEXT[code] || code : null);

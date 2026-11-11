@@ -376,7 +376,7 @@ console.log("\n8. Routes and admin wiring");
     return { files: files.length, wrapped, total, unknown };
   };
   const a = check("../src/app/api/admin/brand/", "withAdminAuth", Object.keys(adminBrandHandlers({ db: makeBrandFakeDb() })));
-  ok(`admin brand routes all withAdminAuth-wrapped (${a.wrapped}/${a.total} in ${a.files} files)`, a.files === 11 && a.total === 14 && a.wrapped === a.total && a.unknown.length === 0, JSON.stringify(a));
+  ok(`admin brand routes all withAdminAuth-wrapped (${a.wrapped}/${a.total} in ${a.files} files)`, a.files === 12 && a.total === 16 && a.wrapped === a.total /* + per-brand simulation speed (GET, PUT) */ && a.unknown.length === 0, JSON.stringify(a));
   const f = check("../src/app/api/affiliate/brand/", "withAffiliateAuth", Object.keys(affiliateBrandHandlers({ db: makeBrandFakeDb() })));
   ok(`affiliate brand routes all withAffiliateAuth-wrapped (${f.wrapped}/${f.total} in ${f.files} files)`, f.files === 6 && f.total === 7 && f.wrapped === f.total && f.unknown.length === 0, JSON.stringify(f));
 

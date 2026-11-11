@@ -28,6 +28,7 @@ import { getPublishedTermsVersion } from './services/brandConsentService.js';
 import { DEPOSIT_MAX_BYTES } from './depositStorage.js';
 import { rateLimit as defaultRateLimit } from './rateLimit.js';
 import { getAffiliateSimulationDashboard, getAdminSimulationDashboard } from './services/brandSimulationService.js';
+import { getAccessSpeed, saveAccessSpeed } from './services/brandSimSpeedService.js';
 
 const NO_STORE = { 'Cache-Control': 'private, no-store' };
 const json = (data, status = 200) => Response.json(data, { status, headers: NO_STORE });
@@ -69,6 +70,7 @@ const STATUS = {
   NOT_REVOCABLE:              409,
   NOT_ACTIVE:                 409,
   NOT_CLOSED:                 409,
+  ACCESS_NOT_EDITABLE:        409,
   PROOF_EXISTS:               409,
   PROOF_NOT_SUBMITTED:        409,
   DUPLICATE_PROOF:            409,
@@ -237,6 +239,13 @@ export function adminBrandHandlers(deps = {}) {
     }),
     accessDashboard: safe(async (req, ctx) =>
       json(await getAdminSimulationDashboard(await param(ctx, 'id'), { db, now: now(), window: windowOf(req) }))),
+    /** GET → this brand's simulation speed (current / pending version, history, global defaults). */
+    getAccessSpeed: safe(async (_req, ctx) => json(await getAccessSpeed(await param(ctx, 'id'), { db, now: now() }))),
+    /** PUT { enabled, custom, hourMin, hourMax, dayMin, dayMax } → new version from the next full hour. */
+    saveAccessSpeed: safe(async (req, ctx, user) => {
+      const body = await readJsonObject(req);
+      return json(await saveAccessSpeed(await param(ctx, 'id'), body, { db, now: now(), actorId: actorIdOf(user) }));
+    }),
 
     /** GET ?entityId=<request id> → only that request's audit rows. */
     listAudit: safe(async (req) => {
