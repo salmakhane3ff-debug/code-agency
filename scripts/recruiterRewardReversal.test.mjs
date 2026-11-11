@@ -623,6 +623,11 @@ console.log('\n11. Affiliate commissions, points, balances and payouts untouched
     // and the admin browser. Display-only payment proofs — no wallet, commission, payout, reward or real order file.
     'src/lib/casablancaTime.js', 'src/lib/paymentProofSchedule.js', 'src/lib/paymentProofs.js',
     'src/app/admin/payment-proofs/ui.jsx', 'src/app/admin/payment-proofs/ScheduleBuilder.jsx', 'src/app/admin/payment-proofs/ProofsList.jsx',
+    // Payment proofs "Publier maintenant" (approved feature): immediate publication through the same pipeline as the
+    // worker (publisher, proof service, admin handlers, [id] route). Display-only proofs: no wallet, commission, payout,
+    // reward or real order file.
+    'src/lib/services/paymentProofPublisher.js', 'src/lib/services/paymentProofService.js', 'src/lib/paymentProofRouteHandlers.js',
+    'src/app/api/admin/payment-proofs/[id]/route.js',
     // Phase 7 Stage F (approved clarification): an affiliate with children cannot be deleted — the deletion helper and the
     // 409 mapping of the admin DELETE route and of the legacy controller (no commission / points / balance / payout file).
     'src/app/api/admin/affiliates/route.js', 'src/lib/affiliateDeletion.js', 'src/lib/controllers/affiliateController.js',

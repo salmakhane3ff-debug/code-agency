@@ -19,7 +19,7 @@ import prisma from './prisma.js';
 import { rateLimit as defaultRateLimit } from './rateLimit.js';
 import { defaultPaymentProofStorage, PROOF_IMAGE_MAX_BYTES } from './paymentProofStorage.js';
 import {
-  createPaymentProof, validatePaymentProofBatch, updatePaymentProofSchedule, cancelPaymentProof,
+  createPaymentProof, validatePaymentProofBatch, updatePaymentProofSchedule, cancelPaymentProof, publishPaymentProofNow,
   listPaymentProofsAdmin, readAdminPaymentProofImage, listVisiblePaymentProofs, readVisiblePaymentProofImage,
   listPaymentProofEvents,
 } from './services/paymentProofService.js';
@@ -27,6 +27,7 @@ import {
 const STATUS = {
   INVALID_INPUT: 400, INVALID_FILE: 400, BODY_TOO_LARGE: 413,
   CLIENT_REF_CONFLICT: 409, DUPLICATE_RECEIPT: 409, NOT_EDITABLE: 409, NOT_CANCELLABLE: 409, RECEIPT_MISSING: 409,
+  NOT_PUBLISHABLE: 409, PUBLISH_FAILED: 422,
   NOT_FOUND: 404, UNAUTHORIZED: 401, AFFILIATE_INACTIVE: 403,
 };
 
@@ -38,7 +39,10 @@ export function proofErrorResponse(e) {
     console.error('[payment-proofs]', e?.message ?? e);
     return json({ error: 'Erreur serveur.', code: 'SERVER_ERROR' }, 500);
   }
-  return json({ error: e.message, code: e.code, ...(e.errors ? { errors: e.errors } : {}), ...(e.status ? { status: e.status } : {}) }, status);
+  return json({
+    error: e.message, code: e.code, ...(e.errors ? { errors: e.errors } : {}), ...(e.status ? { status: e.status } : {}),
+    ...(e.reason ? { reason: e.reason } : {}), ...(e.proof ? { proof: e.proof } : {}),
+  }, status);
 }
 
 const param = async (ctx, name) => (await ctx?.params)?.[name];
@@ -94,7 +98,8 @@ export function adminPaymentProofHandlers(deps = {}) {
     }),
     /**
      * POST multipart: displayName, amount, date (YYYY-MM-DD), time (HH:MM, Casablanca), clientRef, batchId?,
-     * privacyConfirmed=true, authenticityConfirmed=true, receipt (image).
+     * privacyConfirmed=true, authenticityConfirmed=true, receipt (image), publishMode? ('now' → published
+     * right after creation, no date / time; the response carries `publication`).
      */
     create: safe(async (req, _ctx, user) => {
       const form = await readFormDataCapped(req);
@@ -105,10 +110,10 @@ export function adminPaymentProofHandlers(deps = {}) {
         : null;
       const input = {
         displayName: field('displayName'), amount: field('amount'), date: field('date'), time: field('time'),
-        clientRef: field('clientRef'), batchId: field('batchId') || null,
+        clientRef: field('clientRef'), batchId: field('batchId') || null, publishMode: field('publishMode'),
         privacyConfirmed: field('privacyConfirmed'), authenticityConfirmed: field('authenticityConfirmed'),
       };
-      const out = await createPaymentProof(input, file, { db, storage, now: now(), actorId: actorOf(user) });
+      const out = await createPaymentProof(input, file, { db, storage, now: now(), clock: now, actorId: actorOf(user) });
       return json(out, out.existing ? 200 : 201);
     }),
     /** POST { items: [{ displayName, amount, date, time, clientRef, batchId?, privacyConfirmed, authenticityConfirmed }] } → review (nothing written). */
@@ -121,9 +126,12 @@ export function adminPaymentProofHandlers(deps = {}) {
       const body = await readJsonObject(req);
       return json(await updatePaymentProofSchedule(await param(ctx, 'id'), body, { db, storage, now: now(), actorId: actorOf(user) }));
     }),
-    /** POST { action: 'cancel' } */
+    /** POST { action: 'cancel' } | { action: 'publish_now' } (a SCHEDULED proof, before its time — same pipeline as the worker) */
     act: safe(async (req, ctx, user) => {
       const body = await readJsonObject(req);
+      if (body.action === 'publish_now') {
+        return json(await publishPaymentProofNow(await param(ctx, 'id'), { db, storage, clock: now, actorId: actorOf(user) }));
+      }
       if (body.action !== 'cancel') throw bad('Action invalide.');
       return json(await cancelPaymentProof(await param(ctx, 'id'), { db, now: now(), actorId: actorOf(user) }));
     }),
