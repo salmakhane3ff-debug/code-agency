@@ -22,8 +22,9 @@ export function previewCountOf(value, max) {
   return Math.min(max, Math.max(1, n));
 }
 
-export default function HomeTopMembers({ data = {}, sectionId = "top_members" }) {
-  const { t, lang, dir } = useNeutralDemoText(useDemoText());
+/** `lang` (optional): the page's own language (the Affiliate Dashboard passes its market language); default: the site language. */
+export default function HomeTopMembers({ data = {}, sectionId = "top_members", lang: langOverride }) {
+  const { t, lang, dir } = useNeutralDemoText(useDemoText(langOverride));
   const count = previewCountOf(data.previewCount, MAX_MEMBERS);
   const { data: res, error, ref } = useLivePolling(`/api/demo-competition/members?limit=${count}`);
   const members = res?.members;

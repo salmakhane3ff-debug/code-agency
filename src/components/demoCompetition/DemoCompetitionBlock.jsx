@@ -27,8 +27,9 @@ export function useDemoBlockReport(key, empty, kind, total) {
   useEffect(() => { if (ctx && kind && Number.isInteger(total)) ctx.count(kind, total); }, [ctx, kind, total]);
 }
 
-export default function DemoCompetitionBlock({ count = 1, children }) {
-  const { t, lang, dir } = useNeutralDemoText(useDemoText());
+/** `lang` (optional): the page's own language (the Affiliate Dashboard passes its market language); default: the site language. */
+export default function DemoCompetitionBlock({ count = 1, lang: langOverride, children }) {
+  const { t, lang, dir } = useNeutralDemoText(useDemoText(langOverride));
   const [empties, setEmpties] = useState({});
   const [totals, setTotals] = useState({});
   const report = useCallback((key, empty) => {

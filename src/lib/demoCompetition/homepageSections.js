@@ -145,6 +145,20 @@ export function describeSection(sections, type) {
 }
 
 /**
+ * The settings the Affiliate Dashboard applies to its Top Members / Top Brands sections, read from the
+ * SAME saved layout (homepage_layout) the admin edits — Homepage Builder or /admin/demo-competition/homepage:
+ * { visible, title, previewCount, showViewAll } (title '' = the default title in the dashboard language;
+ * visible = the admin "Afficher / Masquer" toggle of that section). No section of that type in the layout →
+ * the defaults the admin form starts with (shown). The sections are no longer rendered on the Store
+ * Homepage, and their position on the dashboard is fixed (the layout position is not used).
+ */
+export function dashboardSectionData(sections, type) {
+  const d = describeSection(sections, type);
+  if (!d.present) return { visible: true, ...defaultSectionData(type) };
+  return { visible: d.visible, title: d.title, previewCount: d.previewCount, showViewAll: d.showViewAll };
+}
+
+/**
  * True when `after` differs from `before` ONLY in sections of the managed types
  * (every other section keeps its id, type, visible flag, data and relative order).
  */

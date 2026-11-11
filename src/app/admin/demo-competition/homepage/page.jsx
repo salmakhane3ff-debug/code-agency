@@ -7,9 +7,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Loader2, Save, ChevronUp, ChevronDown, Eye, EyeOff, Plus, RefreshCw, AlertTriangle } from "lucide-react";
+import { Loader2, Save, Eye, EyeOff, Plus, RefreshCw, AlertTriangle } from "lucide-react";
 import {
-  DEMO_HOMEPAGE_TYPES, TITLE_MAX, asSections, addSection, setSectionVisible, moveSection, updateSectionData,
+  DEMO_HOMEPAGE_TYPES, TITLE_MAX, asSections, addSection, setSectionVisible, updateSectionData,
   describeSection, finalizeSections, preservesOtherSections,
 } from "@/lib/demoCompetition/homepageSections";
 import { PageHeader, SimulationNotice, Notice, Field, Toggle, inputCls, btnPrimary, btnGhost, cardCls } from "../_components/ui";
@@ -38,16 +38,6 @@ const saveErrorText = (r) => (r.status === 401 || r.status === 403 ? "Session ad
   : r.data?.code === "INVALID_LAYOUT" ? "Layout refusé par le serveur (format invalide)."
     : r.status === 0 ? "Erreur réseau." : `Échec de l'enregistrement (${r.status}).`);
 
-/** Labels of the builder's section types (context only; unknown types show their raw name). */
-const TYPE_LABEL = {
-  hero: "Hero Banner", slider: "Slider", collection_slider: "Collection Slider", products: "Products Grid",
-  collection_section: "Collection Sections", image: "Image", video: "Video", text: "Text Block", cta: "Call to Action",
-  countdown: "Countdown", rating_badge: "Rating Badge", reviews: "Reviews", support: "Support Benefits", reels: "Video Reels",
-  shoppable_reels: "Shoppable Videos", before_after: "Avant / Après", contact: "Contact", store_map: "Store Map",
-  top_members: "Top Members", top_brands: "Top Brands",
-};
-const label = (t) => (t ? TYPE_LABEL[t] || t : null);
-
 function SectionCard({ type, sections, onChange, canAdd }) {
   const meta = DEMO_HOMEPAGE_TYPES[type];
   const d = describeSection(sections, type);
@@ -74,8 +64,8 @@ function SectionCard({ type, sections, onChange, canAdd }) {
     <section className={`${cardCls} p-4 space-y-3`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-bold text-gray-900">{meta.label} <code className="text-[11px] text-gray-400">{type}</code></h2>
-        <span className={`text-[11px] px-2 py-0.5 rounded-full border ${d.visible ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-100 text-gray-500 border-gray-200"}`}>
-          {d.visible ? "Visible" : "Masquée"} · position {d.index + 1} / {d.total}
+        <span className={`text-[11px] px-2 py-0.5 rounded-full border ${d.visible ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-100 text-gray-500 border-gray-200"}`} data-dashboard-visibility={d.visible ? "visible" : "hidden"}>
+          {d.visible ? "Affichée sur le tableau de bord affilié" : "Masquée du tableau de bord affilié"}
         </span>
       </div>
       {d.duplicates > 0 && (
@@ -86,16 +76,8 @@ function SectionCard({ type, sections, onChange, canAdd }) {
         <button type="button" className={btnGhost} onClick={() => onChange(setSectionVisible(sections, type, !d.visible))}>
           {d.visible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />} {d.visible ? "Masquer" : "Afficher"}
         </button>
-        <button type="button" className={btnGhost} disabled={d.index === 0} onClick={() => onChange(moveSection(sections, type, -1))}>
-          <ChevronUp className="w-3.5 h-3.5" /> Monter
-        </button>
-        <button type="button" className={btnGhost} disabled={d.index >= d.total - 1} onClick={() => onChange(moveSection(sections, type, +1))}>
-          <ChevronDown className="w-3.5 h-3.5" /> Descendre
-        </button>
       </div>
-      <p className="text-[11px] text-gray-500">
-        Avant : <strong>{label(d.prevType) || "— début de page —"}</strong> · Après : <strong>{label(d.nextType) || "— fin de page —"}</strong>
-      </p>
+      <p className="text-[11px] text-gray-500">Position fixe sur le tableau de bord affilié (Top Members puis Top Brands, sous l&apos;activité en direct).</p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="Titre (optionnel)" hint="Vide = titre par défaut de la section.">
@@ -173,7 +155,7 @@ export default function DemoHomepageSettingsPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 p-4 md:p-6 space-y-4">
-      <PageHeader title="Homepage Settings" subtitle="Sections Top Members et Top Brands du layout existant de la page d'accueil.">
+      <PageHeader title="Homepage Settings" subtitle="Sections Top Members et Top Brands du layout existant. Titre, nombre affiché et lien « Voir tout » s'appliquent au tableau de bord affilié (ces sections ne sont plus affichées sur la page d'accueil).">
         <button type="button" className={btnGhost} onClick={() => { setNotice(null); load(); }} disabled={saving}><RefreshCw className="w-3.5 h-3.5" /> Recharger</button>
         <button type="button" className={btnPrimary} onClick={save} disabled={saving || !dirty || !loaded || !revision}>
           {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />} Enregistrer
@@ -206,18 +188,6 @@ export default function DemoHomepageSettingsPage() {
           {Object.keys(DEMO_HOMEPAGE_TYPES).map((type) => (
             <SectionCard key={type} type={type} sections={sections} onChange={setSections} canAdd={hasLayout} />
           ))}
-          {hasLayout && (
-            <section className={`${cardCls} p-4`}>
-              <h2 className="text-sm font-bold text-gray-900 mb-2">Ordre actuel de la page d&apos;accueil</h2>
-              <ol className="text-xs text-gray-600 space-y-0.5 list-decimal ps-5">
-                {sections.map((s, i) => (
-                  <li key={s?.id || i} className={DEMO_HOMEPAGE_TYPES[s?.type] ? "font-semibold text-blue-700" : ""}>
-                    {label(s?.type) || "?"}{s?.visible === false ? " (masquée)" : ""}
-                  </li>
-                ))}
-              </ol>
-            </section>
-          )}
         </>
       )}
     </div>

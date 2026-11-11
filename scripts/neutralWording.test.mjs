@@ -81,12 +81,16 @@ console.log('\n4. Text only — every system stays mounted, one switch, scope li
   const hook = read('src/components/demoCompetition/useLivePolling.js');
   ok('useNeutralDemoText wraps the translator only (same lang / dir)', /export function useNeutralDemoText\(text\)[\s\S]{0,200}neutralize\(text\.t, DEMO_COMP_NEUTRAL\[text\.lang\]\)[\s\S]{0,80}return \{ \.\.\.text, t \}/.test(hook));
   for (const f of ['DemoCompetitionBlock', 'HomeTopMembers', 'HomeTopBrands']) {
-    ok(`homepage ${f} uses the neutral texts`, /useNeutralDemoText\(useDemoText\(\)\)/.test(read(`src/components/demoCompetition/${f}.jsx`)));
+    // Optional page language since the move to the Affiliate Dashboard (default: the site language, as before).
+    ok(`homepage ${f} uses the neutral texts`, /useNeutralDemoText\(useDemoText\(langOverride\)\)/.test(read(`src/components/demoCompetition/${f}.jsx`)));
   }
   const page = read('src/app/affiliate/dashboard/page.jsx');
-  ok('dashboard leaderboard uses the neutral texts in the dashboard language', /useNeutralDemoText\(useDemoText\(dashboardLang\)\)/.test(page));
-  ok('dashboard still mounts Live Activity, the Competition tab polling and the Booster widget',
-    /<LiveActivity/.test(page) && /useLivePolling\(`\/api\/demo-competition\/members/.test(page) && /activeBoosters/.test(page));
+  // The dashboard shows the homepage components (neutral texts above) in the dashboard language.
+  ok('dashboard leaderboard uses the neutral texts in the dashboard language',
+    // count = the number of sections the admin shows (Hide / Show), see demoCompetitionIntegration.
+    /<DemoCompetitionBlock count=\{count\} lang=\{lang\}>/.test(page) && /<HomeTopMembers lang=\{lang\}/.test(page) && /<HomeTopBrands lang=\{lang\}/.test(page));
+  ok('dashboard still mounts Live Activity, the Top Members / Top Brands sections and the Booster widget',
+    /<LiveActivity/.test(page) && /<CompetitionTab lang=\{lang\} \/>/.test(page) && /activeBoosters/.test(page));
   ok('no conditional hiding module is left (src/lib/demoContent.js removed)', !/demoContent/.test(page + read('src/components/HomeBuilder/HomeSectionRenderer.jsx')));
   const full = ['TopMembersPage', 'TopBrandsPage', 'MemberProfile', 'BrandProfile', 'ProfileParts'].map((c) => read(`src/components/demoCompetition/${c}.jsx`)).join('\n');
   ok('full pages and profiles keep the original texts (no neutral wording there)', !/useNeutralDemoText|neutralWording/.test(full));

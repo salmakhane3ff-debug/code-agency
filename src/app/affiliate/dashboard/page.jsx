@@ -24,11 +24,10 @@ import { resolveSupportLink } from "@/lib/whatsappSupport";
 import { useMarketLocale } from "@/context/useMarketLocale";
 import { marketIntlLocale } from "@/lib/marketLocale";
 import { AFFILIATE_DASHBOARD_TEXT } from "@/lib/affiliateDashboardI18n";
-import Link from "next/link";
-import { MAX_MEMBERS } from "@/lib/demoCompetition/engine";
-import { useDemoText, useLivePolling, useNeutralDemoText } from "@/components/demoCompetition/useLivePolling";
-import { MembersLeaderboard } from "@/components/demoCompetition/MemberRow";
-import { SimulationBadge, SimulationDisclosure } from "@/components/demoCompetition/Badges";
+import DemoCompetitionBlock from "@/components/demoCompetition/DemoCompetitionBlock";
+import HomeTopMembers from "@/components/demoCompetition/HomeTopMembers";
+import HomeTopBrands from "@/components/demoCompetition/HomeTopBrands";
+import { dashboardSectionData } from "@/lib/demoCompetition/homepageSections";
 import { orderStatusErrorMessage, shouldRefreshOrdersAfter, orderMessageDir } from "@/lib/affiliateOrderMessages";
 import { localizeServerError, localizeNotification } from "@/lib/serverText/affiliateServerText";
 import { fieldDir } from "@/lib/marketLocale";
@@ -604,38 +603,39 @@ function AvatarUpload({ affiliate, authHeaders, onUpdate }) {
   );
 }
 
-// ── Demo Competition leaderboard ──────────────────────────────────────────────
-// The dashboard leaderboard reads the Demo Competition members (GET
-// /api/demo-competition/members — SIMULATION ONLY, ranked by rolling 30-day
-// earnings, no monthly cycle) through the shared public components: live polling
-// every ~5 s (paused while the tab is hidden or the block is off-screen), Top-3
-// flame, movement indicators; a row opens /top-members/[id]. The old demo system
-// (/api/demo/*) still feeds /tsajlim3ana and Live Activity — see
-// docs/demo-competition.md.
-
-// The leaderboard follows the DASHBOARD language (the affiliate's market language, AR or FR —
+// ── Demo Competition: Top Members + Top Brands ────────────────────────────────
+// The approved design of the Store Homepage sections, moved here (they are no longer shown on the
+// homepage): the SAME components — DemoCompetitionBlock (one banner with the simulation disclaimer;
+// stacked on phones, side by side from lg) holding HomeTopMembers + HomeTopBrands (compact rows,
+// live polling only while in view, Top-3 flame, a row opens /top-members/[id] or /top-brands/[id],
+// "Voir tout" → the full pages). Same APIs (/api/demo-competition/members|brands), same ranking.
+// SIMULATION ONLY — rolling 30-day ranking, no monthly cycle; see docs/demo-competition.md.
+// The sections follow the DASHBOARD language (the affiliate's market language, AR or FR —
 // useMarketLocale), never the storefront language chosen elsewhere.
+// Admin settings (shown / hidden, title, number of rows, "Voir tout"): the SAME saved sections the admin edits
+// (Setting homepage_layout — Homepage Builder or /admin/demo-competition/homepage), read through the
+// existing public settings endpoint; an empty title = the default title in the dashboard language.
 
-function CompetitionTab({ lang: dashboardLang }) {
-  const { t, lang, dir } = useNeutralDemoText(useDemoText(dashboardLang));
-  const { data, error, ref } = useLivePolling(`/api/demo-competition/members?limit=${MAX_MEMBERS}`);
-  const members = data?.members;
+function CompetitionTab({ lang }) {
+  const [layout, setLayout] = useState(undefined); // undefined = loading; [] = none / unreadable (defaults)
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/setting?type=homepage_layout", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((d) => { if (alive) setLayout(Array.isArray(d?.sections) ? d.sections : []); })
+      .catch(() => { if (alive) setLayout([]); });
+    return () => { alive = false; };
+  }, []);
+  if (layout === undefined) return null; // never show default rows / titles first, then the admin's
+  const members = dashboardSectionData(layout, "top_members");
+  const brands = dashboardSectionData(layout, "top_brands");
+  const count = (members.visible ? 1 : 0) + (brands.visible ? 1 : 0);
+  if (!count) return null; // both hidden by the admin ("Masquer")
   return (
-    <section ref={ref} dir={dir} lang={lang} className="space-y-3 text-start" aria-label={t("members_title")}>
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <div className="min-w-0">
-          <h2 className="text-lg font-black text-gray-900">{`🏆 ${t("members_title")}`}</h2>
-          <p className="mt-0.5 text-xs text-gray-500">{t("members_subtitle")}</p>
-          {t("sim_badge") && <div className="mt-1"><SimulationBadge t={t} /></div>}
-        </div>
-        <Link href="/top-members" className="inline-flex items-center gap-1 rounded-full bg-gray-900 px-4 py-1.5 text-sm font-bold text-white hover:bg-gray-800">
-          {t("view_all")}
-        </Link>
-      </div>
-      <SimulationDisclosure t={t} compact />
-      {error && !data && <p role="status" className="text-xs text-gray-500">{t("error_load")}</p>}
-      <MembersLeaderboard members={members} t={t} lang={lang} skeletonRows={5} />
-    </section>
+    <DemoCompetitionBlock count={count} lang={lang}>
+      {members.visible && <HomeTopMembers lang={lang} sectionId="dashboard_top_members" data={members} />}
+      {brands.visible && <HomeTopBrands lang={lang} sectionId="dashboard_top_brands" data={brands} />}
+    </DemoCompetitionBlock>
   );
 }
 
@@ -1636,8 +1636,8 @@ export default function AffiliateDashboard() {
                 the landing page (GET /api/live-activity). Placed below the stats. */}
             <LiveActivity windowSize={4} showViewAll />
 
-            {/* 🏆 Demo Competition leaderboard (Top Members, rolling 30 days) — inline on the
-                overview, where the bonus block used to be; the standalone tab has been removed. */}
+            {/* 🏆 Demo Competition: Top Members + Top Brands (rolling 30 days), in the approved Store
+                Homepage design — inline on the overview, where the competition block was. */}
             <CompetitionTab lang={lang} />
 
             {/* Referral CTA (kept directly below the competition) */}
