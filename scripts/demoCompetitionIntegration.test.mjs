@@ -16,6 +16,9 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BASE = 'cefc644';
 const read = (f) => readFileSync(`${ROOT}${f}`, 'utf8');
+const TASK7 = '23990d5';
+const LOCALIZED_BY_TASK7 = ['src/app/tsajlim3ana/RecruitmentLanding.jsx', 'src/components/LiveActivity.jsx'];
+const atRef = (ref, f) => { try { return execFileSync('git', ['show', `${ref}:${f}`], { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 26 }); } catch { return null; } };
 const atBase = (f) => { try { return execFileSync('git', ['show', `${BASE}:${f}`], { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 26 }); } catch { return null; } };
 // Line-based (a block-comment regex would also eat strings such as "image/*"): drop comment-only lines, JSX
 // {/* … */} comments on one line and trailing " // …" comments.
@@ -40,11 +43,13 @@ console.log('\n1. Affiliate dashboard leaderboard → Demo Competition members')
   ok('a row opens /top-members/[id]', /href=\{`\/top-members\/\$\{encodeURIComponent\(member\.id\)\}`\}/.test(row));
   ok('the simulation disclosure + badge are shown on the dashboard', /<SimulationDisclosure\b/.test(tab) && /<SimulationBadge\b/.test(tab));
   ok('the old modal / avatar helpers of the dashboard are gone (no dead code left)', !/DemoAffiliateModal|function DemoAvatar|GROWTH_BADGE|REFRESH_SEC/.test(code));
-  ok('the dashboard still renders the leaderboard on the overview, under Live Activity', /<LiveActivity windowSize=\{4\} showViewAll \/>[\s\S]{0,400}<CompetitionTab lang=\{DASHBOARD_LANG\} \/>/.test(page));
+  ok('the dashboard still renders the leaderboard on the overview, under Live Activity', /<LiveActivity windowSize=\{4\} showViewAll \/>[\s\S]{0,400}<CompetitionTab lang=\{lang\} \/>/.test(page));
   // Approved decision (dashboard language): the leaderboard follows the Affiliate Dashboard language (French on this
   // branch), never a storefront language chosen elsewhere.
-  ok('the dashboard leaderboard uses the dashboard language (DASHBOARD_LANG = "fr"), not the storefront language',
-    /const DASHBOARD_LANG = "fr";/.test(page) && /useDemoText\(dashboardLang\)/.test(tab) && /export function useDemoText\(langOverride\)[\s\S]{0,200}demoLang\(langOverride \|\| lang\)/.test(read('src/components/demoCompetition/useLivePolling.js')));
+  // Since the merge with Task 7 (market localization) the dashboard is AR/FR: the leaderboard receives the dashboard's
+  // market language (useMarketLocale) instead of the former fixed "fr" — still never the storefront language.
+  ok('the dashboard leaderboard uses the dashboard language (market AR/FR), not the storefront language',
+    /const \{ lang, t, intlLocale \} = useMarketLocale\(AFFILIATE_DASHBOARD_TEXT\);/.test(page) && !/useLanguage\(/.test(page) && !/DASHBOARD_LANG/.test(page) && /useDemoText\(dashboardLang\)/.test(tab) && /export function useDemoText\(langOverride\)[\s\S]{0,200}demoLang\(langOverride \|\| lang\)/.test(read('src/components/demoCompetition/useLivePolling.js')));
   ok('the dashboard has no Demo Competition write and imports no service (client only)',
     !/demoCompetitionService|method:\s*["'](POST|PATCH|PUT|DELETE)["'][^)]*demo-competition/.test(code));
 }
@@ -60,8 +65,11 @@ console.log('\n1. Affiliate dashboard leaderboard → Demo Competition members')
 
 console.log('\n2. /tsajlim3ana and Live Activity unchanged (still the old demo system)');
 for (const f of ['src/app/tsajlim3ana/RecruitmentLanding.jsx', 'src/components/LiveActivity.jsx', 'src/lib/services/liveActivityEngine.js', 'src/app/api/live-activity/route.js']) {
-  const base = atBase(f);
-  ok(`${f} is byte-identical to ${BASE}`, base !== null && existsSync(`${ROOT}${f}`) && base === read(f));
+  // RecruitmentLanding.jsx and LiveActivity.jsx changed only through the approved Task 7 localization (23990d5, on the
+  // recruiter branch, merged with this one); the Demo Competition itself never touches them.
+  const ref = LOCALIZED_BY_TASK7.includes(f) ? TASK7 : BASE;
+  const base = atRef(ref, f);
+  ok(`${f} is byte-identical to ${ref}`, base !== null && existsSync(`${ROOT}${f}`) && base === read(f));
 }
 ok('/tsajlim3ana still reads /api/demo/leaderboard', /\/api\/demo\/leaderboard/.test(read('src/app/tsajlim3ana/RecruitmentLanding.jsx')));
 ok('Live Activity still uses the old demo identity pool', /getDemoIdentityPool/.test(read('src/lib/services/liveActivityEngine.js')));

@@ -338,7 +338,7 @@ console.log("\n4. Financial isolation, routes, reserved setting");
   ok("PUT conflict → 400 INVALID_INPUT with the field codes", badPut.status === 400 && badBody.code === "INVALID_INPUT" && badBody.errors?.hourMin === "HOUR_RANGE");
   const route = read("../src/app/api/admin/brand/accesses/[id]/simulation-speed/route.js");
   ok("route is admin-only (withAdminAuth on GET and PUT)", /export const GET = withAdminAuth\(h\.getAccessSpeed\)/.test(route) && /export const PUT = withAdminAuth\(h\.saveAccessSpeed\)/.test(route));
-  ok("the speed setting is reserved (the generic settings API cannot write it)", /BRAND_SIM_SPEED_SETTING_ID\]\);/.test(read("../src/lib/controllers/settingsController.js")));
+  ok("the speed setting is reserved (the generic settings API cannot write it)", /RESERVED_SETTING_TYPES = new Set\(\[[^\]]*\bBRAND_SIM_SPEED_SETTING_ID\b[^\]]*\]\)/.test(read("../src/lib/controllers/settingsController.js")));
   ok("existing timezone rules untouched (Casablanca day buckets)", /export const SIM_TIMEZONE = 'Africa\/Casablanca';/.test(read("../src/lib/brandSimulation.js")));
 }
 

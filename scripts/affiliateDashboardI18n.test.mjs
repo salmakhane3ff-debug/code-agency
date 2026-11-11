@@ -57,8 +57,10 @@ console.log("\n1. Dictionary");
   ok("every _one plural has an _other form", plural.length === 0, plural.join());
   const tAr = makeMarketT(AFFILIATE_DASHBOARD_TEXT, "ar"), tFr = makeMarketT(AFFILIATE_DASHBOARD_TEXT, "fr");
   ok("interpolation works in both languages", tFr("tab_orders", { n: 4 }) === "Commandes (4)" && tAr("tab_orders", { n: 4 }) === "الطلبات (4)");
-  ok("the old French and Arabic wordings are kept (competition, More sheet)",
-    fr.competitor_profile === "Profil compétiteur" && fr.leaderboard_title === "Classement du mois" && fr.growth_aggressive === "Top Performer"
+  // The competition wordings left with the old monthly leaderboard (merge with the Demo Competition, whose own
+  // dictionary — src/lib/demoCompetition/i18n.js — now provides the leaderboard texts); the other wordings stay.
+  ok("the old French and Arabic wordings are kept (More sheet, referral CTA, navigation)",
+    !("leaderboard_title" in fr) && !("competitor_profile" in ar)
     && ar.more_title === "المزيد" && ar.cta_title === "شارك رابط الإحالة ديالك" && ar.nav_home === "الرئيسية");
 }
 
@@ -121,8 +123,10 @@ console.log("\n4. Direction");
     const open = page.lastIndexOf("<", m.index);
     return page.slice(open, m.index).match(/^<(\w+)/)?.[1];
   });
+  // Merge with the Demo Competition: the ▲/▼ rank-delta badge left with the old monthly leaderboard (replaced by the
+  // shared Demo Competition components, which handle their own direction) → 5 islands remain.
   ok(`dir="ltr" only on codes / numbers / inputs (${ltrTags.length} islands)`,
-    ltrTags.length >= 6 && ltrTags.every((tag) => ["input", "span", "div"].includes(tag)), ltrTags.join());
+    ltrTags.length >= 5 && ltrTags.every((tag) => ["input", "span", "div"].includes(tag)), ltrTags.join());
   // Phone + bank inputs: dir="auto" — an empty input aligns its (market-language) placeholder with the
   // market, typed digits / RIB stay LTR. Value handling unchanged.
   ok("bank inputs (bank name / RIB / holder): empty → market direction (placeholder), filled → dir=auto (fieldDir), same value handling",
@@ -131,7 +135,10 @@ console.log("\n4. Direction");
     /<input value=\{affiliate\.phone \?\? ""\} disabled dir="auto"/.test(page) && /placeholder="0612345678" dir="auto" \/>/.test(page) && /<input name="phone" type="tel"/.test(page));
   const physical = code.match(/(?<![\w-])(text-left|text-right|sm:text-right|ml-\d|mr-\d|pl-\d|pr-\d|-?right-\d|-?left-2|right-1\.5|left-2)(?![\w.])/g) || [];
   ok("mirroring classes are logical (text-start/end, ms/me, ps/pe, start/end)", physical.length === 0, physical.join());
-  ok("chevrons / arrows flip in RTL", (page.match(/rtl:rotate-180/g) || []).length >= 4 && /-rotate-90 rtl:rotate-90/.test(page));
+  // The old leaderboard row's -rotate-90 chevron left with it (merge with the Demo Competition): every remaining
+  // sideways chevron must still flip in RTL.
+  ok("chevrons / arrows flip in RTL", (page.match(/rtl:rotate-180/g) || []).length >= 4
+    && (page.match(/-rotate-90(?! rtl:rotate-90)/g) || []).length === 0);
   ok("usernames, order ids and @handles are isolated (<bdi>)", (page.match(/<bdi>/g) || []).length >= 8);
   ok("amounts are LTR islands (Unicode isolates in fmtMoney)", /const LRI = "\\u2066"/.test(page) && /function fmtMoney\(n, lang/.test(page));
   ok("the order-refused notice keeps the language direction", /role="alert" dir=\{orderMessageDir\(lang\)\}/.test(page));
@@ -145,7 +152,9 @@ console.log("\n5. Wiring");
     && /import \{ AFFILIATE_DASHBOARD_TEXT \} from "@\/lib\/affiliateDashboardI18n";/.test(page)
     && !/useLanguage\(/.test(page) && !/localStorage\.(get|set)Item\(["']store_lang/.test(page));
   const hookCalls = (page.match(/useMarketLocale\(AFFILIATE_DASHBOARD_TEXT\)/g) || []).length;
-  ok(`every translated component reads the hook (${hookCalls} calls)`, hookCalls >= 12);
+  // 11 since the merge with the Demo Competition: the old CompetitionTab and DemoAffiliateModal (2 calls) were removed;
+  // the new leaderboard reads the dashboard language through its `lang` prop.
+  ok(`every translated component reads the hook (${hookCalls} calls)`, hookCalls >= 11);
   ok("dates use the market Intl locale", /toLocaleDateString\(marketIntlLocale\(lang\)/.test(page) && /toLocaleDateString\(\s*intlLocale,/.test(page));
   ok("bottom nav + More sheet are translated", /label: t\("more_orders"\)/.test(page) && /label=\{t\("nav_home"\)\}/.test(page) && /\{t\("more_title"\)\}/.test(page));
   ok("menus keep their order (brand where Booster was)", /const moreItems = \[[\s\S]*?tab: "settings" \},\n  \];/.test(page));

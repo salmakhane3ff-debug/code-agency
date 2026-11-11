@@ -538,7 +538,11 @@ console.log('\n11. Affiliate commissions, points, balances and payouts untouched
   // handlers + service, the activation service). Still no commission / points / balance / payout / affiliate-KYC file.
   // Demo Competition (simulation only, separate feature): its own new src paths and the shared files it edits are dropped
   // (exact list in scripts/lib/demoCompetitionAllowance.mjs); SideBar.jsx and landingMode.js stay — already listed above.
-  const allSrc = dropDemoCompSrc([...new Set([...changed, ...untracked])], ['src/components/admin/SideBar.jsx', 'src/lib/landingMode.js']).sort();
+  // Merge with the Demo Competition: these shared files were ALSO changed by approved work of this branch (Task 7
+  // localization, Create Your Own Brand, per-brand simulation speed), so they stay in the list below.
+  const RECRUITER_SIDE_SHARED = ['src/app/affiliate/dashboard/page.jsx', 'src/app/affiliate/dashboard/_brand/BrandDashboard.jsx',
+    'src/components/brand/BrandSimStats.jsx', 'src/lib/controllers/settingsController.js'];
+  const allSrc = dropDemoCompSrc([...new Set([...changed, ...untracked])], ['src/components/admin/SideBar.jsx', 'src/lib/landingMode.js', ...RECRUITER_SIDE_SHARED]).sort();
   ok('src/ changed versus the part 3 base commit ONLY in the Part 3a files + the Part 3b files errorLabels.js / recruiterRewardAdminHandlers.js + the exact Part 3c recruiter KYC files + the exact Part 4 permission files (no commission / points / balance / payout / affiliate KYC file)', eq(allSrc, [
     'src/app/admin/recruiter-identity/page.jsx', 'src/app/admin/recruiter-rewards/page.jsx', 'src/app/api/admin/affiliate-orders/route.js',
     'src/app/api/admin/recruiter-identity/[id]/[side]/route.js', 'src/app/api/admin/recruiter-identity/route.js', 'src/app/api/recruiter/identity/route.js',

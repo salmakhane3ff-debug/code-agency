@@ -750,7 +750,11 @@ console.log('\n4. Regression and scope');
   const untracked = git(['ls-files', '--others', '--exclude-standard', '--', 'src']).split('\n').filter(Boolean);
   // Demo Competition (simulation only, separate feature): its own new src paths and the shared files it edits are dropped
   // (exact list in scripts/lib/demoCompetitionAllowance.mjs); landingMode.js stays — it is already listed (Phase 7 Stage C).
-  const allSrc = dropDemoCompSrc([...new Set([...changed, ...untracked])], ['src/lib/landingMode.js']).sort();
+  // Merge with the Demo Competition: these shared files were ALSO changed by approved work of this branch (Task 7
+  // localization, Create Your Own Brand, per-brand simulation speed), so they stay in the list below.
+  const RECRUITER_SIDE_SHARED = ['src/app/affiliate/dashboard/page.jsx', 'src/app/affiliate/dashboard/_brand/BrandDashboard.jsx',
+    'src/components/brand/BrandSimStats.jsx', 'src/lib/controllers/settingsController.js'];
+  const allSrc = dropDemoCompSrc([...new Set([...changed, ...untracked])], ['src/lib/landingMode.js', ...RECRUITER_SIDE_SHARED]).sort();
   ok('src/ changed versus the Part 4 base ONLY in the exact Part 4 files', eq(allSrc, [
     'src/app/admin/recruiters/page.jsx', 'src/app/api/admin/recruiters/[id]/permissions/route.js',
     'src/app/recruiter/affiliates/activation/page.jsx', 'src/app/recruiter/affiliates/new/page.jsx',
