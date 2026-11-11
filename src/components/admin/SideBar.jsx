@@ -55,6 +55,7 @@ import {
   LoaderCircle,
   Film,
   Store,
+  Flag,
 } from "lucide-react";
 
 const SideBar = ({ onItemClick }) => {
@@ -86,6 +87,12 @@ const SideBar = ({ onItemClick }) => {
     { href: "/admin/preloader",  icon: <LoaderCircle  size={16} />, label: "Preloader" },
     { href: "/admin/conversion-optimization", icon: <TrendingUp size={16} />, label: "Conversion Optimization" },
     { href: "/admin/affiliates", icon: <Users size={16} />, label: "Affiliates" },
+    // Demo Competition (SIMULATION ONLY): one group + four indented sub-entries.
+    { href: "/admin/demo-competition", icon: <Flag size={16} />, label: "🏁 Demo Competition", group: true },
+    { href: "/admin/demo-competition/members", icon: <Users size={14} />, label: "Demo Members", indent: true },
+    { href: "/admin/demo-competition/brands", icon: <Store size={14} />, label: "Demo Brands", indent: true },
+    { href: "/admin/demo-competition/engine", icon: <Activity size={14} />, label: "Live Engine", indent: true },
+    { href: "/admin/demo-competition/homepage", icon: <LayoutGrid size={14} />, label: "Homepage Settings", indent: true },
     { href: "/admin/promo", icon: <Tag size={16} />, label: "Promo Codes" },
     { href: "/admin/spin-wheel", icon: <Disc size={16} />, label: "Spin Wheel" },
     { href: "/admin/gifts", icon: <Gift size={16} />, label: "Gift System" },
@@ -139,16 +146,19 @@ const SideBar = ({ onItemClick }) => {
     <div className="flex flex-col h-full bg-gray-50/50">
       {/* Navigation Links */}
       <nav className="flex-1 p-3 space-y-2 overflow-y-auto">
-        {links.map(({ href, icon, label }) => {
+        {links.map(({ href, icon, label, group, indent }) => {
           const isActive = pathname === href;
+          // A group entry stays highlighted (lighter) on any of its sub-pages.
+          const inGroup = !!group && !isActive && !!pathname && pathname.startsWith(`${href}/`);
+          const box = indent ? "mb-1 ps-8 pe-3 py-1.5 text-xs" : "mb-2 px-3 py-2.5 text-sm";
           return (
-            <Link key={href} href={href} onClick={handleLinkClick}>
+            <Link key={href} href={href} onClick={handleLinkClick} aria-current={isActive ? "page" : undefined}>
               <div
-                className={`group mb-2 flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-xl transition-all duration-200 ${
-                  isActive ? "bg-blue-600 text-white shadow-sm" : "text-gray-600 hover:bg-white hover:text-gray-900 hover:shadow-sm"
+                className={`group ${box} flex items-center gap-3 font-medium rounded-xl transition-all duration-200 ${
+                  isActive ? "bg-blue-600 text-white shadow-sm" : inGroup ? "bg-blue-50 text-blue-700" : "text-gray-600 hover:bg-white hover:text-gray-900 hover:shadow-sm"
                 }`}
               >
-                <span className={`transition-colors ${isActive ? "text-white" : "text-gray-400 group-hover:text-gray-600"}`}>{icon}</span>
+                <span className={`transition-colors ${isActive ? "text-white" : inGroup ? "text-blue-500" : "text-gray-400 group-hover:text-gray-600"}`}>{icon}</span>
                 <span className="truncate">{label}</span>
                 {isActive && <div className="ml-auto w-1.5 h-1.5 bg-white rounded-full opacity-70"></div>}
               </div>

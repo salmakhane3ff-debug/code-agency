@@ -24,6 +24,11 @@ import { resolveSupportLink } from "@/lib/whatsappSupport";
 import { useMarketLocale } from "@/context/useMarketLocale";
 import { marketIntlLocale } from "@/lib/marketLocale";
 import { AFFILIATE_DASHBOARD_TEXT } from "@/lib/affiliateDashboardI18n";
+import Link from "next/link";
+import { MAX_MEMBERS } from "@/lib/demoCompetition/engine";
+import { useDemoText, useLivePolling, useNeutralDemoText } from "@/components/demoCompetition/useLivePolling";
+import { MembersLeaderboard } from "@/components/demoCompetition/MemberRow";
+import { SimulationBadge, SimulationDisclosure } from "@/components/demoCompetition/Badges";
 import { orderStatusErrorMessage, shouldRefreshOrdersAfter, orderMessageDir } from "@/lib/affiliateOrderMessages";
 import { localizeServerError, localizeNotification } from "@/lib/serverText/affiliateServerText";
 import { fieldDir } from "@/lib/marketLocale";
@@ -599,453 +604,38 @@ function AvatarUpload({ affiliate, authHeaders, onUpdate }) {
   );
 }
 
-// ── Demo Competition helpers ──────────────────────────────────────────────────
+// ── Demo Competition leaderboard ──────────────────────────────────────────────
+// The dashboard leaderboard reads the Demo Competition members (GET
+// /api/demo-competition/members — SIMULATION ONLY, ranked by rolling 30-day
+// earnings, no monthly cycle) through the shared public components: live polling
+// every ~5 s (paused while the tab is hidden or the block is off-screen), Top-3
+// flame, movement indicators; a row opens /top-members/[id]. The old demo system
+// (/api/demo/*) still feeds /tsajlim3ana and Live Activity — see
+// docs/demo-competition.md.
 
-const RANK_MEDALS  = ['🥇', '🥈', '🥉'];
-// UI-only: hide the internal demo_ prefix from competition usernames.
-// Strips a single leading "demo_"; all other usernames are returned unchanged.
-const displayUsername = (u) => (u || "").replace(/^demo_/, "");
-const GROWTH_BADGE = {
-  aggressive: { labelKey: 'growth_aggressive', cls: 'bg-red-100 text-red-700'    },
-  consistent: { labelKey: 'growth_consistent', cls: 'bg-blue-100 text-blue-700'  },
-  slow:       { labelKey: 'growth_slow',       cls: 'bg-gray-100 text-gray-600'  },
-};
+// The leaderboard follows the DASHBOARD language (the affiliate's market language, AR or FR —
+// useMarketLocale), never the storefront language chosen elsewhere.
 
-function DemoAvatar({ name, color, url, size = 'md' }) {
-  const sz = size === 'lg' ? 'w-14 h-14 text-xl' : size === 'sm' ? 'w-7 h-7 text-xs' : 'w-10 h-10 text-sm';
-  const [broken, setBroken] = useState(false);
-  // Persisted uploaded avatar when available; on load error (e.g. deleted from the
-  // library) gracefully fall back to the initials avatar — never a broken image.
-  if (url && !broken) {
-    return (
-      <img src={url} alt={name || ''} onError={() => setBroken(true)}
-        className={`${sz} rounded-full object-cover shrink-0 bg-gray-200`} />
-    );
-  }
+function CompetitionTab({ lang: dashboardLang }) {
+  const { t, lang, dir } = useNeutralDemoText(useDemoText(dashboardLang));
+  const { data, error, ref } = useLivePolling(`/api/demo-competition/members?limit=${MAX_MEMBERS}`);
+  const members = data?.members;
   return (
-    <div className={`${sz} rounded-full flex items-center justify-center font-black text-white shrink-0`}
-      style={{ background: color }}>
-      {(name || '?')[0].toUpperCase()}
-    </div>
-  );
-}
-
-// ── Demo Affiliate Detail Modal ───────────────────────────────────────────────
-
-function DemoAffiliateModal({ affiliateId, onClose }) {
-  const { t, lang } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
-  const money = (v) => fmtMoney(v ?? 0, lang, { grouped: true });
-  const [data,      setData]      = useState(null);
-  const [loading,   setLoading]   = useState(true);
-  const [activeTab, setActiveTab] = useState('overview');
-
-  useEffect(() => {
-    if (!affiliateId) return;
-    setLoading(true);
-    fetch(`/api/demo/affiliate/${affiliateId}`)
-      .then((r) => r.json())
-      .then(setData)
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [affiliateId]);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/50 backdrop-blur-sm"
-      onClick={(e) => e.target === e.currentTarget && onClose()}>
-
-      <div className="bg-white w-full sm:max-w-lg rounded-t-3xl sm:rounded-2xl shadow-2xl overflow-hidden
-        animate-in slide-in-from-bottom-4 sm:zoom-in-95 duration-200">
-
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-          <h2 className="text-sm font-bold text-gray-800">
-            {t('competitor_profile')}
-          </h2>
-          <button onClick={onClose} aria-label={t('close')} title={t('close')}
-            className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200 transition-colors">
-            <XCircle className="w-4 h-4" />
-          </button>
+    <section ref={ref} dir={dir} lang={lang} className="space-y-3 text-start" aria-label={t("members_title")}>
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div className="min-w-0">
+          <h2 className="text-lg font-black text-gray-900">{`🏆 ${t("members_title")}`}</h2>
+          <p className="mt-0.5 text-xs text-gray-500">{t("members_subtitle")}</p>
+          {t("sim_badge") && <div className="mt-1"><SimulationBadge t={t} /></div>}
         </div>
-
-        {loading ? (
-          <div className="flex items-center justify-center py-16">
-            <Loader2 className="w-8 h-8 animate-spin text-gray-300" />
-          </div>
-        ) : !data ? (
-          <p className="text-center text-sm text-gray-400 py-12">
-            {t('data_not_found')}
-          </p>
-        ) : (
-          <div className="flex flex-col max-h-[80vh]">
-
-            {/* Identity strip */}
-            <div className="flex items-center gap-3 px-5 py-4 bg-gradient-to-r rtl:bg-gradient-to-l from-gray-50 to-white border-b border-gray-100">
-              <DemoAvatar name={data.name} color={data.avatarColor} url={data.avatarUrl} size="lg" />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="font-black text-gray-900 text-base truncate">{data.name}</p>
-                  {data.rank <= 3 && <span className="text-xl">{RANK_MEDALS[data.rank - 1]}</span>}
-                </div>
-                <p className="text-xs text-gray-400 font-mono"><bdi>@{displayUsername(data.username)}</bdi></p>
-                <div className="flex items-center gap-2 mt-1 flex-wrap">
-                  <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-900 text-white">
-                    {t('rank_label', { rank: data.rank })}
-                  </span>
-                  <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${GROWTH_BADGE[data.growthType]?.cls}`}>
-                    {GROWTH_BADGE[data.growthType] ? t(GROWTH_BADGE[data.growthType].labelKey) : null}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Tabs */}
-            <div className="flex border-b border-gray-100 bg-gray-50">
-              {[
-                { id: 'overview', label: t('tab_overview_short') },
-                { id: 'team',     label: t('tab_team_short')     },
-                { id: 'earnings', label: t('tab_earnings_short') },
-              ].map((tb) => (
-                <button key={tb.id} onClick={() => setActiveTab(tb.id)}
-                  className={`flex-1 py-2.5 text-xs font-semibold transition-colors border-b-2
-                    ${activeTab === tb.id
-                      ? 'border-gray-900 text-gray-900 bg-white'
-                      : 'border-transparent text-gray-400 hover:text-gray-700'}`}>
-                  {tb.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Scrollable body */}
-            <div className="overflow-y-auto flex-1">
-
-              {/* ── OVERVIEW ── */}
-              {activeTab === 'overview' && (
-                <div className="p-4 space-y-4">
-                  {/* Main stats */}
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      { label: t('demo_total_orders'),  value: data.totalOrders,       color: 'text-gray-800' },
-                      { label: t('demo_total_revenue'), value: money(data.totalRevenue), color: 'text-amber-700' },
-                      { label: t('confirmed_plural'),   value: data.confirmedOrders,   color: 'text-green-700' },
-                      { label: t('cancelled_plural'),   value: data.cancelledOrders,   color: 'text-red-600'   },
-                    ].map((s) => (
-                      <div key={s.label} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
-                        <p className={`text-lg font-black ${s.color}`}>{s.value}</p>
-                        <p className="text-[10px] text-gray-400 mt-0.5">{s.label}</p>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Today */}
-                  <div className="bg-indigo-50 rounded-xl p-3.5 border border-indigo-100">
-                    <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-wider mb-2">
-                      {t('today')}
-                    </p>
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <p className="text-2xl font-black text-indigo-800">{data.todayOrders}</p>
-                        <p className="text-[10px] text-indigo-400">{t('orders_lower')}</p>
-                      </div>
-                      <div className="text-end">
-                        <p className="text-xl font-black text-indigo-700">
-                          {money(data.todayRevenue)}
-                        </p>
-                        <p className="text-[10px] text-indigo-400">{t('revenue_today')}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* ── TEAM ── */}
-              {activeTab === 'team' && (
-                <div className="p-4 space-y-3">
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      { label: t('team_size'),    value: data.teamSize,             color: 'text-purple-700' },
-                      { label: t('team_orders'),  value: data.teamOrders,           color: 'text-gray-800'   },
-                      { label: t('team_revenue'), value: money(data.teamRevenue),   color: 'text-amber-700'  },
-                      { label: t('your_commission_pct', { pct: 5 }), value: money(data.teamCommission), color: 'text-green-700' },
-                    ].map((s) => (
-                      <div key={s.label} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
-                        <p className={`text-lg font-black ${s.color}`}>{s.value}</p>
-                        <p className="text-[10px] text-gray-400 mt-0.5">{s.label}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* ── GAINS (UGC) — demo UGC stats only; Boutique stays in Aperçu ── */}
-              {activeTab === 'earnings' && (
-                <div className="p-4">
-                  <p className="text-[10px] font-bold text-violet-500 uppercase tracking-wider mb-3">
-                    {t('ugc_earnings_heading')}
-                  </p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      { label: t('ugc_today_earnings'), value: money(data.ugcTodayEarnings), color: 'text-violet-700' },
-                      { label: t('ugc_today_sales'),    value: data.ugcTodaySales ?? 0,      color: 'text-violet-700' },
-                      { label: t('ugc_total_earnings'), value: money(data.ugcTotalEarnings), color: 'text-emerald-700' },
-                      { label: t('ugc_total_sales'),    value: data.ugcTotalSales ?? 0,      color: 'text-emerald-700' },
-                    ].map((s) => (
-                      <div key={s.label} className="bg-violet-50 rounded-xl p-3 border border-violet-100">
-                        <p className={`text-lg font-black ${s.color}`}>{s.value}</p>
-                        <p className="text-[10px] text-gray-500 mt-0.5">{s.label}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-            </div>
-          </div>
-        )}
+        <Link href="/top-members" className="inline-flex items-center gap-1 rounded-full bg-gray-900 px-4 py-1.5 text-sm font-bold text-white hover:bg-gray-800">
+          {t("view_all")}
+        </Link>
       </div>
-    </div>
-  );
-}
-
-// ── Competition Tab ───────────────────────────────────────────────────────────
-
-const REFRESH_SEC = 15;
-
-function CompetitionTab() {
-  const { t, lang } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
-  const [leaderboard,  setLeaderboard]  = useState([]);
-  const [competition,  setCompetition]  = useState(null);
-  const [loading,      setLoading]      = useState(true);
-  const [selectedId,   setSelectedId]   = useState(null);
-  const [rankDeltas,   setRankDeltas]   = useState({}); // id → delta (+up / -down)
-  const [flashMap,     setFlashMap]     = useState({}); // id → 'up'|'down'|'new'
-  const [countdown,    setCountdown]    = useState(REFRESH_SEC);
-  const prevRankRef  = useRef({});   // id → last index
-  const deltaTimerRef = useRef(null);
-  const flashTimerRef = useRef(null);
-
-  const applyNewBoard = useCallback((newBoard) => {
-    const prevMap = prevRankRef.current;
-    const deltas  = {};
-    const flash   = {};
-
-    newBoard.forEach((a, i) => {
-      const prev = prevMap[a.id];
-      if (prev === undefined) {
-        flash[a.id] = 'new';
-      } else if (prev !== i) {
-        deltas[a.id] = prev - i;           // positive → moved up
-        flash[a.id]  = prev > i ? 'up' : 'down';
-      }
-    });
-
-    // Persist new positions
-    const newMap = {};
-    newBoard.forEach((a, i) => { newMap[a.id] = i; });
-    prevRankRef.current = newMap;
-
-    setLeaderboard(newBoard);
-    setRankDeltas(deltas);
-    setFlashMap(flash);
-
-    // Auto-clear flash after 2 s, deltas after 5 s
-    clearTimeout(flashTimerRef.current);
-    clearTimeout(deltaTimerRef.current);
-    flashTimerRef.current = setTimeout(() => setFlashMap({}),   2000);
-    deltaTimerRef.current = setTimeout(() => setRankDeltas({}), 5000);
-  }, []);
-
-  const fetchBoard = useCallback(async (initial = false) => {
-    try {
-      const r = await fetch('/api/demo/leaderboard?limit=20');
-      const d = await r.json();
-      applyNewBoard(d.leaderboard || []);
-      setCompetition(d.competition || null);
-    } catch {}
-    if (initial) setLoading(false);
-  }, [applyNewBoard]);
-
-  // Initial load
-  useEffect(() => {
-    setLoading(true);
-    fetchBoard(true);
-    return () => {
-      clearTimeout(flashTimerRef.current);
-      clearTimeout(deltaTimerRef.current);
-    };
-  }, [fetchBoard]);
-
-  // Auto-refresh every REFRESH_SEC seconds + live countdown
-  useEffect(() => {
-    setCountdown(REFRESH_SEC);
-    const tick = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          fetchBoard(false);
-          return REFRESH_SEC;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(tick);
-  }, [fetchBoard]);
-
-  const daysLeft = competition?.daysLeft ?? 0;
-
-  return (
-    <>
-      {/* Inject keyframes for flash animations */}
-      <style>{`
-        @keyframes flashUp   { 0%,100%{background:transparent} 30%{background:#dcfce7} }
-        @keyframes flashDown { 0%,100%{background:transparent} 30%{background:#fee2e2} }
-        @keyframes flashNew  { 0%,100%{background:transparent} 30%{background:#ede9fe} }
-        .flash-up   { animation: flashUp   2s ease forwards }
-        .flash-down { animation: flashDown 2s ease forwards }
-        .flash-new  { animation: flashNew  2s ease forwards }
-      `}</style>
-
-    <div className="space-y-4">
-
-      {/* ── Competition banner ── */}
-      <div className="rounded-2xl overflow-hidden"
-        style={{ background: 'linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #4338ca 100%)' }}>
-        <div className="px-5 py-4">
-          <div className="flex items-center justify-between flex-wrap gap-3">
-            <div>
-              <p className="text-indigo-300 text-xs font-semibold uppercase tracking-widest mb-1">
-                {t('cycle', { n: competition?.cycleNum ?? 1 })}
-              </p>
-              <h2 className="text-white text-xl font-black">
-                {t('competition_title')}
-              </h2>
-              <p className="text-indigo-300 text-xs mt-1">
-                {t('competition_meta', { p: competition?.totalParticipants ?? 0, d: daysLeft })}
-              </p>
-            </div>
-            <div className="text-center">
-              <p className="text-4xl font-black text-white">{daysLeft}</p>
-              <p className="text-indigo-300 text-xs">{t('days')}</p>
-            </div>
-          </div>
-          {competition && (() => {
-            const elapsed = 30 - daysLeft;
-            const pct = Math.round((elapsed / 30) * 100);
-            return (
-              <div className="mt-3 bg-indigo-900/60 rounded-full h-1.5">
-                <div className="bg-indigo-400 h-1.5 rounded-full transition-all duration-1000" style={{ width: `${pct}%` }} />
-              </div>
-            );
-          })()}
-        </div>
-      </div>
-
-      {/* ── Leaderboard ── */}
-      <Section
-        title={
-          <div className="flex items-center justify-between w-full">
-            <span>{t('leaderboard_title')}</span>
-            <span className="flex items-center gap-1.5 text-[10px] font-semibold text-gray-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-              {t('live_countdown', { n: countdown })}
-            </span>
-          </div>
-        }
-        icon={TrendingUp}
-      >
-        {loading ? (
-          <div className="flex items-center justify-center py-10 gap-2">
-            <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
-            <span className="text-sm text-gray-400">{t('loading')}</span>
-          </div>
-        ) : leaderboard.length === 0 ? (
-          <div className="text-center py-12">
-            <p className="text-gray-400 text-sm">
-              {t('no_participants')}
-            </p>
-            <p className="text-gray-400 text-xs mt-1">
-              {t('enable_competition_hint')}
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {leaderboard.map((a, i) => {
-              const delta     = rankDeltas[a.id] ?? 0;
-              const flash     = flashMap[a.id];
-              const flashCls  = flash === 'up' ? 'flash-up' : flash === 'down' ? 'flash-down' : flash === 'new' ? 'flash-new' : '';
-              const baseBg    = i === 0 ? 'bg-amber-50 border-amber-200 shadow-sm shadow-amber-100'
-                              : i === 1 ? 'bg-gray-50 border-gray-200'
-                              : i === 2 ? 'bg-orange-50 border-orange-200'
-                              : 'bg-white border-gray-100';
-              return (
-                <button
-                  key={a.id}
-                  type="button"
-                  onClick={() => setSelectedId(a.id)}
-                  className={`${flashCls} w-full text-start flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-all duration-500 hover:shadow-sm active:scale-[0.99] ${baseBg}`}
-                >
-                  {/* Rank number */}
-                  <div className="w-7 text-center shrink-0">
-                    {i < 3
-                      ? <span className="text-xl">{RANK_MEDALS[i]}</span>
-                      : <span className="text-xs font-black text-gray-400"><bdi>#{i + 1}</bdi></span>}
-                  </div>
-
-                  {/* Avatar */}
-                  <DemoAvatar name={a.name} color={a.avatarColor} url={a.avatarUrl} size="sm" />
-
-                  {/* Name + badge + delta */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <p className="text-sm font-bold text-gray-800 truncate">{a.name}</p>
-                      {a.growthType === 'aggressive' && (
-                        <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 whitespace-nowrap">
-                          {t('badge_top')}
-                        </span>
-                      )}
-                      {/* Rank movement badge */}
-                      {delta !== 0 && (
-                        <span dir="ltr" className={`text-[9px] font-black px-1.5 py-0.5 rounded-full whitespace-nowrap
-                          ${delta > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                          {delta > 0 ? `▲ +${delta}` : `▼ ${delta}`}
-                        </span>
-                      )}
-                      {flash === 'new' && (
-                        <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 whitespace-nowrap">
-                          {t('badge_new')}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-[10px] text-gray-400 font-mono"><bdi>@{displayUsername(a.username)}</bdi></p>
-                  </div>
-
-                  {/* Stats */}
-                  <div className="text-end shrink-0">
-                    <p className="text-sm font-black text-gray-800">
-                      {a.totalOrders}
-                      <span className="text-xs font-normal text-gray-400 ms-1">{t('orders_short')}</span>
-                    </p>
-                    <p className="text-xs text-amber-700 font-bold">{fmtMoney(a.totalRevenue, lang, { grouped: true })}</p>
-                  </div>
-
-                  <ChevronDown className="w-4 h-4 text-gray-300 -rotate-90 rtl:rotate-90 shrink-0" />
-                </button>
-              );
-            })}
-          </div>
-        )}
-        <p className="text-xs text-gray-400 mt-3">
-          {t('leaderboard_hint', { n: REFRESH_SEC })}
-        </p>
-      </Section>
-
-      {/* ── Detail modal ── */}
-      {selectedId && (
-        <DemoAffiliateModal
-          affiliateId={selectedId}
-          onClose={() => setSelectedId(null)}
-        />
-      )}
-    </div>
-  </>
+      <SimulationDisclosure t={t} compact />
+      {error && !data && <p role="status" className="text-xs text-gray-500">{t("error_load")}</p>}
+      <MembersLeaderboard members={members} t={t} lang={lang} skeletonRows={5} />
+    </section>
   );
 }
 
@@ -2046,9 +1636,9 @@ export default function AffiliateDashboard() {
                 the landing page (GET /api/live-activity). Placed below the stats. */}
             <LiveActivity windowSize={4} showViewAll />
 
-            {/* 🏆 Compétition du mois — moved here (where the bonus block used to be).
-                Same component reused inline; the standalone tab has been removed. */}
-            <CompetitionTab />
+            {/* 🏆 Demo Competition leaderboard (Top Members, rolling 30 days) — inline on the
+                overview, where the bonus block used to be; the standalone tab has been removed. */}
+            <CompetitionTab lang={lang} />
 
             {/* Referral CTA (kept directly below the competition) */}
             <ReferralCta link={refLink} ratePct={((affiliate?.commissionRate || 0) * 100).toFixed(0)} />

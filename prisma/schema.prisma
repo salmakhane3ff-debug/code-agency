@@ -1903,6 +1903,184 @@ model PaymentProofEvent {
   @@map("payment_proof_events")
 }
 
+model DemoCompMember {
+  // Demo Competition (Top Members / Top Brands): SIMULATION ONLY. A demo member is a fictitious
+  // leaderboard profile — never a real affiliate, order, sale, commission, balance or payout. All
+  // amounts are simulated reporting values in centimes. Current settings live here; every change is
+  // also appended to demo_comp_member_versions, which the engine reads (history is never recomputed).
+  id                       String                  @id @default(uuid())
+  name                     String
+  photoUrl                 String?
+  active                   Boolean                 @default(true)
+  minDailyOrders           Int                     @default(5)
+  maxDailyOrders           Int                     @default(30)
+  priceCents               Int                     @default(30000)
+  allocationBps            Int                     @default(3000)
+  networkAffiliates        Int                     @default(0)
+  networkMinDailyOrders    Int                     @default(0)
+  networkMaxDailyOrders    Int                     @default(0)
+  networkPriceCents        Int?
+  networkAllocationBps     Int?
+  personalGeneratedThrough DateTime?
+  networkGeneratedThrough  DateTime?
+  // Archived (instead of deleted): no longer generates and leaves the public rankings; history kept.
+  archivedAt               DateTime?
+  createdAt                DateTime                @default(now())
+  updatedAt                DateTime                @updatedAt
+  versions                 DemoCompMemberVersion[]
+  brands                   DemoCompBrand[]
+  plans                    DemoCompDailyPlan[]
+  events                   DemoCompEvent[]
+
+  @@index([active])
+  @@map("demo_comp_members")
+}
+
+model DemoCompMemberVersion {
+  // Append-only settings history of one demo member (effectiveFrom ascending). A day's plan uses the
+  // version in force at the day's start; an event uses the version in force at its scheduled time.
+  id                    String         @id @default(uuid())
+  memberId              String
+  effectiveFrom         DateTime
+  active                Boolean
+  minDailyOrders        Int
+  maxDailyOrders        Int
+  priceCents            Int
+  allocationBps         Int
+  networkAffiliates     Int
+  networkMinDailyOrders Int
+  networkMaxDailyOrders Int
+  networkPriceCents     Int?
+  networkAllocationBps  Int?
+  createdBy             String?
+  createdAt             DateTime       @default(now())
+  member                DemoCompMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([memberId, effectiveFrom])
+  @@map("demo_comp_member_versions")
+}
+
+model DemoCompBrand {
+  // A demo brand (simulation only), owned by one demo member (a member may own several brands).
+  id               String                 @id @default(uuid())
+  name             String
+  imageUrl         String?
+  ownerId          String
+  active           Boolean                @default(true)
+  minDailyOrders   Int                    @default(5)
+  maxDailyOrders   Int                    @default(30)
+  priceCents       Int                    @default(30000)
+  allocationBps    Int                    @default(7000)
+  generatedThrough DateTime?
+  // Archived (instead of deleted): no longer generates and leaves the public rankings; history kept.
+  archivedAt       DateTime?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  owner            DemoCompMember         @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  versions         DemoCompBrandVersion[]
+  plans            DemoCompDailyPlan[]
+  events           DemoCompEvent[]
+
+  @@index([ownerId])
+  @@index([active])
+  @@map("demo_comp_brands")
+}
+
+model DemoCompBrandVersion {
+  // Append-only settings history of one demo brand (same rules as the member versions).
+  id             String        @id @default(uuid())
+  brandId        String
+  effectiveFrom  DateTime
+  active         Boolean
+  minDailyOrders Int
+  maxDailyOrders Int
+  priceCents     Int
+  allocationBps  Int
+  createdBy      String?
+  createdAt      DateTime      @default(now())
+  brand          DemoCompBrand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@index([brandId, effectiveFrom])
+  @@map("demo_comp_brand_versions")
+}
+
+model DemoCompDailyPlan {
+  // One immutable plan per stream (PERSONAL / NETWORK / BRAND) per profile per Africa/Casablanca
+  // day: the day's target number of demo orders, drawn deterministically within the min / max of
+  // the version in force at the day's start (snapshotted here).
+  id           String          @id @default(uuid())
+  stream       String
+  profileKey   String
+  memberId     String?
+  brandId      String?
+  dayKey       String
+  dayStart     DateTime
+  dayEnd       DateTime
+  targetOrders Int
+  minOrders    Int
+  maxOrders    Int
+  versionId    String
+  createdAt    DateTime        @default(now())
+  member       DemoCompMember? @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  brand        DemoCompBrand?  @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  events       DemoCompEvent[]
+
+  @@unique([stream, profileKey, dayKey])
+  @@index([memberId])
+  @@index([brandId])
+  @@map("demo_comp_daily_plans")
+}
+
+model DemoCompEvent {
+  // Immutable demo sale event (append-only). quantity = 1..3 simulated orders; the price, allocation
+  // and earnings are snapshots of the version in force at scheduledAt, so a later settings change
+  // never recalculates history. earningsCents = round(quantity × priceCents × allocationBps / 10000),
+  // enforced by a CHECK. idempotencyKey = <stream>:<profileId>:<dayKey>:<seq>.
+  id             String            @id @default(uuid())
+  eventType      String
+  memberId       String?
+  brandId        String?
+  planId         String
+  seq            Int
+  quantity       Int
+  priceCents     Int
+  allocationBps  Int
+  earningsCents  Int
+  versionId      String
+  scheduledAt    DateTime
+  createdAt      DateTime          @default(now())
+  idempotencyKey String            @unique
+  member         DemoCompMember?   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  brand          DemoCompBrand?    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  plan           DemoCompDailyPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@index([memberId, eventType, scheduledAt])
+  @@index([brandId, scheduledAt])
+  @@index([scheduledAt])
+  @@map("demo_comp_events")
+}
+
+model DemoCompEngine {
+  // Single row (id "engine"): the demo engine switch, its last run, and the default price /
+  // allocations proposed for new demo profiles (member and brand streams validated separately).
+  // resumedAt / pausedAt: when the engine was last switched ON / OFF — nothing is generated for the time it was
+  // OFF (a profile created while OFF gets its history only up to pausedAt; never switched ON yet → up to now).
+  id                String    @id @default("engine")
+  enabled           Boolean   @default(false)
+  defaultPriceCents Int       @default(30000)
+  defaultMemberBps  Int       @default(3000)
+  defaultBrandBps   Int       @default(7000)
+  initializedAt     DateTime?
+  resumedAt         DateTime?
+  pausedAt          DateTime?
+  lastRunAt         DateTime?
+  lastRunEvents     Int       @default(0)
+  lastError         String?
+  updatedAt         DateTime  @updatedAt
+
+  @@map("demo_comp_engine")
+}
+
 // ── Affiliate Recruiter System ─────────────────────────────────────────────────
 // Recruiters are a SEPARATE principal (own table, own login, JWT type "recruiter"),
 // never a User role and never an Affiliate. A recruiter CREATES affiliate accounts

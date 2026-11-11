@@ -27,6 +27,8 @@ import { SimulatedBadge, LineChart, STATUS_COLOR } from "@/components/brand/Bran
 import { SIM_WINDOWS } from "@/lib/brandSimulation";
 import { displayBreakdown } from "@/lib/brandPricing";
 import { dashboardT } from "./dashboardText";
+import { brandLang } from "@/lib/brandI18n";
+import { BRAND_DASH_NEUTRAL, BRAND_DASH_TEXT_NEUTRAL, displayOrderRef, neutralize } from "@/lib/neutralWording";
 
 const CARD = "bg-white rounded-3xl border border-violet-100/70 shadow-[0_4px_18px_rgba(124,58,237,0.07)]";
 
@@ -237,7 +239,7 @@ function SimFinance({ stats, finance, d, money }) {
           </li>
         ))}
       </ul>
-      <p className="text-[11px] text-gray-500 mt-1.5">{finance ? d("fin_note") : d("fin_no_price")}</p>
+      <p className="text-[11px] text-gray-500 mt-1.5 empty:hidden">{finance ? d("fin_note") : d("fin_no_price")}</p>
     </div>
   );
 }
@@ -345,7 +347,7 @@ function OrderMoney({ m, status, d, money, locale, detailed = false }) {
 /** One simulated training order (Homepage activity-card style): product, reference, status, time, simulated money. */
 function OrderCard({ o, d, ago, money, locale, onOpen }) {
   return (
-    <button type="button" onClick={() => onOpen(o)} aria-label={d("open_order", { ref: o.ref })} data-order={o.ref}
+    <button type="button" onClick={() => onOpen(o)} aria-label={d("open_order", { ref: displayOrderRef(o.ref) })} data-order={o.ref}
       className="w-full flex items-start gap-3 bg-white rounded-2xl border border-gray-100 px-3.5 py-3 text-start hover:border-violet-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400">
       <Thumb src={o.product?.image} className="w-11 h-11 rounded-full" />
       <div className="flex-1 min-w-0">
@@ -354,9 +356,9 @@ function OrderCard({ o, d, ago, money, locale, onOpen }) {
           <span className="text-[11px] text-gray-400 shrink-0 whitespace-nowrap" data-order-time>{ago(o.at)}</span>
         </div>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1">
-          <span className="text-xs text-gray-500 whitespace-nowrap" data-order-ref>{d("order_no")} <bdi dir="ltr">{o.ref}</bdi></span>
+          <span className="text-xs text-gray-500 whitespace-nowrap" data-order-ref>{d("order_no")} <bdi dir="ltr">{displayOrderRef(o.ref)}</bdi></span>
           <StatusChip status={o.status} d={d} small />
-          <span className="px-1 py-px rounded bg-amber-100 text-amber-800 text-[9px] font-black tracking-wide">{d("sim_tag")}</span>
+          <span className="px-1 py-px rounded bg-amber-100 text-amber-800 text-[9px] font-black tracking-wide empty:hidden">{d("sim_tag")}</span>
         </div>
         <OrderMoney m={o.money} status={o.status} d={d} money={money} locale={locale} />
       </div>
@@ -385,16 +387,16 @@ function OrderSheet({ order, t, d, locale, ago, money, onClose }) {
           <Thumb src={order.product?.image} className="w-14 h-14 rounded-xl border border-white" />
           <div className="min-w-0 flex-1">
             <p className="text-sm font-black text-gray-900"><bdi dir="auto" className="inline-block max-w-full truncate align-top">{order.product?.title || "—"}</bdi></p>
-            <span className="inline-block mt-1 px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-black tracking-wide">{d("sim_tag")}</span>
+            <span className="inline-block mt-1 px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-black tracking-wide empty:hidden">{d("sim_tag")}</span>
           </div>
         </div>
         <div className="divide-y divide-gray-100">
-          {row(d("detail_ref"), <span dir="ltr">{order.ref}</span>)}
+          {row(d("detail_ref"), <span dir="ltr">{displayOrderRef(order.ref)}</span>)}
           {row(d("detail_status"), <StatusChip status={order.status} d={d} small />)}
           {row(d("detail_time"), <>{new Date(order.at).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short", timeZone: "Africa/Casablanca" })} <span className="font-normal text-gray-500">· {ago(order.at)}</span></>)}
         </div>
         <OrderMoney m={order.money} status={order.status} d={d} money={money} locale={locale} detailed />
-        <p className="text-[11px] text-gray-500 mt-2">{t("recent_note")} {d("fin_note")}</p>
+        <p className="text-[11px] text-gray-500 mt-2 empty:hidden">{[t("recent_note"), d("fin_note")].filter(Boolean).join(" ")}</p>
       </div>
     </div>
   );
@@ -475,7 +477,7 @@ function LiveOrders({ dash, closed, running, t, d, locale, money, loadPage }) {
           {orders.map((o) => <OrderCard key={o.ref} o={o} d={d} ago={ago} money={money} locale={locale} onOpen={setOpen} />)}
         </div>
       ) : <p className="text-sm text-gray-500 py-4 text-center">{t("recent_empty")}</p>}
-      <p className="text-[11px] text-gray-500 mt-3">{t("recent_note")}</p>
+      <p className="text-[11px] text-gray-500 mt-3 empty:hidden">{t("recent_note")}</p>
       {all && <AllOrdersSheet first={dash.orders} loadPage={loadPage} d={d} ago={ago} money={money} locale={locale} onOpen={setOpen} onClose={() => setAll(false)} />}
       {open && <OrderSheet order={open} t={t} d={d} locale={locale} ago={ago} money={money} onClose={() => setOpen(null)} />}
     </section>
@@ -501,8 +503,10 @@ function MyPack({ breakdown, t, d, money }) {
   );
 }
 
-export default function BrandDashboard({ access, dash, error, loading, windowKey, onWindow, t, lang, locale, money, fmtDate, loadPage }) {
-  const d = dashboardT(lang);
+export default function BrandDashboard({ access, dash, error, loading, windowKey, onWindow, t: brandText, lang, locale, money, fmtDate, loadPage }) {
+  // Temporary neutral-wording preview (src/lib/neutralWording.js): text only — data, charts, polling unchanged.
+  const t = neutralize(brandText, BRAND_DASH_NEUTRAL[brandLang(lang)]);
+  const d = neutralize(dashboardT(lang), BRAND_DASH_TEXT_NEUTRAL[brandLang(lang)]);
   const closed = access.status === "CLOSED";
   return (
     <div className="space-y-4">
@@ -517,7 +521,7 @@ export default function BrandDashboard({ access, dash, error, loading, windowKey
       )}
       <div className="rounded-2xl bg-amber-50 border border-amber-100 px-4 py-3 space-y-1.5">
         <SimulatedBadge t={t} />
-        <p className="text-xs font-semibold text-amber-900">{t("dash_disclaimer")}</p>
+        <p className="text-xs font-semibold text-amber-900 empty:hidden">{t("dash_disclaimer")}</p>
         <p className="text-[11px] text-amber-800">{t("activated_on", { date: fmtDate(access.activatedAt) })}</p>
         {dash && !dash.started && <p className="text-xs text-gray-700 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" aria-hidden="true" />{t("starts_on", { date: fmtDate(dash.simulationStartsAt) })}</p>}
         {dash && dash.started && !dash.running && !dash.readOnly && <p className="text-xs text-gray-700 flex items-center gap-1.5"><PauseCircle className="w-3.5 h-3.5" aria-hidden="true" />{t("paused")}</p>}

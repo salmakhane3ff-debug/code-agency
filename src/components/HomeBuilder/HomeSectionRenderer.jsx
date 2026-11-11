@@ -15,6 +15,9 @@ import ShoppableReels      from "@/components/ShoppableReels";
 import BeforeAfterSlider   from "@/components/BeforeAfterSlider";
 import { trackClarity }    from "@/lib/trackClarity";
 import StoreMapSection      from "@/components/HomeBuilder/StoreMapSection";
+import HomeTopMembers       from "@/components/demoCompetition/HomeTopMembers";
+import HomeTopBrands        from "@/components/demoCompetition/HomeTopBrands";
+import DemoCompetitionBlock from "@/components/demoCompetition/DemoCompetitionBlock";
 
 // ── Countdown section ─────────────────────────────────────────────────────────
 function CountdownTimer({ targetDate }) {
@@ -201,6 +204,9 @@ const RENDERERS = {
   before_after:       ({ data }) => <BeforeAfterSlider title={data?.title || ""} />,
   contact:            ({ data }) => <ContactSection data={data} />,
   store_map:          ({ data }) => <StoreMapSection data={data} />,
+  // Demo Competition previews (SIMULATION ONLY — labelled as such in the section itself).
+  top_members:        ({ data, id }) => <HomeTopMembers data={data} sectionId={id} />,
+  top_brands:         ({ data, id }) => <HomeTopBrands data={data} sectionId={id} />,
 };
 
 // Sections that should be wrapped in the shared Container (max-w-7xl, centered).
@@ -219,7 +225,29 @@ const CONTAINER_SECTIONS = new Set([
   "collection_section",
   "before_after",
   "store_map",
+  "top_members",
+  "top_brands",
 ]);
+
+// Demo Competition sections that FOLLOW EACH OTHER in the layout are rendered together in one
+// DemoCompetitionBlock (one community heading; side by side on desktop). Each stays an
+// independent builder section (own settings, own position).
+const DEMO_COMPETITION_SECTIONS = new Set(["top_members", "top_brands"]);
+
+/** Visible sections → render items; consecutive demo sections become one { group: [...] } item. */
+export function groupDemoSections(sections) {
+  const items = [];
+  for (const sec of sections) {
+    const last = items[items.length - 1];
+    if (DEMO_COMPETITION_SECTIONS.has(sec.type)) {
+      if (last && last.group) last.group.push(sec);
+      else items.push({ group: [sec], id: `demo-${sec.id}` });
+    } else {
+      items.push(sec);
+    }
+  }
+  return items;
+}
 
 // ── Main renderer ─────────────────────────────────────────────────────────────
 // PERF: Accepts `sections` as an optional prop.
@@ -244,7 +272,16 @@ export default function HomeSectionRenderer({ sections: initialSections } = {}) 
 
   return (
     <div className="space-y-10 md:space-y-16 pb-10">
-      {sections.filter(s => s.visible !== false).map(sec => {
+      {groupDemoSections(sections.filter(s => s.visible !== false)).map(sec => {
+        if (sec.group) {
+          return (
+            <Container key={sec.id}>
+              <DemoCompetitionBlock count={sec.group.length}>
+                {sec.group.map(g => { const R = RENDERERS[g.type]; return <R key={g.id} id={g.id} data={g.data || {}} />; })}
+              </DemoCompetitionBlock>
+            </Container>
+          );
+        }
         const Renderer = RENDERERS[sec.type];
         if (!Renderer) return null;
         const content = <Renderer data={sec.data || {}} />;

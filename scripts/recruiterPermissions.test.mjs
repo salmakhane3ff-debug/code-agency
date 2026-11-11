@@ -37,6 +37,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { makeRecruiterFakeDb } from './lib/recruiterFakeDb.mjs';
+import { dropDemoCompSrc, isDemoCompPrisma, demoCompPinsHold } from './lib/demoCompetitionAllowance.mjs';
 
 const { adminRecruiterHandlers, recruiterHandlers } = await import('../src/lib/recruiterRouteHandlers.js');
 const { recruiterNetworkHandlers } = await import('../src/lib/recruiterNetworkRouteHandlers.js');
@@ -739,12 +740,17 @@ console.log('\n4. Regression and scope');
   // Phase 7 (Reward B — the recruiter group reward, approved): exactly schema.prisma (pinned in recruiterSchema /
   // recruiterAffiliates / recruiterWithdrawalProtection) and the one new migration 20261112; Part 4 itself changed none.
   // Committed or not: changed-since-base and untracked files are counted together (same answer before and after commit).
-  const prismaAll = [...new Set([...prismaChanged, ...prismaNew])].sort();
+  // Demo Competition (simulation only, separate feature): its migration 20261113 is dropped here; its schema blocks and
+  // migration are SHA-256 pinned in scripts/lib/demoCompetitionAllowance.mjs (asserted just below).
+  const prismaAll = [...new Set([...prismaChanged, ...prismaNew])].filter((f) => !isDemoCompPrisma(f)).sort();
+  { const pins = demoCompPinsHold(); ok('Demo Competition allowance: its schema blocks and migration are exactly the pinned ones', pins.schema && pins.migration, pins); }
   ok('no schema or migration change in Part 4 (the permission columns already exist); since then only the Phase 7 schema fields + migration 20261112',
     eq(prismaAll, ['prisma/migrations/20261112_recruiter_group_rewards/migration.sql', 'prisma/schema.prisma']), big({ prismaChanged, prismaNew }));
   const changed = git(['diff', '--name-only', PART4_BASE, '--', 'src']).split('\n').filter(Boolean);
   const untracked = git(['ls-files', '--others', '--exclude-standard', '--', 'src']).split('\n').filter(Boolean);
-  const allSrc = [...new Set([...changed, ...untracked])].sort();
+  // Demo Competition (simulation only, separate feature): its own new src paths and the shared files it edits are dropped
+  // (exact list in scripts/lib/demoCompetitionAllowance.mjs); landingMode.js stays — it is already listed (Phase 7 Stage C).
+  const allSrc = dropDemoCompSrc([...new Set([...changed, ...untracked])], ['src/lib/landingMode.js']).sort();
   ok('src/ changed versus the Part 4 base ONLY in the exact Part 4 files', eq(allSrc, [
     'src/app/admin/recruiters/page.jsx', 'src/app/api/admin/recruiters/[id]/permissions/route.js',
     'src/app/recruiter/affiliates/activation/page.jsx', 'src/app/recruiter/affiliates/new/page.jsx',

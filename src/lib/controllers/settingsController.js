@@ -26,9 +26,13 @@ import { BRAND_SIM_SPEED_SETTING_ID } from '../brandSimSpeed.js';
  * 'brand-program-config' is saved only through brandProgramService.saveBrandConfig
  * (strict validation, audit log); 'brand-refund-terms' only through the draft /
  * publish actions, so published terms always come from an admin approval.
+ * 'homepage_layout' is saved only through PUT /api/admin/homepage-layout
+ * (homepageLayoutService: revision check, so the Homepage Builder and the Demo
+ * Competition homepage settings never overwrite each other). Reading it stays public.
  */
-// 'brand-sim-speed' (per-brand simulation speed) is written only by brandSimSpeedService (validated, versioned, audited).
-const RESERVED_SETTING_TYPES = new Set([REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID, BRAND_SETTING_ID, BRAND_TERMS_SETTING_ID, BRAND_SIM_SPEED_SETTING_ID]);
+// 'brand-sim-speed' (per-brand simulation speed) is written only by brandSimSpeedService (validated, versioned, audited);
+// 'homepage_layout' only by homepageLayoutService (see above). Both stay readable as before.
+const RESERVED_SETTING_TYPES = new Set([REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID, BRAND_SETTING_ID, BRAND_TERMS_SETTING_ID, BRAND_SIM_SPEED_SETTING_ID, 'homepage_layout']);
 
 // ── Generic settings (/api/setting) ──────────────────────────────────────────
 

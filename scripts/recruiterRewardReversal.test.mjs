@@ -31,6 +31,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { makeRecruiterFakeDb } from './lib/recruiterFakeDb.mjs';
+import { dropDemoCompSrc } from './lib/demoCompetitionAllowance.mjs';
 
 const RS = await import('../src/lib/services/recruiterRewardService.js');
 const WS = await import('../src/lib/services/recruiterWalletService.js');
@@ -535,7 +536,9 @@ console.log('\n11. Affiliate commissions, points, balances and payouts untouched
   // (admin permissions PATCH) and 12 modified files (admin recruiters page, the recruiter activation / new-affiliate /
   // network / stats pages + networkUi, the network handlers + service, the profile view, the recruiter route
   // handlers + service, the activation service). Still no commission / points / balance / payout / affiliate-KYC file.
-  const allSrc = [...new Set([...changed, ...untracked])].sort();
+  // Demo Competition (simulation only, separate feature): its own new src paths and the shared files it edits are dropped
+  // (exact list in scripts/lib/demoCompetitionAllowance.mjs); SideBar.jsx and landingMode.js stay — already listed above.
+  const allSrc = dropDemoCompSrc([...new Set([...changed, ...untracked])], ['src/components/admin/SideBar.jsx', 'src/lib/landingMode.js']).sort();
   ok('src/ changed versus the part 3 base commit ONLY in the Part 3a files + the Part 3b files errorLabels.js / recruiterRewardAdminHandlers.js + the exact Part 3c recruiter KYC files + the exact Part 4 permission files (no commission / points / balance / payout / affiliate KYC file)', eq(allSrc, [
     'src/app/admin/recruiter-identity/page.jsx', 'src/app/admin/recruiter-rewards/page.jsx', 'src/app/api/admin/affiliate-orders/route.js',
     'src/app/api/admin/recruiter-identity/[id]/[side]/route.js', 'src/app/api/admin/recruiter-identity/route.js', 'src/app/api/recruiter/identity/route.js',
