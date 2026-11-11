@@ -285,8 +285,16 @@ console.log('\n5b. Engine OFF / ON');
   const run = await svc.runEngine(deps);
   ok('after re-enable: NOTHING for the OFF period (offAt, onAt] — missed days are not generated',
     !db._store.demoCompEvent.some((e) => +e.scheduledAt > offAt && +e.scheduledAt <= onAt));
-  ok('…and generation resumes from the re-enable time (events in (onAt, now])', run.events > 0
-    && db._store.demoCompEvent.some((e) => +e.scheduledAt > onAt && +e.scheduledAt <= clock.t) && db._store.demoCompEvent.some((e) => e.memberId === nm.id && +e.scheduledAt > onAt));
+  // The profile created while OFF resumes too: its events after onAt are EXACTLY its own schedule for (onAt, now],
+  // computed from its stored daily plans. (The former check — "it has at least one event in these 6 hours" — failed
+  // ~3 % of runs: the schedule follows the random profile id, and an evening window can hold none of its events.)
+  const nmPlans = db._store.demoCompDailyPlan.filter((p) => p.profileKey === nm.id);
+  const nmExpected = nmPlans.flatMap((p) => E.daySchedule(p.stream, nm.id, p.dayKey, p.targetOrders, +new Date(p.dayStart), +new Date(p.dayEnd)))
+    .map((x) => x.at).filter((at) => at > onAt && at <= clock.t).sort((a, b) => a - b);
+  const nmActual = db._store.demoCompEvent.filter((e) => e.memberId === nm.id && +e.scheduledAt > onAt).map((e) => +e.scheduledAt).sort((a, b) => a - b);
+  ok('…and generation resumes from the re-enable time (events in (onAt, now]), for every profile — including the one created while OFF',
+    run.events > 0 && db._store.demoCompEvent.some((e) => +e.scheduledAt > onAt && +e.scheduledAt <= clock.t)
+    && nmPlans.length > 0 && JSON.stringify(nmActual) === JSON.stringify(nmExpected), { expected: nmExpected.length, actual: nmActual.length });
   await svc.updateEngine(deps, { enabled: true, defaultPriceCents: 31000 });
   ok('saving while already ON does not move the resume point', +(await svc.getEngine(deps)).resumedAt === onAt);
   // OFF for longer than the 30-day history window: a profile created then has no history yet, and switching ON
