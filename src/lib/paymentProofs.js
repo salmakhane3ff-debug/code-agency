@@ -19,6 +19,9 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
+import { CASABLANCA_TZ, casablancaParts, casablancaLocal, casablancaCandidates } from './casablancaTime.js';
+import { checkProofSchedule, SCHEDULE_MIN_LEAD_MS, SCHEDULE_MAX_AHEAD_DAYS } from './paymentProofSchedule.js';
+
 export const PROOF_STATUS = Object.freeze({
   SCHEDULED: 'SCHEDULED',
   PUBLISHED: 'PUBLISHED',
@@ -27,7 +30,7 @@ export const PROOF_STATUS = Object.freeze({
 });
 export const PROOF_STATUSES = Object.freeze(Object.values(PROOF_STATUS));
 
-export const PROOF_TIMEZONE = 'Africa/Casablanca';
+export const PROOF_TIMEZONE = CASABLANCA_TZ;
 export const HOUR_MS = 3_600_000;
 export const VISIBILITY_HOURS = 72;
 export const VISIBILITY_MS = VISIBILITY_HOURS * HOUR_MS;
@@ -37,8 +40,8 @@ export const PROOF_LIMITS = Object.freeze({
   ALIAS_MIN: 2,
   ALIAS_MAX: 40,
   MAX_BATCH_ITEMS: 200,
-  MAX_SCHEDULE_AHEAD_DAYS: 366,
-  MIN_LEAD_MS: 60_000,                 // a new / edited schedule must be ≥ 1 min in the future
+  MAX_SCHEDULE_AHEAD_DAYS: SCHEDULE_MAX_AHEAD_DAYS,
+  MIN_LEAD_MS: SCHEDULE_MIN_LEAD_MS,   // a new / edited schedule must be ≥ 1 min in the future
   FEED_PAGE_SIZE: 50,                  // feed page size (cursor pagination — nothing is ever omitted)
   PUBLISH_BATCH_LIMIT: 200,            // bounded publication pass
   ADMIN_PAGE_SIZE: 50,
@@ -96,51 +99,22 @@ export const isValidClientRef = (v) => typeof v === 'string' && REF_RE.test(v);
 export const isValidPublicToken = (v) => typeof v === 'string' && /^[a-f0-9]{32}$/.test(v);
 
 // ── Africa/Casablanca local time ──────────────────────────────────────────────
+// One explicit rule table shared with the admin browser (src/lib/casablancaTime.js):
+// the runtime's own time-zone data is not trusted (an outdated ICU applied +01 to
+// Morocco after its 2026-09-20 change to +00, refusing valid future times).
 
-const FMT = new Intl.DateTimeFormat('en-US', {
-  timeZone: PROOF_TIMEZONE, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-});
-
-/** Casablanca wall-clock parts of an instant. */
-export function casablancaParts(ms) {
-  const p = {};
-  for (const { type, value } of FMT.formatToParts(new Date(ms))) if (type !== 'literal') p[type] = Number(value);
-  if (p.hour === 24) p.hour = 0;
-  return p; // { year, month, day, hour, minute }
-}
-
-/** "YYYY-MM-DD" and "HH:MM" of an instant in Casablanca. */
-export function casablancaLocal(ms) {
-  const p = casablancaParts(ms);
-  const z = (n) => String(n).padStart(2, '0');
-  return { date: `${p.year}-${z(p.month)}-${z(p.day)}`, time: `${z(p.hour)}:${z(p.minute)}` };
-}
+export { casablancaParts, casablancaLocal };
 
 /**
  * Casablanca wall-clock date + time → UTC instant (ms).
  *   • a time that does not exist (skipped by a clock change) → NONEXISTENT_LOCAL_TIME
  *   • a time that occurs twice (clock set back) → the EARLIER instant
+ *     (validateProofInput instead takes the earliest one still in the future)
  * Returns { ms } or { error }.
  */
 export function casablancaToUtc(date, time) {
-  const dm = typeof date === 'string' && /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
-  const tm = typeof time === 'string' && /^(\d{2}):(\d{2})$/.exec(time);
-  if (!dm || !tm) return { error: 'INVALID_DATETIME' };
-  const [y, mo, d, h, mi] = [dm[1], dm[2], dm[3], tm[1], tm[2]].map(Number);
-  const asUtc = Date.UTC(y, mo - 1, d, h, mi);
-  const check = new Date(asUtc);
-  if (check.getUTCFullYear() !== y || check.getUTCMonth() !== mo - 1 || check.getUTCDate() !== d || h > 23 || mi > 59) {
-    return { error: 'INVALID_DATETIME' };
-  }
-  // Candidate offsets: every offset Casablanca uses around that day (−1 h … +2 h covers all its history).
-  const candidates = [];
-  for (let offsetMin = -60; offsetMin <= 120; offsetMin += 15) {
-    const t = asUtc - offsetMin * 60_000;
-    const p = casablancaParts(t);
-    if (p.year === y && p.month === mo && p.day === d && p.hour === h && p.minute === mi) candidates.push(t);
-  }
-  if (!candidates.length) return { error: 'NONEXISTENT_LOCAL_TIME' };
-  return { ms: Math.min(...candidates) };
+  const r = casablancaCandidates(date, time);
+  return r.error ? { error: r.error } : { ms: r.candidates[0] };
 }
 
 /**
@@ -157,11 +131,9 @@ export function validateProofInput(input, { nowMs }) {
   const amountCents = parseAmountCents(src.amount);
   if (Number.isNaN(amountCents)) errors.amount = 'INVALID_AMOUNT';
   let scheduledAt = null;
-  const local = casablancaToUtc(src.date, src.time);
-  if (local.error) errors.scheduledAt = local.error;
-  else if (local.ms < nowMs + PROOF_LIMITS.MIN_LEAD_MS) errors.scheduledAt = 'SCHEDULE_IN_PAST';
-  else if (local.ms > nowMs + PROOF_LIMITS.MAX_SCHEDULE_AHEAD_DAYS * 24 * HOUR_MS) errors.scheduledAt = 'SCHEDULE_TOO_FAR';
-  else scheduledAt = new Date(local.ms);
+  const sched = checkProofSchedule(src.date, src.time, nowMs); // same rule as the admin browser
+  if (sched.error) errors.scheduledAt = sched.error;
+  else scheduledAt = new Date(sched.ms);
   const clientRef = isValidClientRef(src.clientRef) ? src.clientRef : null;
   if (!clientRef) errors.clientRef = 'INVALID_CLIENT_REF';
   let batchId = null;

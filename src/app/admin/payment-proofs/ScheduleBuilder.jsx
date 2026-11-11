@@ -15,7 +15,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Copy, Trash2, CheckCircle2, AlertTriangle, Loader2, ImageIcon, CalendarDays, ArrowLeft, RotateCcw } from "lucide-react";
 import {
   inputCls, btnPrimary, btnGhost, btnDanger, api, apiErrorText, uuid, casablancaToday, addDays, dayLabel, fmtMad,
-  errText, fileProblem, ACCEPTED_TYPES, Declarations,
+  errText, fileProblem, ACCEPTED_TYPES, Declarations, scheduleProblem,
 } from "./ui";
 
 const newRow = (date) => ({
@@ -31,6 +31,7 @@ function RowEditor({ row, onChange, onRemove, onDuplicate, disabled }) {
     onChange({ file: f, preview: f ? URL.createObjectURL(f) : null });
   };
   const problem = row.file ? fileProblem(row.file) : null;
+  const timeProblem = disabled ? null : scheduleProblem(row.date, row.time); // same rule as the server
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-3 space-y-2.5 min-w-0">
       <div className="grid grid-cols-1 sm:grid-cols-[1fr_120px_110px] gap-2 min-w-0">
@@ -47,6 +48,7 @@ function RowEditor({ row, onChange, onRemove, onDuplicate, disabled }) {
         <label className="block min-w-0">
           <span className="text-[11px] font-semibold text-gray-600">Heure (heure du Maroc)</span>
           <input type="time" className={inputCls} value={row.time} disabled={disabled} onChange={(e) => onChange({ time: e.target.value })} />
+          {timeProblem && <span className="block text-[11px] text-red-600" data-schedule-problem={timeProblem}>{errText(timeProblem)}</span>}
         </label>
       </div>
       <div className="flex flex-wrap items-center gap-3 min-w-0">

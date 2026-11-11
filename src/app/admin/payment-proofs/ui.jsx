@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { CASABLANCA_TZ, casablancaToday as casablancaTodayAt, formatCasablanca } from "@/lib/casablancaTime";
+import { checkProofSchedule } from "@/lib/paymentProofSchedule";
 
 // Shared helpers for /admin/payment-proofs (client side, French admin).
 // Payment proofs are an independent DISPLAY feed: name and amount are typed by the
@@ -9,7 +11,7 @@ export const btnPrimary = "inline-flex items-center justify-center gap-1.5 px-4 
 export const btnGhost = "inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100 disabled:opacity-50";
 export const btnDanger = "inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-red-50 text-red-700 border border-red-100 hover:bg-red-100 disabled:opacity-50";
 
-export const TZ = "Africa/Casablanca";
+export const TZ = CASABLANCA_TZ;
 export const MAX_FILE_BYTES = 8 * 1024 * 1024;
 export const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
@@ -84,9 +86,22 @@ export function uuid() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
-/** Today's date in Casablanca, "YYYY-MM-DD". */
+/**
+ * Today's date in Casablanca, "YYYY-MM-DD" — from the same rule table as the server
+ * (src/lib/casablancaTime.js), never from this device's own time-zone data.
+ */
 export function casablancaToday() {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  return casablancaTodayAt(Date.now());
+}
+
+/**
+ * Immediate check of a Casablanca date + time against the device clock, with the SAME
+ * rule as the server (src/lib/paymentProofSchedule.js) → error code or null. Only a
+ * convenience: the server re-checks with its own clock and stays the authority.
+ */
+export function scheduleProblem(date, time, nowMs = Date.now()) {
+  if (!date || !time) return null;
+  return checkProofSchedule(date, time, nowMs).error || null;
 }
 
 /** "YYYY-MM-DD" + n days (calendar arithmetic only). */
@@ -104,11 +119,11 @@ export function dayLabel(date) {
     .format(new Date(Date.UTC(y, m - 1, d)));
 }
 
-/** ISO instant → Casablanca date/time in French. */
+/** ISO instant → Casablanca date/time in French ("DD/MM/YYYY HH:MM"), same table as the server. */
 export function fmtInstant(iso) {
   if (!iso) return "—";
-  return new Intl.DateTimeFormat("fr-FR", { timeZone: TZ, day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })
-    .format(new Date(iso));
+  const ms = new Date(iso).getTime();
+  return Number.isNaN(ms) ? "—" : formatCasablanca(ms);
 }
 
 export const fmtMad = (n) => (n === null || n === undefined || n === "" || Number.isNaN(Number(n))

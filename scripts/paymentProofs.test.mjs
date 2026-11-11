@@ -42,7 +42,7 @@ const rejects = async (p) => { try { await p; return null; } catch (e) { return 
 const read = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');
 
 const H = P.HOUR_MS, DAY = 24 * H;
-const T0 = new Date('2026-11-04T09:00:00.000Z'); // 10:00 in Casablanca (UTC+1)
+const T0 = new Date('2026-11-04T09:00:00.000Z'); // 09:00 in Casablanca (UTC+0 since 2026-09-20, IANA tzdata 2026c)
 const at = (msFromT0) => new Date(T0.getTime() + msFromT0);
 const ADMIN = 'admin-1';
 const tok = () => randomBytes(16).toString('hex');
@@ -211,8 +211,10 @@ console.log('\n3. Manual scheduling (admin controls count per day and exact time
   const plan = [['2026-11-05', '09:15'], ['2026-11-05', '13:40'], ['2026-11-05', '22:05'], ['2026-11-07', '08:00']];
   const created = [];
   for (const [i, [date, time]] of plan.entries()) created.push((await S.createPaymentProof(input(i, { date, time }), fileOf(`s${i}`), opts)).proof);
-  ok('several proofs on the same Casablanca day, each at its exact manual time (UTC+1)',
-    created[0].scheduledAt === '2026-11-05T08:15:00.000Z' && created[1].scheduledAt === '2026-11-05T12:40:00.000Z' && created[2].scheduledAt === '2026-11-05T21:05:00.000Z'
+  // Expectation update (payment-proof scheduling fix): these were written with tzdata 2025b, which applied
+  // UTC+1 to November 2026. Morocco is UTC+0 since 2026-09-20 (IANA 2026c), so 09:15 local IS 09:15Z.
+  ok('several proofs on the same Casablanca day, each at its exact manual time (UTC+0 since 2026-09-20)',
+    created[0].scheduledAt === '2026-11-05T09:15:00.000Z' && created[1].scheduledAt === '2026-11-05T13:40:00.000Z' && created[2].scheduledAt === '2026-11-05T22:05:00.000Z'
     && created.every((c) => c.status === 'SCHEDULED') && created[2].scheduledLocal.date === '2026-11-05' && created[2].scheduledLocal.time === '22:05');
 
   // review (nothing written)
@@ -250,7 +252,8 @@ console.log('\n3. Manual scheduling (admin controls count per day and exact time
   const noConf = await rejects(S.updatePaymentProofSchedule(id, { date: '2026-11-06', time: '15:30', displayName: 'Nouveau nom', amount: '2500' }, { ...opts, actorId: 'admin-2', now: at(H) }));
   ok('edit without re-confirming privacy + authenticity → INVALID_INPUT', noConf?.code === 'INVALID_INPUT' && noConf.errors.privacyConfirmed && noConf.errors.authenticityConfirmed);
   const edited = await S.updatePaymentProofSchedule(id, { date: '2026-11-06', time: '15:30', displayName: 'Nouveau nom', amount: '2500', privacyConfirmed: true, authenticityConfirmed: true }, { ...opts, actorId: 'admin-2', now: at(H) });
-  ok('edit before publication: new time, name and amount', edited.scheduledAt === '2026-11-06T14:30:00.000Z' && edited.displayName === 'Nouveau nom' && edited.amount === 2500 && edited.status === 'SCHEDULED');
+  // Expectation update: 15:30 in Casablanca on 2026-11-06 is 15:30Z (UTC+0, IANA 2026c), not 14:30Z.
+  ok('edit before publication: new time, name and amount', edited.scheduledAt === '2026-11-06T15:30:00.000Z' && edited.displayName === 'Nouveau nom' && edited.amount === 2500 && edited.status === 'SCHEDULED');
   ok('edit records the new confirming admin and time', edited.privacyConfirmedBy === 'admin-2' && edited.authenticityConfirmedBy === 'admin-2' && edited.privacyConfirmedAt === at(H).toISOString());
   const evs = (await S.listPaymentProofEvents(id, { db })).events;
   const editEv = evs.find((x) => x.action === 'EDIT');
@@ -279,7 +282,8 @@ console.log('\n3. Manual scheduling (admin controls count per day and exact time
   const lostRow = db._tables.paymentProof.find((r) => r.id === created[2].id);
   const keep = storage.files.get(lostRow.fileKey);
   storage.lose(lostRow.fileKey);
-  await W.runPaymentProofPublishTick({ db, storage, lock, now: () => at(DAY + 13 * H) }); // 22:00Z ≥ 21:05Z
+  // Tick moved from 22:00Z to 23:00Z: the proof's 22:05 local is now 22:05Z (UTC+0), so it is due only after 22:05Z.
+  await W.runPaymentProofPublishTick({ db, storage, lock, now: () => at(DAY + 14 * H) }); // 23:00Z ≥ 22:05Z
   ok('missing receipt at publication → FAILED (RECEIPT_MISSING)', lostRow.status === 'FAILED' && lostRow.failureReason === 'RECEIPT_MISSING');
   const stillMissing = await rejects(S.updatePaymentProofSchedule(created[2].id, { date: '2026-11-09', time: '10:00', privacyConfirmed: true, authenticityConfirmed: true }, { ...opts, now: at(DAY + 14 * H) }));
   ok('a FAILED proof whose receipt is still missing cannot be rescheduled (RECEIPT_MISSING)', stillMissing?.code === 'RECEIPT_MISSING');
@@ -385,7 +389,8 @@ console.log('\n5. Mandatory privacy + authenticity declarations, append-only aud
   ok('event write failure inside cancel → the proof stays SCHEDULED (no change without its audit event)', rc?.code === 'INJECTED' && row.status === 'SCHEDULED');
   db.failNext('paymentProofEvent', 'create');
   await rejects(S.updatePaymentProofSchedule(created.id, { date: '2026-11-08', time: '10:00', privacyConfirmed: true, authenticityConfirmed: true }, opts));
-  ok('event write failure inside edit → the edit is rolled back', row.scheduledAt.getTime() === new Date('2026-11-05T09:00:00Z').getTime());
+  // Expectation update: the proof's original 10:00 local on 2026-11-05 is 10:00Z (UTC+0, IANA 2026c), not 09:00Z.
+  ok('event write failure inside edit → the edit is rolled back', row.scheduledAt.getTime() === new Date('2026-11-05T10:00:00Z').getTime());
   await S.cancelPaymentProof(created.id, { ...opts, now: at(H), actorId: 'admin-3' });
   const evRes = await w.admin.events(req(`/api/admin/payment-proofs/${created.id}/events`, { cookie: `auth_token=${adminToken}` }), ctx({ id: created.id }));
   const evs = (await bodyOf(evRes)).events;

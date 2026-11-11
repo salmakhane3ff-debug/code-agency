@@ -820,6 +820,10 @@ console.log('\n4. Regression and scope');
     'src/app/admin/brand/SpeedPanel.jsx', 'src/app/api/admin/brand/accesses/[id]/simulation-speed/route.js',
     'src/lib/brandSimSpeed.js', 'src/lib/services/brandSimSpeedService.js', 'src/lib/services/brandSimulationService.js',
     'src/lib/brandSimulation.js', 'src/lib/brandRouteHandlers.js', 'src/lib/controllers/settingsController.js',
+    // Payment-proof scheduling fix (approved bug fix): one Casablanca ⇄ UTC rule table shared by the server validation
+    // and the admin browser. Display-only payment proofs — no wallet, commission, payout, reward or real order file.
+    'src/lib/casablancaTime.js', 'src/lib/paymentProofSchedule.js', 'src/lib/paymentProofs.js',
+    'src/app/admin/payment-proofs/ui.jsx', 'src/app/admin/payment-proofs/ScheduleBuilder.jsx', 'src/app/admin/payment-proofs/ProofsList.jsx',
     // Phase 7 Stage F (approved clarification): an affiliate with children cannot be deleted — the deletion helper and the
     // 409 mapping of the admin DELETE route and of the legacy controller (pinned in recruiterAffiliates.test.mjs).
     'src/app/api/admin/affiliates/route.js', 'src/lib/affiliateDeletion.js', 'src/lib/controllers/affiliateController.js',

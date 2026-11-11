@@ -9,7 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, RefreshCw, Pencil, Ban, History, ChevronLeft, ChevronRight } from "lucide-react";
 import {
   inputCls, btnPrimary, btnGhost, btnDanger, api, apiErrorText, errText, fmtInstant, fmtMad, StatusBadge, STATUS_META,
-  FAILURE_TEXT, EVENT_TEXT, Modal, Declarations, dayLabel,
+  FAILURE_TEXT, EVENT_TEXT, Modal, Declarations, dayLabel, scheduleProblem,
 } from "./ui";
 
 const FILTERS = [
@@ -32,6 +32,8 @@ function EditDialog({ proof, onClose, onSaved }) {
   const [busy, setBusy] = useState(false);
   const set = (p) => setF((x) => ({ ...x, ...p }));
   const save = async () => {
+    const early = scheduleProblem(f.date, f.time); // same rule as the server, answered at once
+    if (early) { setErrors({ scheduledAt: early }); setMsg(null); return; }
     setBusy(true); setMsg(null); setErrors({});
     const res = await api(`/api/admin/payment-proofs/${encodeURIComponent(proof.id)}`, {
       method: "PATCH",

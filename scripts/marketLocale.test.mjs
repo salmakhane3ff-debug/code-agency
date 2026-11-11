@@ -171,7 +171,14 @@ const BRAND_FINAL_DESIGN = [
   "src/lib/brandSimSpeed.js", "src/lib/services/brandSimSpeedService.js", "src/lib/services/brandSimulationService.js",
   "src/lib/brandSimulation.js", "src/lib/brandRouteHandlers.js", "src/lib/controllers/settingsController.js",
 ];
-const isBrandFinal = (f) => BRAND_FINAL_DESIGN.includes(f);
+// Payment-proof scheduling fix (approved bug fix): Casablanca wall-clock ⇄ UTC from one explicit rule table shared by
+// the server validation and the admin browser (the runtime's outdated time-zone data refused valid future times).
+// No service, API route, schema or migration change; the 72-hour visibility rule is untouched.
+const PAYMENT_PROOF_SCHEDULE_FIX = [
+  "src/lib/casablancaTime.js", "src/lib/paymentProofSchedule.js", "src/lib/paymentProofs.js",
+  "src/app/admin/payment-proofs/ui.jsx", "src/app/admin/payment-proofs/ScheduleBuilder.jsx", "src/app/admin/payment-proofs/ProofsList.jsx",
+];
+const isBrandFinal = (f) => BRAND_FINAL_DESIGN.includes(f) || PAYMENT_PROOF_SCHEDULE_FIX.includes(f);
 const outside = [...changed, ...untracked].filter((f) => !ALLOWED.some((re) => re.test(f)) && !isBrandFinal(f));
 ok("src changes stay inside the four areas + the shared language plumbing", outside.length === 0, outside);
 ok("no admin file changed (except the approved brand package-management files)", ![...changed, ...untracked].some((f) => !isBrandFinal(f) && (/^src\/(app|components)\/admin\//.test(f) || /^src\/app\/api\/admin\//.test(f))));
