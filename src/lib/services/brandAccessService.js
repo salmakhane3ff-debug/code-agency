@@ -44,7 +44,7 @@
 import prisma from '../prisma.js';
 import { randomUUID } from 'crypto';
 import {
-  isOfferedPackage, packageProducts, normalizeBrandName, isValidClientRequestId, normalizeProductSelection,
+  isOfferedPackage, packageContents, packageGallery, normalizeBrandName, isValidClientRequestId,
   normalizeTransferReference,
 } from '../brandProgram.js';
 import { packageBreakdown } from '../brandPricing.js';
@@ -119,13 +119,16 @@ export function publicAccess(row, info = null) {
     package: {
       id: row.packageId, name: pkg.name || '', features: Array.isArray(pkg.features) ? pkg.features : [],
       productCount: pkg.productCount ?? null, breakdown: pkg.breakdown || null,
-      // Snapshot only (requests made before these fields existed → null, shown as "—").
+      // Snapshot only (requests made before these fields existed → null / empty, shown as "—" or hidden).
+      category: typeof pkg.category === 'string' ? pkg.category : '',
+      images: Array.isArray(pkg.images) ? pkg.images.filter((u) => typeof u === 'string') : [],
+      specifications: Array.isArray(pkg.specifications) ? pkg.specifications.filter((x) => typeof x === 'string') : [],
       quantity: Number.isInteger(pkg.quantity) && pkg.quantity > 0 ? pkg.quantity : null,
       simulatedSellingPrice: typeof pkg.simulatedSellingPrice === 'number' && pkg.simulatedSellingPrice > 0 ? pkg.simulatedSellingPrice : null,
     },
     branding: row.brandingSnapshot ? { label: row.brandingSnapshot.label || '' } : null,
     products: Array.isArray(row.selectedProducts)
-      ? row.selectedProducts.map((p) => ({ id: p.id, title: p.title || '', image: p.image || null }))
+      ? row.selectedProducts.map((p) => ({ id: p.id, title: p.title || '', image: p.image || null, quantity: Number.isInteger(p.quantity) && p.quantity > 0 ? p.quantity : null }))
       : [],
     amount: Number(row.amount),
     status: row.status,
@@ -199,8 +202,10 @@ async function adminAccessWithConsent(db, id) {
 
 /**
  * Create a request for access (status PENDING_PAYMENT). No money is recorded.
- * @param {object} input { productIds, packageId, brandName, brandingOptionId?, termsVersion, acceptTerms, clientRequestId }
- * @throws BRAND_DISABLED | PACKAGE_NOT_FOUND | INVALID_PRODUCT_SELECTION | PRODUCT_NOT_AVAILABLE
+ * The package defines the products (its contents, with quantities): the request takes exactly those —
+ * nothing the participant sends chooses or changes them (a `productIds` field, if any, is ignored).
+ * @param {object} input { packageId, brandName, brandingOptionId?, termsVersion, acceptTerms, clientRequestId }
+ * @throws BRAND_DISABLED | PACKAGE_NOT_FOUND
  *         | INVALID_BRAND_NAME | BRANDING_NOT_FOUND | TERMS_NOT_PUBLISHED
  *         | TERMS_CHANGED | TERMS_NOT_ACCEPTED | INVALID_INPUT | ACCESS_EXISTS | IDEMPOTENCY_CONFLICT
  *         | AUTHORIZATION_REQUIRED (a previous access is CLOSED and no unused authorization exists)
@@ -218,18 +223,10 @@ export async function requestBrandAccess(affiliateId, input = {}, { db = prisma,
   if (!pkg) throw err('PACKAGE_NOT_FOUND', 'Pack introuvable ou indisponible.');
   const breakdown = packageBreakdown(pkg);
 
-  // Products: only ids are taken from the request — names and images come from the store.
-  const productIds = normalizeProductSelection(input.productIds);
-  if (!productIds || productIds.length !== pkg.productCount) {
-    throw err('INVALID_PRODUCT_SELECTION', `Ce pack demande exactement ${pkg.productCount} produits différents.`,
-      { errors: { productIds: 'INVALID_PRODUCT_SELECTION' }, expected: pkg.productCount });
-  }
-  const byId = new Map(packageProducts(pkg, catalog).map((p) => [p.id, p]));
-  const unavailable = productIds.filter((id) => !byId.has(id));
-  if (unavailable.length) {
-    throw err('PRODUCT_NOT_AVAILABLE', 'Un des produits choisis n’est pas disponible pour ce pack.', { errors: { productIds: 'PRODUCT_NOT_AVAILABLE' }, unavailable });
-  }
-  const selectedProducts = productIds.map((id) => byId.get(id));
+  // Products: the package's own contents (3–4 eligible store products with their quantities, read live:
+  // names and images come from the store). isOfferedPackage above guarantees all of them are eligible.
+  const selectedProducts = packageContents(pkg, catalog);
+  const productIds = selectedProducts.map((p) => p.id);
   const brandName = normalizeBrandName(input.brandName);
   if (!brandName) throw err('INVALID_BRAND_NAME', 'Nom de marque invalide.', { errors: { brandName: 'INVALID_BRAND_NAME' } });
 
@@ -248,6 +245,7 @@ export async function requestBrandAccess(affiliateId, input = {}, { db = prisma,
     packageId: pkg.id,
     packageSnapshot: {
       id: pkg.id, name: pkg.name, description: pkg.description, features: pkg.features, productCount: pkg.productCount,
+      category: pkg.category || '', specifications: pkg.specifications || [], images: packageGallery(pkg, selectedProducts),
       price: pkg.price, deliveryCost: pkg.deliveryCost, logisticsCost: pkg.logisticsCost, vatPercent: pkg.vatPercent,
       percentages: pkg.percentages, breakdown,
       // Frozen with the request: a later pack edit never changes this brand's training data.

@@ -599,6 +599,13 @@ console.log('\n11. Affiliate commissions, points, balances and payouts untouched
     // Create Your Own Brand visual review (UI only): the simulated-orders chart keeps its last date label inside the
     // chart (text anchor only) — no data, API or service change.
     'src/components/brand/BrandSimStats.jsx',
+    // Create Your Own Brand — approved final design: one package choice (the package defines its 3–4 products and
+    // quantities; no product-selection step), package details with gallery + zoom, brand name only, review, pending.
+    // Admin package management (category, gallery, contents + quantities, specifications), the package model and the
+    // request taking the package's contents. No payment, pricing, recruiter, commission or payout file.
+    'src/app/admin/brand/AccessesTab.jsx', 'src/app/admin/brand/PackagesTab.jsx', 'src/app/admin/brand/ProductsTab.jsx', 'src/app/admin/brand/ui.jsx',
+    'src/app/affiliate/dashboard/_brand/BrandPreview.jsx', 'src/app/affiliate/dashboard/_brand/PackGallery.jsx', 'src/app/affiliate/dashboard/_brand/Stepper.jsx',
+    'src/lib/brandProgram.js', 'src/lib/services/brandAccessService.js',
     // Phase 7 Stage F (approved clarification): an affiliate with children cannot be deleted — the deletion helper and the
     // 409 mapping of the admin DELETE route and of the legacy controller (no commission / points / balance / payout file).
     'src/app/api/admin/affiliates/route.js', 'src/lib/affiliateDeletion.js', 'src/lib/controllers/affiliateController.js',

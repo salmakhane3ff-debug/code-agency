@@ -21,7 +21,8 @@
  *     the participant must pick 3–4 different ones
  *   • FR/AR texts: same keys, every status / error labelled, no figures, and the
  *     "simulated, no earnings" disclosures are present
- *   • affiliate tab: products → brand name → review flow; brand name + products
+ *   • affiliate tab: package → package details → brand name → review flow (no product
+ *     selection: the package defines its contents); brand name + products
  *     shown on the pending and active views; real earnings never read there
  * Run: node scripts/brandProgram.test.mjs
  * ─────────────────────────────────────────────────────────────────────────────
@@ -84,7 +85,10 @@ console.log("\n2. Package validation");
     && codes({ features: Array.from({ length: BRAND_LIMITS.MAX_FEATURES + 1 }, (_, i) => `f${i}`) })["packages.0.features"] === "TOO_MANY_FEATURES");
   ok("duplicate ids rejected", validateBrandConfig(cfg({ packages: [pkg(), pkg()] })).errors["packages.1.id"] === "DUPLICATE_ID");
   const keys = Object.keys(validateBrandConfig(cfg({ packages: [pkg({ inventoryQuantity: 5, guarantee: { enabled: true }, advertising: {}, tax: {} })] })).value.packages[0]).sort().join();
-  ok("no inventory, unsold-stock guarantee or unknown field survives (only the pack's pieces + simulated price are added)", keys === "active,deliveryCost,description,features,id,logisticsCost,name,percentages,price,productCount,productIds,quantity,simulatedSellingPrice,sortOrder,vatPercent", keys);
+  // Approved final design: a package also carries its category, image gallery, specifications and the quantity of
+  // each of its products (the affiliate no longer picks products) — still no inventory / guarantee / unknown field.
+  // Approved: two optional admin-entered ESTIMATES per package (daily / monthly, DH) — informational only.
+  ok("no inventory, unsold-stock guarantee or unknown field survives (pieces, simulated price, category, gallery, specifications, per-product quantities, admin estimates are the only additions)", keys === "active,category,deliveryCost,description,estimatedDailyEarnings,estimatedMonthlyEarnings,features,id,images,logisticsCost,name,percentages,price,productCount,productIds,productQuantities,quantity,simulatedSellingPrice,sortOrder,specifications,vatPercent", keys);
   {
     const one = (o) => validateBrandConfig(cfg({ packages: [pkg(o)] }));
     const v = (o) => one(o).value.packages[0];
@@ -133,8 +137,8 @@ console.log("\n4. What an affiliate can see");
   });
   const offer = publicBrandOffer(c, CAT);
   ok("only active packages, in display order", offer.packages.map((p) => p.id).join() === "a,b");
-  ok("package = name, description, features, price, product count, pieces, simulated price, products, breakdown",
-    Object.keys(offer.packages[0]).sort().join() === "breakdown,description,features,id,name,price,productCount,products,quantity,simulatedSellingPrice");
+  ok("package = name, category, description, features, price, product count, pieces, simulated price, admin estimates, specifications, gallery, products (contents), breakdown",
+    Object.keys(offer.packages[0]).sort().join() === "breakdown,category,description,estimatedDailyEarnings,estimatedMonthlyEarnings,features,id,images,name,price,productCount,products,quantity,simulatedSellingPrice,specifications");
   {
     const c2 = normalizeBrandConfig(validateBrandConfig(cfg({ packages: [pkg({ id: "q1", quantity: 50, simulatedSellingPrice: 299 }), pkg({ id: "q2", sortOrder: 1 })], simulation: SIM })).value);
     const o2 = publicBrandOffer(c2, CAT);
@@ -187,7 +191,7 @@ console.log("\n4c. Package pricing");
 {
   const codes = (over) => validateBrandConfig(cfg({ packages: [pkg(over)] })).errors;
   ok("an inactive package may be saved incomplete (draft)", validateBrandConfig(cfg({ packages: [{ id: "draft", name: "Brouillon", price: 10, active: false }] })).ok);
-  for (const f of ["deliveryCost", "logisticsCost", "vatPercent", "productCount"]) {
+  for (const f of ["deliveryCost", "logisticsCost", "vatPercent"]) {
     ok(`active package needs ${f}`, codes({ [f]: "" })[`packages.0.${f}`] === "REQUIRED_WHEN_ACTIVE");
   }
   for (const k of ["confirmation", "advertising", "companyShare"]) {
@@ -201,9 +205,48 @@ console.log("\n4c. Package pricing");
   ok("unknown calculation base refused", codes({ percentages: { ...PCT, advertising: { value: 5, base: "REVENUE" } } })["packages.0.percentages.advertising.base"] === "INVALID_BASE");
   ok("shares on one money base cannot exceed 100 %", codes({ percentages: { ...PCT, advertising: { value: 80, base: "SUBTOTAL" } } })["packages.0.percentages"] === "PERCENT_SUM_OVER_100"
     && validateBrandConfig(cfg({ packages: [pkg({ percentages: { ...PCT, confirmation: { value: 100, base: "SIMULATED_ORDERS" } } })] })).ok);
-  ok("product count must be 3 or 4", codes({ productCount: 2 })["packages.0.productCount"] === "INVALID_PRODUCT_COUNT" && codes({ productCount: 5 })["packages.0.productCount"] === "INVALID_PRODUCT_COUNT"
-    && validateBrandConfig(cfg({ packages: [pkg({ productCount: 4, productIds: ["p-1", "p-2", "p-3", "p-4"] })] })).ok);
-  ok("an active package lists at least its product count", codes({ productCount: 4 })["packages.0.productIds"] === "NOT_ENOUGH_PRODUCTS");
+  // Approved final design: the package's products ARE its contents (3–4, as the database stores per request);
+  // the product count follows them instead of being a separate "the affiliate chooses N" setting.
+  ok("active package needs its contents (productCount follows them)", codes({ productIds: [], productCount: "" })["packages.0.productCount"] === "REQUIRED_WHEN_ACTIVE"
+    && codes({ productIds: [], productCount: "" })["packages.0.productIds"] === "PACK_PRODUCTS_COUNT");
+  ok("contents: 3 or 4 products; the product count is taken from them", codes({ productIds: ["p-1", "p-2"] })["packages.0.productIds"] === "PACK_PRODUCTS_COUNT"
+    && validateBrandConfig(cfg({ catalogProductIds: ["p-1", "p-2", "p-3", "p-4", "p-5"], packages: [pkg({ productIds: ["p-1", "p-2", "p-3", "p-4", "p-5"] })] })).errors["packages.0.productIds"] === "PACK_PRODUCTS_COUNT"
+    && validateBrandConfig(cfg({ packages: [pkg({ productCount: 3, productIds: ["p-1", "p-2", "p-3", "p-4"] })] })).value.packages[0].productCount === 4
+    && validateBrandConfig(cfg({ packages: [pkg({ productCount: 4, productIds: ["p-1", "p-2", "p-3", "p-4"] })] })).ok
+    && codes({ productCount: 7 })["packages.0.productCount"] === undefined);
+  {
+    const legacy = normalizeBrandConfig({ ...cfg(), packages: [pkg({ productCount: 3, productIds: ["p-4", "p-1", "p-2", "p-3"].concat(["p-9"]) })] });
+    const off = publicBrandOffer(legacy, CAT).packages[0];
+    ok("a stored legacy package (choose 3 of a longer list) still reads: its first 3 eligible products are its contents", legacy.packages[0].productCount === 3
+      && off && off.products.map((x) => x.id).join() === "p-4,p-1,p-2");
+  }
+  {
+    const q = validateBrandConfig(cfg({ packages: [pkg({ productQuantities: { "p-1": 50, "p-2": "30", "p-x": 9 }, category: "  Beauté  ", specifications: [" 50 ml ", "50 ml", ""], images: ["/uploads/a.webp", "https://cdn.x/b.jpg", "/uploads/a.webp"] })] }));
+    const v = q.value.packages[0];
+    ok("per-product quantities (own products only), category, specifications and gallery cleaned", q.ok && JSON.stringify(v.productQuantities) === '{"p-1":50,"p-2":30}'
+      && v.category === "Beauté" && v.specifications.join("|") === "50 ml" && v.images.join("|") === "/uploads/a.webp|https://cdn.x/b.jpg");
+    ok("bad quantity / unsafe image / too many images or specifications refused", codes({ productQuantities: { "p-1": 0 } })["packages.0.productQuantities"] === "INVALID_QUANTITY"
+      && codes({ productQuantities: { "p-1": 1.5 } })["packages.0.productQuantities"] === "INVALID_QUANTITY"
+      && codes({ images: ["javascript:alert(1)"] })["packages.0.images"] === "INVALID_IMAGE" && codes({ images: ['/a.png" onerror="x'] })["packages.0.images"] === "INVALID_IMAGE"
+      && codes({ images: Array.from({ length: BRAND_LIMITS.MAX_PACK_IMAGES + 1 }, (_, i) => `/u/${i}.png`) })["packages.0.images"] === "TOO_MANY_IMAGES"
+      && codes({ specifications: Array.from({ length: BRAND_LIMITS.MAX_SPECIFICATIONS + 1 }, (_, i) => `s${i}`) })["packages.0.specifications"] === "TOO_MANY_SPECIFICATIONS");
+    const off = publicBrandOffer(normalizeBrandConfig(q.value), CAT).packages[0];
+    const noImg = publicBrandOffer(normalizeBrandConfig(validateBrandConfig(cfg()).value), [{ id: "p-1", title: "1", image: "/i/1.png" }, { id: "p-2", title: "2", image: null }, { id: "p-3", title: "3", image: "/i/3.png" }]).packages[0];
+    {
+      // Approved: optional admin estimates (DH), informational only — empty = not configured (hidden), never derived.
+      const est = (o) => validateBrandConfig(cfg({ packages: [pkg(o)] }));
+      const e1 = est({ estimatedDailyEarnings: "250", estimatedMonthlyEarnings: 7500.555 });
+      ok("estimates: optional amounts (DH), rounded to 2 dp; empty = null", e1.ok && e1.value.packages[0].estimatedDailyEarnings === 250 && e1.value.packages[0].estimatedMonthlyEarnings === 7500.56
+        && est({ estimatedDailyEarnings: "" }).value.packages[0].estimatedDailyEarnings === null && est({}).value.packages[0].estimatedMonthlyEarnings === null);
+      ok("estimates: zero, negative, non-numeric or too large refused", ["0", -5, "abc", BRAND_LIMITS.MAX_PRICE + 1].every((v) => est({ estimatedDailyEarnings: v }).errors["packages.0.estimatedDailyEarnings"] === "INVALID_ESTIMATE")
+        && est({ estimatedMonthlyEarnings: -1 }).errors["packages.0.estimatedMonthlyEarnings"] === "INVALID_ESTIMATE");
+      const o1 = publicBrandOffer(normalizeBrandConfig(validateBrandConfig(cfg({ packages: [pkg({ id: "e1", estimatedDailyEarnings: 120 }), pkg({ id: "e2", sortOrder: 1 })] })).value), CAT).packages;
+      ok("offer: each pack carries its OWN estimates, null when not configured (never derived from price or simulation)", o1.find((x) => x.id === "e1").estimatedDailyEarnings === 120
+        && o1.find((x) => x.id === "e1").estimatedMonthlyEarnings === null && o1.find((x) => x.id === "e2").estimatedDailyEarnings === null);
+    }
+    ok("offer: contents with quantities, the admin gallery, else the products' images", off.products.map((x) => `${x.id}:${x.quantity}`).join() === "p-1:50,p-2:30,p-3:null"
+      && off.images.join("|") === "/uploads/a.webp|https://cdn.x/b.jpg" && noImg.images.join("|") === "/i/1.png|/i/3.png");
+  }
   ok("package products must come from the catalogue", codes({ productIds: ["p-1", "p-2", "nope"] })["packages.0.productIds"] === "PRODUCT_NOT_IN_CATALOGUE"
     && codes({ productIds: ["p-1", "bad id", "p-2"] })["packages.0.productIds"] === "INVALID_PRODUCT_ID");
   ok("an incomplete stored package is never offered", publicBrandOffer(normalizeBrandConfig({ ...cfg(), packages: [pkg({ vatPercent: null })] }), CAT).packages.length === 0);
@@ -402,19 +445,28 @@ console.log("\n10. Texts and labelling");
   // Affiliate tab flow + separation from real earnings (static: the tab is a client component).
   const stepOrder = ["step === 0", "step === 1", "step === 2", "step === 3"].map((k) => tab.indexOf(k));
   const at = (k) => tab.indexOf(k);
-  ok("flow order: package → products → brand name → review + Buy Now", stepOrder.every((i) => i > 0) && stepOrder.every((v, i) => i === 0 || stepOrder[i - 1] < v)
-    && at('t("package_title")') < at('t("products_title")') && at('t("products_title")') < at('t("brand_name")') && at('t("brand_name")') < at('t("buy_now")'));
+  // Approved final design: no product-selection step — package → package details → brand name → review + Buy Now
+  // (the package defines its products); the step titles are the five-step flow labels.
+  ok("flow order: package → package details → brand name → review + Buy Now", stepOrder.every((i) => i > 0) && stepOrder.every((v, i) => i === 0 || stepOrder[i - 1] < v)
+    && at('t("packages_section")') < at('t("details_title")') && at('t("details_title")') < at('t("brand_name")') && at('t("brand_name")') < at('t("buy_now")')
+    && !/t\("products_title"\)/.test(tab));
   {
-    const card = tab.slice(tab.indexOf("function PackCard("), tab.indexOf("function PackDetailsSheet("));
-    const screenA = tab.slice(tab.indexOf("if (step === 0) {"), tab.indexOf("// ── Screen B"));
-    ok("pack cards: every offered pack shown (no hard-coded pack), each with its own image, name, product count, pieces, price, total, availability, features",
-      /\{packages\.map\(\(p\) => \(\s*<PackCard key=\{p\.id\} p=\{p\}/.test(screenA) && ["p.name", "p.productCount", "p.quantity", "p.price", "p.breakdown.total", "p.features", "p.description", 'pack_available'].every((k) => card.includes(k))
-      && /\(p\.products \|\| \[\]\)\.find\(\(x\) => x\.image\)\?\.image/.test(card) && !/Pack (Starter|Pro|Business)|2[,.]?500|3[,.]?500|4[,.]?500/.test(tab));
-    const sheet = tab.slice(tab.indexOf("function PackDetailsSheet("), tab.indexOf("const STEPS = ["));
-    ok("details of THAT pack in a sheet (breakdown, products, pieces, simulated price; closes on ✕ / Escape); the card itself never expands",
-      /<Breakdown b=\{p\.breakdown\}/.test(sheet) && /<ProductList products=\{p\.products\} \/>/.test(sheet)
-      && /p\.simulatedSellingPrice \? money\(p\.simulatedSellingPrice\) : "—"/.test(sheet) && /p\.quantity \?\? "—"/.test(sheet) && /e\.key === "Escape"/.test(sheet)
-      && /\{detailsPack && <PackDetailsSheet p=\{detailsPack\}/.test(screenA) && !/Breakdown|data-pack-details=|\{open &&/.test(card.slice(0, card.indexOf("function PackDetailsSheet("))));
+    // Approved final design: the card shows the pack's own COVER (packCover: images[0], products' images as fallback) and
+    // its category; "details" opens step 2 (the details screen) instead of a sheet.
+    const card = tab.slice(tab.indexOf("function PackCard("), tab.indexOf("function TrustStrip("));
+    const screenA = tab.slice(tab.indexOf("if (step === 0) {"), tab.indexOf("// ── Steps 2–4"));
+    ok("pack cards: every offered pack shown (no hard-coded pack), each with its own image, name, category, product count, pieces, price, total, availability, features",
+      /\{packages\.map\(\(p\) => \(\s*<PackCard key=\{p\.id\} p=\{p\}/.test(screenA) && ["p.name", "p.category", "p.productCount", "p.quantity", "p.price", "p.breakdown.total", "p.features", "p.description", 'pack_available'].every((k) => card.includes(k))
+      && /<PackImage src=\{packCover\(p\)\}/.test(card) && /const packCover = \(p\) => p\?\.images\?\.\[0\] \|\|/.test(tab) && !/Pack (Starter|Pro|Business)|2[,.]?500|3[,.]?500|4[,.]?500/.test(tab));
+    // Approved final design: the details are step 2 of the flow (gallery + zoom, contents with quantities, specifications,
+    // services, pieces, simulated price), not a sheet; the card itself never expands.
+    const details = tab.slice(tab.indexOf("{step === 1 && pkg && ("), tab.indexOf("{step === 2 && ("));
+    // Step 2 refinement (approved): a visual showcase of THAT pack — its cover + own products (with quantities) and
+    // compact figures; the long text sections are no longer repeated there (see brandFinalFlow.test.mjs F3).
+    ok("details of THAT pack on step 2 (gallery of its cover + own products, pieces, price); the card itself never expands",
+      /<PackGallery items=\{galleryItems\(pkg\)\}/.test(details) && /packPieces\(pkg\)/.test(details) && /money\(pkg\.price\)/.test(details)
+      && /onDetails=\{openDetails\}/.test(screenA) && /const openDetails = \(id\) => \{ pickPackage\(id\); setError\(null\); setStep\(1\); \};/.test(tab)
+      && !/PackDetailsSheet/.test(tab) && !/Breakdown|data-pack-details=|\{open &&/.test(card));
     ok("no pack pre-selected; selecting changes the selection; selected card = purple border + check",
       /const \[packageId, setPackageId\] = useState\(null\);/.test(tab) && !/setPackageId\(packages\[0\]/.test(tab) && /on \? "border-violet-600/.test(card) && /\{on && <span[^>]*data-check/.test(card)
       && /aria-checked=\{on\}/.test(card));
@@ -426,8 +478,12 @@ console.log("\n10. Texts and labelling");
   }
   ok("review shows the breakdown; pending shows the snapshot breakdown", /<Breakdown b=\{pkg\.breakdown\}/.test(tab) && /<Breakdown b=\{access\.package\.breakdown\}/.test(tab));
   ok("Buy Now never sends an amount", !/amount|price|total/.test(tab.slice(at("body: {"), at("clientRequestId: requestId.current"))));
-  ok("Buy Now sends product ids only (no product names or prices)", /productIds: chosen\.map\(\(p\) => p\.id\)/.test(tab) && !/price: p\.|title: p\./.test(tab.slice(tab.indexOf("const buy"), tab.indexOf("const nav"))));
-  ok("selection capped in the UI at the package's count, Continue needs exactly that count", /cur\.length >= need \? cur/.test(tab) && /chosen\.length === need/.test(tab) && /nav\(countOk\)/.test(tab));
+  // Approved final design: no product-selection step — the server takes the package's contents, so Buy Now sends no
+  // product at all (no ids, names or prices) and there is no selection state / count check left in the tab.
+  ok("Buy Now sends no product (the package defines its contents), no product names or prices", !/productIds/.test(tab)
+    && !/price: p\.|title: p\./.test(tab.slice(tab.indexOf("const buy"), tab.indexOf("const nav"))));
+  ok("no product-selection state left (no selected list, toggle or count check)",
+    !/const \[selected, setSelected\]|const toggle = |countOk|chosen\.length === need/.test(tab) && /const canBuy = !!pkg && nameOk && !!terms && accepted && !sending;/.test(tab));
   ok("pending and active views show the brand name and the selected products",
     (tab.match(/<ProductList products=\{access\.products\} \/>/g) || []).length === 1 && /access\.brandName/.test(tab)
     && /<MyPack breakdown=\{access\.package\?\.breakdown\} t=\{t\}/.test(dashUi) && /access\.brandName/.test(dashUi)
@@ -569,8 +625,12 @@ console.log("\n10. Texts and labelling");
     && DASHBOARD_TEXT.ar.hero_quantity === "{n} قطعة" && DASHBOARD_TEXT.ar.see_all === "عرض الكل" && DASHBOARD_TEXT.ar.fin_expected === "ربح متوقع"
     && !("hero_no_stock" in DASHBOARD_TEXT.fr)
     && !Object.keys(DASHBOARD_TEXT.fr).some((k) => /^stock_/.test(k)));
-  ok("hero uses real catalogue product images (no stock imagery)", /data-hero/.test(tab) && !/https?:\/\//.test(tab.replace(/\/\*[\s\S]*?\*\//g, "")) && /pr\.image/.test(tab));
-  ok("pack features come from each pack's configuration (shown on its own card)", /p\.features\.slice\(0, 3\)\.map/.test(tab) && /\{p\.features\.map\(\(f\) => <li key=\{f\}/.test(tab));
+  // Approved final design: the hero shows the packs' own covers (packCover → gallery image, products' images as fallback).
+  ok("hero uses real catalogue / pack images (no stock imagery)", /data-hero/.test(tab) && !/https?:\/\//.test(tab.replace(/\/\*[\s\S]*?\*\//g, "")) && /pr\.image/.test(tab)
+    && /const src = packCover\(p\);/.test(tab.slice(tab.indexOf("function Landing("), tab.indexOf("function PackCard("))));
+  // Approved final design: the full services list is rendered by ServiceList (details + review), not inline.
+  ok("pack features come from each pack's configuration (shown on its own card)", /p\.features\.slice\(0, 3\)\.map/.test(tab) && /<ServiceList items=\{pkg\.features\}/.test(tab)
+    && /\{items\.map\(\(f\) => \(\s*<li key=\{f\}/.test(tab));
   const pageSrc = read("../src/app/affiliate/dashboard/page.jsx");
   ok("dashboard renders BrandTab only on its own tab (no props: no earnings data passed in)", /\{activeTab === "brand" && <BrandTab \/>\}/.test(pageSrc) && (pageSrc.match(/<BrandTab/g) || []).length === 1);
   const pkgTab = read("../src/app/admin/brand/PackagesTab.jsx");

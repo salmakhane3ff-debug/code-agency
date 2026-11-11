@@ -6,7 +6,8 @@ import { BRAND_LIMITS } from "@/lib/brandProgram";
 import { api, inputCls, FieldError } from "./ui";
 
 /**
- * Catalogue offered to affiliates: the admin picks existing store products.
+ * Catalogue the packages are built from: the admin picks existing store products
+ * (each package then lists its own 3–4 of them with quantities — affiliates choose no product).
  * Only their ids are saved (with the rest of the config); names, images and
  * availability are read live. A product is offered only while it is published,
  * active and not locked — others stay in the list, flagged, but are not shown
@@ -45,14 +46,14 @@ export default function ProductsTab({ cfg, setCfg, errors }) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-gray-500">
-        Choisissez les produits de la boutique que les affiliés peuvent sélectionner pour leur marque fictive
-        (chaque affilié en choisit de {BRAND_LIMITS.MIN_SELECTED_PRODUCTS} à {BRAND_LIMITS.MAX_SELECTED_PRODUCTS}). Seuls les produits publiés, actifs et non verrouillés sont proposés.
+        Choisissez les produits de la boutique qui peuvent composer les packs : dans l’onglet « Packs », chaque pack définit
+        ses {BRAND_LIMITS.MIN_SELECTED_PRODUCTS} ou {BRAND_LIMITS.MAX_SELECTED_PRODUCTS} produits et leurs quantités (l’affilié ne choisit aucun produit). Seuls les produits publiés, actifs et non verrouillés sont proposables.
         Les produits eux-mêmes ne sont jamais modifiés.
       </p>
       <FieldError code={errors.catalogProductIds} />
       <p className={`text-xs font-semibold rounded-xl px-3 py-2 border ${offered >= BRAND_LIMITS.MIN_SELECTED_PRODUCTS ? "text-emerald-700 bg-emerald-50 border-emerald-100" : "text-amber-800 bg-amber-50 border-amber-100"}`}>
-        {offered} produit(s) proposé(s) aux affiliés
-        {offered < BRAND_LIMITS.MIN_SELECTED_PRODUCTS && ` — il en faut au moins ${BRAND_LIMITS.MIN_SELECTED_PRODUCTS} pour qu’une demande soit possible.`}
+        {offered} produit(s) proposable(s) dans les packs
+        {offered < BRAND_LIMITS.MIN_SELECTED_PRODUCTS && ` — il en faut au moins ${BRAND_LIMITS.MIN_SELECTED_PRODUCTS} pour composer un pack proposé aux affiliés.`}
       </p>
 
       <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-2">

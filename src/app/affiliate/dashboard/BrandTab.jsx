@@ -3,16 +3,20 @@
 /**
  * 🏪 Create Your Own Brand — paid TRAINING SIMULATOR (affiliate side).
  *
- *   no access   → landing: title, hero built from the packages' real catalogue
- *                 product images, the services the admin listed as included,
- *                 what is bought (training + simulated data, no real sales, no
- *                 earnings), and the package cards — price, product count,
- *                 included services and the full price breakdown up front.
- *                 Then the guided creation: (2) exactly that package's number of
- *                 products from its list, (3) fictional brand name + optional
- *                 branding option, (4) review — itemised costs, VAT, total,
- *                 PUBLISHED refund terms — "Buy Now"
- *   pending     → brand header (pending), products, saved breakdown, bank
+ *   no access   → the guided flow, with a five-step progress indicator (_brand/Stepper):
+ *                 (1) landing — purple hero + the pack cards: cover image, name,
+ *                     category, product count, pieces, price, total payable, short
+ *                     description and included services; ONE pack is chosen (radio
+ *                     cards), "details" opens step 2, the big button continues;
+ *                 (2) details of the chosen pack — gallery with a zoom viewer
+ *                     (_brand/PackGallery), contents = the pack's products with
+ *                     their quantities, specifications, services, price, pieces.
+ *                     The pack DEFINES its products: nothing is picked;
+ *                 (3) the fictional brand name + an automatic preview
+ *                     (_brand/BrandPreview) + the optional branding service;
+ *                 (4) review — pack, contents, name, services, itemised costs,
+ *                     VAT, total, PUBLISHED refund terms — "Buy Now"
+ *   pending     → (5) brand header (pending), products, saved breakdown, bank
  *                 details and the transfer-proof upload (reused deposit
  *                 components; stored as a BRAND proof, never as a deposit);
  *                 access is activated only when an admin accepts the proof
@@ -27,24 +31,29 @@
  *                 request offers a fresh consent to the current terms
  *
  * Every package, price, cost, percentage, option, term and statistic comes from
- * the APIs; this UI never decides eligibility, never sends an amount and never
- * sends an affiliate id. The affiliate's real earnings and statistics stay in
- * their own dashboard tabs; nothing here reads or shows them. Language follows
- * the site (FR/AR) like the Rewards tab, with a local `dir`.
+ * the APIs; this UI never decides eligibility, never sends an amount, never sends
+ * products and never sends an affiliate id. The affiliate's real earnings and
+ * statistics stay in their own dashboard tabs; nothing here reads or shows them.
+ * Language follows the site (FR/AR) like the Rewards tab, with a local `dir`.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Loader2, Store, CheckCircle, Clock, Info, XCircle, GraduationCap, Package, ChevronDown,
-  ArrowLeft, ArrowRight, Crown, Check, Boxes,
+  Loader2, Store, CheckCircle, Clock, Info, XCircle, GraduationCap, Package,
+  ArrowLeft, ArrowRight, Crown, Check, Boxes, Layers, BarChart3, ShieldCheck, Landmark, FileText, BadgeCheck, Sparkles, Tag, Wallet, Sun, CalendarDays,
 } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
 import { brandT, brandDir, BRAND_TEXT } from "@/lib/brandI18n";
 import { knownServerError } from "@/lib/serverText/affiliateServerText";
 import { useMarketLocale } from "@/context/useMarketLocale";
-import { BRAND_LIMITS } from "@/lib/brandProgram";
+import { BRAND_LIMITS, normalizeBrandName } from "@/lib/brandProgram";
+import { AFFILIATE_TABS_TEXT } from "@/lib/affiliateTabsI18n";
+import { makeMarketT } from "@/lib/marketLocale";
 import { displayBreakdown } from "@/lib/brandPricing";
 import BrandDashboard from "./_brand/BrandDashboard";
+import Stepper from "./_brand/Stepper";
+import PackGallery from "./_brand/PackGallery";
+import BrandPreview from "./_brand/BrandPreview";
 import BankDetailsCard from "@/components/checkout/BankDetailsCard";
 import ProofUploadCard from "@/components/checkout/ProofUploadCard";
 
@@ -53,6 +62,8 @@ const DAY_MS = 86_400_000;
 const CARD = "bg-white rounded-2xl border border-gray-100 shadow-sm";
 const BTN_PRIMARY = "inline-flex items-center justify-center gap-2 px-4 py-3.5 rounded-2xl text-sm font-black bg-violet-600 text-white shadow-md shadow-violet-200 hover:bg-violet-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 disabled:opacity-40 disabled:shadow-none";
 const BTN_GHOST = "inline-flex items-center justify-center gap-1.5 px-4 py-3 rounded-2xl text-sm font-semibold bg-white border border-gray-200 text-gray-700 hover:border-gray-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400";
+/** Index of the verification / activation step in the progress indicator (the pending screen). */
+const STEP_VERIFY = 4;
 
 function authHeaders(json = false) {
   const t = (typeof localStorage !== "undefined" && localStorage.getItem("affiliateToken")) || "";
@@ -78,6 +89,9 @@ function newRequestId() {
 }
 
 const PROOF_ACCEPT = "image/jpeg,image/png,image/webp,application/pdf";
+// One-line, bidi-isolated text (brand / pack names typed in any script) that aligns with the page direction and is
+// cut at its OWN end: a `truncate` on an RTL block would cut a Latin name at its start.
+const ISO_TRUNC = "inline-block max-w-full truncate align-top";
 const PROOF_MAX_BYTES = 8 * 1024 * 1024; // same limit as the server (DEPOSIT_MAX_BYTES), checked again there
 
 // Brand error CODES → this tab's dictionary (code_*). Anything else the server can answer (generic 500
@@ -88,6 +102,9 @@ const errorText = (r, t, lang) => {
   if (code && BRAND_TEXT.fr[`code_${code}`] !== undefined) return t(`code_${code}`, { n: r.data.expected ?? "" });
   return knownServerError(r.data || {}, lang) ?? t("error_generic");
 };
+
+/** Cover of a pack: the first image of its gallery (the API already falls back to its products' images). */
+const packCover = (p) => p?.images?.[0] || (p?.products || []).find((pr) => pr.image)?.image || null;
 
 /**
  * Square product thumbnail. Plain <img>: catalogue images come from the store's
@@ -106,15 +123,21 @@ function Thumb({ src, iconCls, rounded = "" }) {
   );
 }
 
-/** Small read-only list of products (thumbnail + name), used on review, pending and active views. */
+/**
+ * Read-only list of a pack's products (thumbnail + name + quantity when the admin set one), used on the details,
+ * review and pending views. The quantity is a figure, shown as "× n" (no text to translate).
+ */
 function ProductList({ products }) {
   if (!products?.length) return null;
   return (
-    <ul className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+    <ul className="grid grid-cols-3 sm:grid-cols-4 gap-2" data-product-list>
       {products.map((p) => (
-        <li key={p.id} className="rounded-xl border border-gray-100 bg-white overflow-hidden">
+        <li key={p.id} className="relative rounded-xl border border-gray-100 bg-white overflow-hidden">
           <Thumb src={p.image} iconCls="w-6 h-6" />
-          <p dir="auto" className="px-2 py-1.5 text-[11px] font-semibold text-gray-800 line-clamp-2">{p.title}</p>
+          {p.quantity ? (
+            <span dir="ltr" className="absolute top-1.5 end-1.5 px-1.5 py-0.5 rounded-lg bg-violet-600 text-white text-[11px] font-black shadow-sm" data-product-qty>× {p.quantity}</span>
+          ) : null}
+          <p className="px-2 py-1.5 text-[11px] font-semibold text-gray-800"><span dir="auto" className="line-clamp-2">{p.title}</span></p>
         </li>
       ))}
     </ul>
@@ -127,6 +150,20 @@ function NumTitle({ n, children }) {
     <h3 className="flex items-center gap-2.5 text-base font-black text-gray-900">
       <span className="w-8 h-8 rounded-full bg-violet-600 text-white text-sm font-black flex items-center justify-center shrink-0">{n}</span>{children}
     </h3>
+  );
+}
+
+/** Included services (the pack's features), green check list. */
+function ServiceList({ items, t, className = "" }) {
+  if (!items?.length) return null;
+  return (
+    <ul className={`space-y-1.5 ${className}`} aria-label={t("features_title")}>
+      {items.map((f) => (
+        <li key={f} dir="auto" className="flex items-start gap-2 text-xs text-gray-700">
+          <span className="w-4 h-4 mt-px rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0" aria-hidden="true"><Check className="w-2.5 h-2.5" /></span>{f}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -185,72 +222,82 @@ function WhatYouBuy({ t }) {
   );
 }
 
-/** A pack image (first catalogue image of the pack); a missing or failing image shows the package icon. */
-function PackImage({ src, className = "" }) {
+/** A pack image (its cover); a missing or failing image shows the package icon. */
+function PackImage({ src, alt = "", className = "" }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => { setFailed(false); }, [src]);
   return (
-    <div className={`flex items-center justify-center overflow-hidden ${className}`}>
+    <span className={`flex items-center justify-center overflow-hidden ${className}`}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      {src && !failed ? <img src={src} alt="" loading="lazy" onError={() => setFailed(true)} className="max-w-full max-h-full object-contain" />
+      {src && !failed ? <img src={src} alt={alt} loading="lazy" onError={() => setFailed(true)} className="max-w-full max-h-full object-contain" />
         : <Package className="w-10 h-10 text-violet-300" aria-hidden="true" />}
-    </div>
+    </span>
   );
 }
 
-/** Landing hero: purple gradient, title, training badge and real catalogue images of the offered packs (nothing invented). */
+const HERO_CHIPS = [["hero_chip_training", GraduationCap], ["hero_chip_sim", BarChart3], ["hero_chip_verified", ShieldCheck]];
+
+/** Landing hero: purple gradient, title, chips and the offered packs' own cover images (nothing invented). */
 function Landing({ t, packages }) {
   const images = [];
-  for (const p of packages) for (const pr of p.products || []) if (pr.image && !images.includes(pr.image) && images.length < 3) images.push(pr.image);
+  for (const p of packages) { const src = packCover(p); if (src && !images.includes(src) && images.length < 3) images.push(src); }
   return (
-    <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-violet-700 via-violet-600 to-fuchsia-500 text-white p-5 sm:p-6 shadow-lg shadow-violet-200" data-hero>
+    <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-violet-700 via-violet-600 to-fuchsia-500 text-white p-5 sm:p-7 shadow-lg shadow-violet-200" data-hero>
       <div aria-hidden="true" className="absolute -top-10 -end-10 w-40 h-40 rounded-full bg-white/10" />
       <div aria-hidden="true" className="absolute -bottom-12 end-24 w-28 h-28 rounded-full bg-fuchsia-300/20" />
-      <div className="relative flex items-center gap-3">
+      <div className="relative flex items-center gap-3 sm:gap-6">
         <div className="min-w-0 flex-1">
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white/15 text-white text-[11px] font-bold"><GraduationCap className="w-3 h-3" aria-hidden="true" />{t("training_badge")}</span>
-          <h2 className="text-2xl sm:text-3xl font-black leading-tight mt-2">{t("title")}</h2>
-          <p className="text-lg sm:text-xl font-black text-violet-100 leading-tight" dir="ltr">{t("title_en")}</p>
-          <p className="text-[13px] sm:text-sm text-violet-50/90 mt-2 leading-snug">{t("landing_intro")}</p>
+          <h2 className="text-2xl sm:text-4xl font-black leading-tight mt-2">{t("title")}</h2>
+          <p className="text-lg sm:text-2xl font-black text-violet-100 leading-tight" dir="ltr">{t("title_en")}</p>
+          <p className="text-[13px] sm:text-base text-violet-50/90 mt-2 leading-snug max-w-xl">{t("landing_intro")}</p>
         </div>
-        <div className="relative w-24 sm:w-36 h-28 sm:h-36 shrink-0" aria-hidden="true">
+        <div className="relative w-24 sm:w-44 h-28 sm:h-44 shrink-0" aria-hidden="true">
           {images.length ? images.map((src, i) => (
-            <div key={src} className="absolute w-16 sm:w-24 rounded-2xl overflow-hidden shadow-lg ring-2 ring-white bg-white"
+            <div key={src} className="absolute w-16 sm:w-28 rounded-2xl overflow-hidden shadow-lg ring-2 ring-white bg-white"
               style={{ insetInlineEnd: `${i * 14}px`, top: `${i * 16}px`, zIndex: 3 - i, transform: `rotate(${(i - 1) * 6}deg)` }}>
               <Thumb src={src} iconCls="w-6 h-6" />
             </div>
           )) : <div className="absolute inset-0 flex items-center justify-center"><Store className="w-14 h-14 text-white/80" /></div>}
         </div>
       </div>
+      <ul className="relative flex flex-wrap gap-1.5 sm:gap-2 mt-4" data-hero-chips>
+        {HERO_CHIPS.map(([k, Icon]) => (
+          <li key={k} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white text-violet-800 text-[11px] sm:text-xs font-bold shadow-sm">
+            <Icon className="w-3.5 h-3.5" aria-hidden="true" />{t(k)}
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
 
 /**
- * One pack in the comparison: image, name, product count, physical pieces (when
- * configured), price, availability, main features. Its full details open in a
- * sheet (PackDetailsSheet), so a card never changes size and never affects the
- * others. Every value is the admin's configuration of THIS pack.
+ * One pack in the comparison (radio card): cover image, name, category, product count, physical pieces (when
+ * configured), price, total payable, availability, then its short description and main services. "Details"
+ * chooses the pack and opens step 2 (its full details); the selected card shows "selected ✓". Every value is
+ * the admin's configuration of THIS pack.
  */
-function PackCard({ p, on, single, onSelect, onDetails, t, money }) {
-  const img = (p.products || []).find((x) => x.image)?.image || null;
+function PackCard({ p, on, single, tabStop, onSelect, onDetails, onArrow, radioRef, t, money }) {
   return (
     <div data-package-id={p.id} data-selected={on ? "true" : "false"}
-      className={`relative snap-start shrink-0 flex flex-col rounded-3xl border-2 bg-white p-3.5 transition-colors ${single ? "w-full" : "w-[80%] max-w-[300px] sm:w-auto sm:max-w-none"} ${on ? "border-violet-600 shadow-lg shadow-violet-100" : "border-gray-100 shadow-sm"}`}>
-      {on && <span className="absolute -top-3 end-3 w-8 h-8 rounded-full bg-violet-600 text-white flex items-center justify-center ring-4 ring-white" aria-hidden="true" data-check><Check className="w-4 h-4" /></span>}
-      <button type="button" role="radio" aria-checked={on} onClick={() => onSelect(p.id)}
-        className="text-center rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400">
-        <PackImage src={img} className="h-28 sm:h-32 rounded-2xl bg-gradient-to-b from-violet-50 to-white p-2" />
-        <p dir="auto" className="text-lg font-black text-gray-900 mt-2 leading-tight">{p.name}</p>
-        <p className="text-xs font-bold text-amber-700 mt-1">{t("package_products", { n: p.productCount })}</p>
-        {p.quantity ? <p className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 mt-0.5" data-pack-quantity><Boxes className="w-3.5 h-3.5" aria-hidden="true" />{t("pack_pieces", { n: p.quantity })}</p> : null}
-        <p className="mt-2 rounded-2xl bg-violet-50 py-1.5 text-2xl font-black text-violet-700" dir="ltr" data-pack-price>{money(p.price)}</p>
-        <p className="text-[11px] text-gray-500 mt-1">{t("total_payable_short")} : <span className="font-bold text-violet-700">{money(p.breakdown.total)}</span></p>
+      className={`relative snap-start shrink-0 flex flex-col rounded-3xl border-2 bg-white p-3.5 transition-colors ${single ? "w-full sm:max-w-sm sm:mx-auto" : "w-[80%] max-w-[300px] sm:w-auto sm:max-w-none"} ${on ? "border-violet-600 shadow-lg shadow-violet-100" : "border-gray-100 shadow-sm"}`}>
+      {on && <span className="absolute -top-3 end-3 w-8 h-8 rounded-full bg-violet-600 text-white flex items-center justify-center ring-4 ring-white z-10" aria-hidden="true" data-check><Check className="w-4 h-4" /></span>}
+      <button type="button" role="radio" aria-checked={on} tabIndex={tabStop ? 0 : -1} ref={radioRef}
+        onClick={() => onSelect(p.id)} onKeyDown={(e) => { if (onArrow(p.id, e.key)) e.preventDefault(); }}
+        className="flex flex-col items-center text-center rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400">
+        <PackImage src={packCover(p)} className="w-full h-32 sm:h-36 rounded-2xl bg-gradient-to-b from-violet-50 to-white p-2" />
+        <span dir="auto" className="block text-lg font-black text-gray-900 mt-2 leading-tight">{p.name}</span>
+        {p.category ? <span dir="auto" className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 text-[11px] font-bold" data-pack-category><Tag className="w-3 h-3" aria-hidden="true" />{p.category}</span> : null}
+        <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 mt-1.5"><Package className="w-3.5 h-3.5" aria-hidden="true" />{t("package_products", { n: p.productCount })}</span>
+        {p.quantity ? <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 mt-0.5" data-pack-quantity><Boxes className="w-3.5 h-3.5" aria-hidden="true" />{t("pack_pieces", { n: p.quantity })}</span> : null}
+        <span className="block w-full mt-2 rounded-2xl bg-violet-50 py-1.5 text-2xl font-black text-violet-700" data-pack-price><bdi className="whitespace-nowrap">{money(p.price)}</bdi></span>
+        <span className="block text-[11px] text-gray-500 mt-1">{t("total_payable_short")} : <span className="font-bold text-violet-700">{money(p.breakdown.total)}</span></span>
         <span className="inline-flex items-center gap-1 mt-2 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-bold">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden="true" />{t("pack_available")}
         </span>
       </button>
-      {p.description && <p dir="auto" className="text-xs text-gray-600 mt-2 line-clamp-2">{p.description}</p>}
+      {p.description && <p dir="auto" className="text-xs text-gray-600 mt-2 line-clamp-2" data-pack-description>{p.description}</p>}
       {p.features?.length > 0 && (
         <ul className="space-y-1.5 mt-2 rounded-2xl bg-gray-50/80 p-2.5" aria-label={t("features_title")}>
           {p.features.slice(0, 3).map((f) => (
@@ -260,124 +307,153 @@ function PackCard({ p, on, single, onSelect, onDetails, t, money }) {
           ))}
         </ul>
       )}
-      <button type="button" onClick={() => onDetails(p.id)} aria-haspopup="dialog" data-pack-details-toggle
-        className="w-full inline-flex items-center justify-center gap-1 text-xs font-semibold text-violet-700 py-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 rounded-lg">
-        {t("package_details_show")}<ChevronDown className="w-4 h-4" aria-hidden="true" />
-      </button>
-      <button type="button" onClick={() => onSelect(p.id)} aria-pressed={on} data-pack-select
-        className={`mt-1 w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-2xl text-sm font-black focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 ${on ? "bg-violet-600 text-white" : "border-2 border-violet-600 text-violet-700 bg-white"}`}>
-        {on ? <><Check className="w-4 h-4" aria-hidden="true" />{t("pack_selected")}</> : t("pack_select")}
+      <div className="flex-1" />
+      <button type="button" onClick={() => onDetails(p.id)} data-pack-details-toggle
+        className={`mt-3 w-full min-h-[44px] inline-flex items-center justify-center gap-1.5 py-2.5 rounded-2xl text-sm font-black focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 ${on ? "bg-violet-600 text-white shadow-md shadow-violet-200 hover:bg-violet-700" : "border-2 border-violet-600 text-violet-700 bg-white hover:bg-violet-50"}`}>
+        {on ? <><Check className="w-4 h-4" aria-hidden="true" />{t("pack_selected")}<span className="sr-only"> · {t("package_details_show")}</span></> : t("package_details_show")}
       </button>
     </div>
   );
 }
 
-/** Full details of one pack (breakdown, pieces, simulated selling price, included products, all features) in a sheet; select from here too. */
-function PackDetailsSheet({ p, on, onSelect, onClose, t, money }) {
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+const TRUST = [["trust_training", GraduationCap], ["trust_payment", Landmark], ["trust_terms", FileText], ["trust_activation", BadgeCheck]];
+
+/** Facts of the offer only (no invented promise): simulated training, verified transfer, published terms, activation after verification. */
+function TrustStrip({ t }) {
   return (
-    <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-gray-900/40" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-labelledby="brand-pack-title" onClick={(e) => e.stopPropagation()} data-pack-details={p.id}
-        className="w-full sm:max-w-lg max-h-[88vh] bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col">
-        <div className="flex items-center justify-between gap-2 px-5 py-4 border-b border-gray-100">
-          <div className="min-w-0">
-            <h4 id="brand-pack-title" dir="auto" className="text-base font-black text-gray-900 truncate">{p.name}</h4>
-            <p className="text-xs font-bold text-violet-700" dir="ltr">{money(p.price)}</p>
-          </div>
-          <button type="button" onClick={onClose} autoFocus aria-label={t("pack_details_close")} data-pack-details-close
-            className="w-9 h-9 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"><XCircle className="w-5 h-5" aria-hidden="true" /></button>
-        </div>
-        <div className="overflow-y-auto px-5 py-4 space-y-3">
-          {p.description && <p dir="auto" className="text-sm text-gray-600 whitespace-pre-line">{p.description}</p>}
-          <Breakdown b={p.breakdown} t={t} money={money} />
-          <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-xs rounded-2xl border border-gray-100 p-2.5">
-            <dt className="text-gray-500">{t("pack_pieces_label")}</dt><dd className="font-bold text-gray-900 text-end">{p.quantity ?? "—"}</dd>
-            <dt className="text-gray-500">{t("pack_sim_price")}</dt><dd className="font-bold text-gray-900 text-end" dir="ltr">{p.simulatedSellingPrice ? money(p.simulatedSellingPrice) : "—"}</dd>
-          </dl>
-          {p.products?.length > 0 && (
-            <div><p className="text-xs font-black text-gray-900 mb-1.5">{t("pack_included_products")}</p><ProductList products={p.products} /></div>
-          )}
-          {p.features?.length > 0 && (
-            <ul className="space-y-1" aria-label={t("features_title")}>{p.features.map((f) => <li key={f} dir="auto" className="text-xs text-gray-700">• {f}</li>)}</ul>
-          )}
-        </div>
-        <div className="px-5 py-3 border-t border-gray-100 pb-[calc(12px+env(safe-area-inset-bottom))]">
-          <button type="button" onClick={() => { onSelect(p.id); onClose(); }} data-pack-details-select
-            className={`w-full inline-flex items-center justify-center gap-1.5 py-3 rounded-2xl text-sm font-black focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 ${on ? "bg-violet-600 text-white" : "border-2 border-violet-600 text-violet-700 bg-white"}`}>
-            {on ? <><Check className="w-4 h-4" aria-hidden="true" />{t("pack_selected")}</> : t("pack_select")}
-          </button>
-        </div>
-      </div>
-    </div>
+    <ul className={`${CARD} grid grid-cols-2 lg:grid-cols-4 gap-3 p-3 sm:p-4`} data-trust>
+      {TRUST.map(([k, Icon]) => (
+        <li key={k} className="flex items-center gap-2 min-w-0 text-xs font-bold text-gray-800 leading-snug">
+          <span className="w-9 h-9 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center shrink-0" aria-hidden="true"><Icon className="w-[18px] h-[18px]" /></span>
+          <span className="min-w-0">{t(k)}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
-const STEPS = ["step_package", "step_products", "step_brand", "step_review"];
-
-function Progress({ step, t }) {
-  return (
-    <div aria-label={t("step_label", { n: step + 1, total: STEPS.length })}>
-      <div className="flex gap-1.5" role="progressbar" aria-valuemin={1} aria-valuemax={STEPS.length} aria-valuenow={step + 1}>
-        {STEPS.map((k, i) => <span key={k} title={t(k)} className={`h-1.5 flex-1 rounded-full ${i <= step ? "bg-violet-600" : "bg-gray-200"}`} />)}
-      </div>
-      <p className="text-[11px] font-bold text-gray-400 mt-1.5">{t("step_label", { n: step + 1, total: STEPS.length })} · {t(STEPS[step])}</p>
-    </div>
-  );
-}
-
+/** Small section heading inside a step card. */
 /**
- * The request: (1) choose a package — every package shows its price breakdown
- * up front, (2) pick exactly its number of products from its own list,
- * (3) name the brand (+ optional branding option), (4) review — package,
- * products, name, itemised costs, VAT, total, refund terms — and "Buy Now".
+ * The request, in four screens (the fifth step is the pending view):
+ * (1) choose ONE package — every package shows its price and total up front,
+ * (2) its details as a visual showcase: cover + its own products (quantities) with zoom, products / pieces / price,
+ * (3) name the brand (automatic preview + optional branding service),
+ * (4) review — package, contents, name, services, itemised costs, VAT, total,
+ * refund terms — and "Buy Now". The package defines its products: none are sent.
  * The server re-checks everything and computes the amount itself.
  */
+/**
+ * Step 2 gallery items: the admin's pack cover (when it is not already one of the product photos), then each product of
+ * the pack with its quantity — never anything outside the pack. A pack with neither keeps its card cover.
+ */
+function galleryItems(pkg) {
+  const products = Array.isArray(pkg?.products) ? pkg.products : [];
+  const productImages = new Set(products.map((p) => p.image).filter(Boolean));
+  const cover = Array.isArray(pkg?.images) ? pkg.images[0] : null;
+  const items = [];
+  // The cover has no caption: the pack name is already the step's title.
+  if (cover && !productImages.has(cover)) items.push({ key: "cover", src: cover, title: null, quantity: null });
+  for (const p of products) items.push({ key: `p-${p.id}`, src: p.image || null, title: p.title, quantity: p.quantity ?? null });
+  if (!items.length) items.push({ key: "cover", src: packCover(pkg), title: null, quantity: null });
+  return items;
+}
+
+/** Pieces in the pack: the admin's total, else the sum of its products' quantities when every one is set; else null. */
+function packPieces(pkg) {
+  if (Number.isInteger(pkg?.quantity) && pkg.quantity > 0) return pkg.quantity;
+  const qs = (pkg?.products || []).map((p) => p.quantity);
+  return qs.length && qs.every((q) => Number.isInteger(q) && q > 0) ? qs.reduce((a, b) => a + b, 0) : null;
+}
+
+/** One compact figure of step 2 (icon, value, short label). */
+function DetailStat({ Icon, value, label, ...rest }) {
+  return (
+    <li className="rounded-2xl border border-violet-100 bg-white px-3 py-2.5 flex items-center gap-2.5 shadow-sm" {...rest}>
+      <span className="w-9 h-9 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center shrink-0" aria-hidden="true"><Icon className="w-[18px] h-[18px]" /></span>
+      <span className="min-w-0">
+        <span className="block text-lg font-black text-gray-900 leading-none tabular-nums"><bdi>{value}</bdi></span>
+        <span className="block text-[11px] font-semibold text-gray-500 mt-1 truncate">{label}</span>
+      </span>
+    </li>
+  );
+}
+
+/** One admin-entered estimate of step 2 (informational, labelled as an estimate; never computed here). */
+function EstimateChip({ Icon, label, value, ...rest }) {
+  return (
+    <li className="rounded-2xl bg-amber-50/70 border border-amber-100 px-3 py-2 flex items-center gap-2" {...rest}>
+      <span className="w-8 h-8 rounded-xl bg-white text-amber-500 flex items-center justify-center shrink-0 shadow-sm" aria-hidden="true"><Icon className="w-4 h-4" /></span>
+      <span className="min-w-0">
+        <span className="block text-[11px] font-semibold leading-tight text-amber-800">{label}</span>
+        <bdi className="block text-sm font-black text-gray-900 whitespace-nowrap">{value}</bdi>
+      </span>
+    </li>
+  );
+}
+
 function Offer({ data, t, lang, money, dir, onRequested, onStale }) {
   const packages = data.packages || [];
   const [step, setStep] = useState(0);
   // Nothing is pre-selected: the affiliate compares the packs and picks one.
   const [packageId, setPackageId] = useState(null);
-  const [openDetails, setOpenDetails] = useState(null);
-  const [selected, setSelected] = useState([]);
   const [brandName, setBrandName] = useState("");
   const [brandingOptionId, setBrandingOptionId] = useState("");
   const [accepted, setAccepted] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
   const requestId = useRef(null);
+  const radios = useRef({});
+  const stepBox = useRef(null);
+  const shownStep = useRef(step);
 
   const pkg = packages.find((p) => p.id === packageId) || null;
-  const pkgProducts = pkg?.products || [];
-  const need = pkg?.productCount || 0;
   const Back = dir === "rtl" ? ArrowRight : ArrowLeft;
   const Fwd = dir === "rtl" ? ArrowLeft : ArrowRight;
 
-  // After a reload (PRODUCT_NOT_AVAILABLE / PACKAGE_NOT_FOUND / TERMS_CHANGED): drop a vanished package or product.
+  // After a reload (PACKAGE_NOT_FOUND / TERMS_CHANGED): a vanished package sends the affiliate back to the choice.
   useEffect(() => {
-    if (packageId && !packages.some((p) => p.id === packageId)) { setPackageId(null); setSelected([]); setStep(0); return; }
-    const ids = new Set(pkgProducts.map((p) => p.id));
-    setSelected((cur) => cur.filter((id) => ids.has(id)));
+    if (packageId && !packages.some((p) => p.id === packageId)) { setPackageId(null); setAccepted(false); setStep(0); }
   }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
   // New published terms must be accepted again.
   useEffect(() => { setAccepted(false); }, [data.terms?.version]);
-  // Each step starts at the top of the tab (phones).
-  useEffect(() => { if (step > 0 && typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" }); }, [step]);
+  // Each step starts at the top of the tab (phones); keyboard / screen-reader focus moves to the new step.
+  useEffect(() => {
+    if (shownStep.current === step) return;
+    shownStep.current = step;
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+    stepBox.current?.focus({ preventScroll: true });
+  }, [step]);
 
-  const pickPackage = (id) => { if (id !== packageId) { setPackageId(id); setSelected([]); } };
-  const detailsPack = packages.find((p) => p.id === openDetails) || null;
-  const chosen = selected.map((id) => pkgProducts.find((p) => p.id === id)).filter(Boolean);
+  // Back on the pack choice (e.g. "change pack"): the selected card is brought into view in the phone carousel.
+  useEffect(() => {
+    if (step !== 0 || !packageId) return;
+    radios.current[packageId]?.scrollIntoView?.({ block: "nearest", inline: "center", behavior: "auto" });
+  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Another pack: nothing from the previous one is kept (consent given on its review, retry key of its request).
+  const pickPackage = (id) => {
+    if (id === packageId) return;
+    setPackageId(id); setAccepted(false); requestId.current = null;
+  };
+  const openDetails = (id) => { pickPackage(id); setError(null); setStep(1); };
+  // Radio group keyboard: arrows move the choice (reading direction aware), focus follows it.
+  const onArrow = (fromId, key) => {
+    const delta = { ArrowDown: 1, ArrowUp: -1, ArrowRight: dir === "rtl" ? -1 : 1, ArrowLeft: dir === "rtl" ? 1 : -1 }[key];
+    if (!delta || !packages.length) return false;
+    const i = packages.findIndex((p) => p.id === fromId);
+    const next = packages[(i + delta + packages.length) % packages.length];
+    pickPackage(next.id);
+    radios.current[next.id]?.focus();
+    return true;
+  };
+
   const option = data.brandingOptions?.find((o) => o.id === brandingOptionId) || null;
   const terms = data.terms;
   const cleanName = brandName.replace(/\s+/g, " ").trim();
-  const countOk = !!pkg && chosen.length === need;
-  const nameOk = cleanName.length >= BRAND_LIMITS.BRAND_NAME_MIN && cleanName.length <= BRAND_LIMITS.BRAND_NAME_MAX;
-  const canBuy = countOk && nameOk && !!terms && accepted && !sending;
-
-  const toggle = (id) => setSelected((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : cur.length >= need ? cur : [...cur, id]));
+  const nameLenOk = cleanName.length >= BRAND_LIMITS.BRAND_NAME_MIN && cleanName.length <= BRAND_LIMITS.BRAND_NAME_MAX;
+  const nameOk = nameLenOk && normalizeBrandName(cleanName) !== null; // same rule as the server
+  const nameBadChars = nameLenOk && !nameOk;
+  const canBuy = !!pkg && nameOk && !!terms && accepted && !sending;
 
   const buy = async () => {
     if (!canBuy) return;
@@ -387,7 +463,7 @@ function Offer({ data, t, lang, money, dir, onRequested, onStale }) {
     const r = await call("/api/affiliate/brand/access", {
       method: "POST",
       body: {
-        packageId: pkg.id, productIds: chosen.map((p) => p.id), brandName: cleanName, brandingOptionId: option?.id || null,
+        packageId: pkg.id, brandName: cleanName, brandingOptionId: option?.id || null,
         termsVersion: terms.version, acceptTerms: true, clientRequestId: requestId.current,
       },
     });
@@ -395,9 +471,9 @@ function Offer({ data, t, lang, money, dir, onRequested, onStale }) {
     if (r.ok) { requestId.current = null; onRequested(); return; }
     if (r.status !== 0) requestId.current = null;
     setError(errorText(r, t, lang));
-    if (["PRODUCT_NOT_AVAILABLE", "PACKAGE_NOT_FOUND", "TERMS_CHANGED"].includes(r.data?.code)) {
+    if (r.data?.code === "INVALID_BRAND_NAME") setStep(2); // back to the field that needs fixing
+    if (["PACKAGE_NOT_FOUND", "TERMS_CHANGED"].includes(r.data?.code)) {
       onStale();
-      if (r.data.code === "PRODUCT_NOT_AVAILABLE") setStep(1);
       if (r.data.code === "PACKAGE_NOT_FOUND") setStep(0);
     }
   };
@@ -409,30 +485,37 @@ function Offer({ data, t, lang, money, dir, onRequested, onStale }) {
     </div>
   );
 
-  // ── Screen A: landing + package selection ──────────────────────────────────
+  // ── Step 1: landing + package selection ────────────────────────────────────
   if (step === 0) {
+    const tabStopId = pkg ? pkg.id : packages[0]?.id;
     return (
-      <div className="space-y-5">
+      <div ref={stepBox} tabIndex={-1} className="space-y-5 focus:outline-none" data-flow-step="1">
         <Landing t={t} packages={packages} />
+        <Stepper current={0} t={t} />
         <WhatYouBuy t={t} />
 
         <section className="space-y-3" data-packs>
-          <div>
-            <h3 className="text-xl font-black text-violet-950">{t("package_title")}</h3>
-            <p className="text-xs text-gray-500 mt-0.5">{t("pack_compare_sub")}</p>
+          <div className="flex items-start gap-3">
+            <span className="w-10 h-10 rounded-2xl bg-white border border-violet-100 shadow-sm text-violet-600 flex items-center justify-center shrink-0" aria-hidden="true"><Layers className="w-5 h-5" /></span>
+            <div className="min-w-0">
+              <h3 id="brand-packs-title" className="text-xl sm:text-2xl font-black text-violet-950">{t("packages_section")}</h3>
+              <p className="text-xs sm:text-sm text-gray-500 mt-0.5">{t("pack_compare_sub")}</p>
+            </div>
           </div>
           {packages.length ? (
             <>
-              <div role="radiogroup" aria-label={t("package_title")}
-                className={packages.length === 1 ? "pt-3" : "-mx-4 px-4 pt-3 pb-2 flex items-start gap-3 overflow-x-auto snap-x snap-mandatory sm:mx-0 sm:px-0 sm:grid sm:grid-cols-2 lg:grid-cols-3 sm:items-start sm:overflow-visible"}>
+              <div role="radiogroup" aria-labelledby="brand-packs-title"
+                className={packages.length === 1 ? "pt-3" : "-mx-4 px-4 scroll-px-4 pt-3 pb-2 flex items-stretch gap-3 overflow-x-auto snap-x snap-mandatory sm:mx-0 sm:scroll-px-0 sm:px-0 sm:grid sm:grid-cols-2 lg:grid-cols-3 sm:overflow-visible"}>
                 {packages.map((p) => (
-                  <PackCard key={p.id} p={p} on={p.id === packageId} single={packages.length === 1}
-                    onSelect={pickPackage} onDetails={setOpenDetails} t={t} money={money} />
+                  <PackCard key={p.id} p={p} on={p.id === packageId} single={packages.length === 1} tabStop={p.id === tabStopId}
+                    radioRef={(el) => { radios.current[p.id] = el; }} onArrow={onArrow}
+                    onSelect={pickPackage} onDetails={openDetails} t={t} money={money} />
                 ))}
               </div>
-              {detailsPack && <PackDetailsSheet p={detailsPack} on={detailsPack.id === packageId} onSelect={pickPackage} onClose={() => setOpenDetails(null)} t={t} money={money} />}
+              <TrustStrip t={t} />
+              {error && <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2">{error}</p>}
               <button type="button" onClick={() => { setError(null); setStep(1); }} disabled={!pkg} data-start
-                className={`w-full ${BTN_PRIMARY} py-4 text-base`}>
+                className={`w-full ${BTN_PRIMARY} py-4 text-base bg-gradient-to-r from-violet-700 to-violet-500`}>
                 {pkg ? t("start_with_pack") : t("select_pack_first")}<Fwd className="w-5 h-5" aria-hidden="true" />
               </button>
             </>
@@ -453,19 +536,20 @@ function Offer({ data, t, lang, money, dir, onRequested, onStale }) {
     );
   }
 
-  // ── Screen B: guided creation ──────────────────────────────────────────────
+  // ── Steps 2–4: guided creation ─────────────────────────────────────────────
   return (
-    <div className="space-y-4">
+    <div ref={stepBox} tabIndex={-1} className="max-w-3xl mx-auto space-y-4 focus:outline-none" data-flow-step={step + 1}>
       <div className="flex items-center gap-3">
         <button type="button" onClick={() => { setError(null); setStep(step - 1); }} aria-label={t("back")}
           className="w-10 h-10 rounded-full flex items-center justify-center text-gray-700 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"><Back className="w-5 h-5" /></button>
         <h2 className="flex-1 text-center text-lg font-black text-gray-900 pe-10">{t("create_title")}</h2>
       </div>
-      <Progress step={step} t={t} />
+      <Stepper current={step} t={t} />
 
-      {pkg && (
-        <button type="button" onClick={() => setStep(0)} className={`${CARD} w-full flex items-center justify-between gap-3 px-4 py-3 text-start`}>
-          <span className="min-w-0"><span className="block text-[11px] text-gray-500">{t("review_package")}</span><span dir="auto" className="block text-sm font-black text-gray-900 truncate">{pkg.name}</span></span>
+      {pkg && step > 1 && (
+        <button type="button" onClick={() => { setError(null); setStep(0); }} className={`${CARD} w-full flex items-center gap-3 px-3 py-2.5 text-start focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400`} data-pack-summary>
+          <PackImage src={packCover(pkg)} className="w-11 h-11 rounded-xl bg-violet-50 shrink-0" />
+          <span className="min-w-0 flex-1"><span className="block text-[11px] text-gray-500">{t("review_package")}</span><span dir="auto" className="block text-sm font-black text-gray-900 truncate">{pkg.name}</span></span>
           <span className="text-end shrink-0"><span className="block text-[11px] text-gray-500">{t("total_payable_short")}</span><span className="block text-sm font-black text-violet-700">{money(pkg.breakdown.total)}</span></span>
         </button>
       )}
@@ -473,56 +557,77 @@ function Offer({ data, t, lang, money, dir, onRequested, onStale }) {
       <div className={`${CARD} p-4 sm:p-5 space-y-4`}>
         {step === 1 && pkg && (
           <>
-            <NumTitle n={2}>{t("products_title")}</NumTitle>
-            <p className="text-sm text-gray-500 -mt-2">{t("products_hint", { n: need })}</p>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-              {pkgProducts.map((p) => {
-                const on = selected.includes(p.id);
-                const blocked = !on && selected.length >= need;
-                return (
-                  <button key={p.id} type="button" onClick={() => toggle(p.id)} disabled={blocked} aria-pressed={on} data-product-id={p.id}
-                    className={`relative text-start rounded-2xl border-2 overflow-hidden bg-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 ${on ? "border-violet-500 shadow-md shadow-violet-100" : "border-gray-100 hover:border-gray-300"} ${blocked ? "opacity-40" : ""}`}>
-                    <Thumb src={p.image} iconCls="w-8 h-8" />
-                    <p dir="auto" className={`px-2.5 py-2 text-xs font-bold line-clamp-2 ${on ? "text-violet-700" : "text-gray-800"}`}>{p.title}</p>
-                    <span className={`absolute top-2 end-2 w-6 h-6 rounded-full flex items-center justify-center ${on ? "bg-violet-600 text-white" : "bg-white/90 border border-gray-200 text-transparent"}`} aria-hidden="true"><Check className="w-3.5 h-3.5" /></span>
-                  </button>
-                );
-              })}
+            {/* Step 2 = a visual showcase of the chosen pack: images first (cover + its own products with quantities,
+                zoom), then a few compact figures. Description, specifications, services and disclosures stay in the
+                admin config / API and are shown on the pack card (step 1) and the review (step 4), not repeated here. */}
+            <NumTitle n={2}>{t("details_title")}</NumTitle>
+            <div className="grid grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:items-start" data-pack-details={pkg.id}>
+              <PackGallery items={galleryItems(pkg)} name={pkg.name} t={t} dir={dir} />
+              <div className="min-w-0 space-y-3">
+                <div className="space-y-1.5">
+                  <p dir="auto" className="text-xl sm:text-2xl font-black text-gray-900 leading-tight">{pkg.name}</p>
+                  {pkg.category ? <p className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-violet-50 text-violet-700 text-xs font-bold"><Tag className="w-3.5 h-3.5" aria-hidden="true" /><span className="sr-only">{t("pack_category")} : </span><span dir="auto">{pkg.category}</span></p> : null}
+                </div>
+                <div className="rounded-3xl bg-gradient-to-br from-violet-600 to-purple-700 text-white px-4 py-3.5 shadow-md shadow-violet-200 flex items-center gap-3" data-details-price>
+                  <span className="w-11 h-11 rounded-2xl bg-white/15 flex items-center justify-center shrink-0" aria-hidden="true"><Wallet className="w-5 h-5" /></span>
+                  <span className="min-w-0">
+                    <span className="block text-[11px] font-bold text-violet-100">{t("bd_price")}</span>
+                    <bdi className="block text-2xl sm:text-3xl font-black leading-tight whitespace-nowrap">{money(pkg.price)}</bdi>
+                    <span className="block text-[11px] text-violet-100 mt-0.5">{t("total_payable_short")} : <bdi className="font-black text-white whitespace-nowrap">{money(pkg.breakdown.total)}</bdi></span>
+                  </span>
+                </div>
+                <ul className="grid grid-cols-2 gap-2" aria-label={t("details_title")} data-details-stats>
+                  <DetailStat Icon={Package} value={pkg.productCount} label={t("details_stat_products")} />
+                  {packPieces(pkg) !== null && <DetailStat Icon={Boxes} value={packPieces(pkg)} label={t("details_stat_pieces")} data-details-pieces />}
+                </ul>
+                {(pkg.estimatedDailyEarnings || pkg.estimatedMonthlyEarnings) ? (
+                  <div className="space-y-1.5" data-details-estimates>
+                    <ul className="grid grid-cols-2 gap-2" aria-label={t("est_title")}>
+                      {pkg.estimatedDailyEarnings ? <EstimateChip Icon={Sun} label={t("est_daily")} value={money(pkg.estimatedDailyEarnings)} data-estimate="daily" /> : null}
+                      {pkg.estimatedMonthlyEarnings ? <EstimateChip Icon={CalendarDays} label={t("est_monthly")} value={money(pkg.estimatedMonthlyEarnings)} data-estimate="monthly" /> : null}
+                    </ul>
+                    <p className="text-[11px] text-gray-500 flex items-center gap-1"><Info className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />{t("est_note")}</p>
+                  </div>
+                ) : null}
+              </div>
             </div>
-            <p className={`text-xs font-semibold ${countOk ? "text-emerald-700" : "text-gray-500"}`} aria-live="polite">{t("products_count", { n: selected.length, max: need })}</p>
-            {selected.length >= need && <p className="text-xs text-gray-500">{t("products_max_reached")}</p>}
-            <p className="text-[11px] text-gray-500 bg-gray-50 rounded-xl px-3 py-2">{t("products_training_note")}</p>
-            {nav(countOk)}
+            <div className="flex gap-2 pt-1">
+              <button type="button" onClick={() => { setError(null); setStep(0); }} className={BTN_GHOST} data-change-pack><Back className="w-4 h-4" aria-hidden="true" />{t("details_change")}</button>
+              <button type="button" onClick={() => setStep(2)} className={`flex-1 ${BTN_PRIMARY}`} data-details-next>{t("next")}<Fwd className="w-4 h-4" aria-hidden="true" /></button>
+            </div>
           </>
         )}
 
         {step === 2 && (
           <>
-            <NumTitle n={3}>{t("brand_name")}</NumTitle>
+            <NumTitle n={3}>{t("flow_brand")}</NumTitle>
+            <BrandPreview name={brandName} packName={pkg?.name} t={t} />
             <label className="block">
-              <span className="sr-only">{t("brand_name")}</span>
+              <span className="block text-sm font-bold text-gray-800 mb-1.5">{t("brand_name")}</span>
               <span className="relative block">
                 <Crown className="absolute top-1/2 -translate-y-1/2 start-3 w-5 h-5 text-gray-700" aria-hidden="true" />
-                <input dir="auto" value={brandName} maxLength={BRAND_LIMITS.BRAND_NAME_MAX} onChange={(e) => setBrandName(e.target.value)} name="brandName"
-                  className="w-full text-base border border-gray-200 rounded-2xl ps-11 pe-3 py-3 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-violet-400" />
+                <input dir="auto" value={brandName} maxLength={BRAND_LIMITS.BRAND_NAME_MAX} onChange={(e) => { setBrandName(e.target.value); if (error) setError(null); }} name="brandName"
+                  className="w-full text-base border border-gray-200 rounded-2xl ps-11 pe-3 py-3 bg-white [unicode-bidi:plaintext] focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-violet-400" />
               </span>
-              <span className={`flex items-center gap-1 text-[11px] mt-1.5 ${nameOk ? "text-emerald-700" : "text-gray-400"}`}>
-                {nameOk && <CheckCircle className="w-3.5 h-3.5" aria-hidden="true" />}{nameOk ? t("brand_name_ok") : t("brand_name_hint", { min: BRAND_LIMITS.BRAND_NAME_MIN, max: BRAND_LIMITS.BRAND_NAME_MAX })}
+              <span className={`flex items-center gap-1 text-[11px] mt-1.5 ${nameOk ? "text-emerald-700" : nameBadChars ? "text-red-600" : "text-gray-400"}`} aria-live="polite" data-name-status>
+                {nameOk && <CheckCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />}
+                {nameOk ? t("brand_name_ok") : nameBadChars ? t("brand_name_bad_chars") : t("brand_name_hint", { min: BRAND_LIMITS.BRAND_NAME_MIN, max: BRAND_LIMITS.BRAND_NAME_MAX })}
               </span>
             </label>
             {data.brandingOptions?.length > 0 && (
-              <div className="space-y-2" role="radiogroup" aria-label={t("optional_services")}>
-                <NumTitle n={4}>{t("optional_services")}</NumTitle>
+              <div className="space-y-2 rounded-2xl border border-dashed border-violet-200 bg-violet-50/30 p-3" role="radiogroup" aria-labelledby="brand-optional-title" data-branding-options>
+                <h4 id="brand-optional-title" className="flex items-center gap-1.5 text-sm font-black text-gray-900"><Sparkles className="w-4 h-4 text-violet-600" aria-hidden="true" />{t("optional_services")}</h4>
+                <p className="text-xs text-gray-600">{t("branding_optional_note")}</p>
                 {[{ id: "", label: t("branding_none"), description: "" }, ...data.brandingOptions].map((o) => {
                   const on = brandingOptionId === o.id;
                   return (
                     <button key={o.id || "none"} type="button" role="radio" aria-checked={on} onClick={() => setBrandingOptionId(o.id)}
-                      className={`w-full flex items-start justify-between gap-3 text-start rounded-2xl border-2 p-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 ${on ? "border-violet-500 bg-violet-50/40" : "border-gray-100"}`}>
+                      className={`w-full min-h-[44px] flex items-start justify-between gap-3 text-start rounded-2xl border-2 bg-white p-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 ${on ? "border-violet-500 bg-violet-50/40" : "border-gray-100"}`}>
                       <span className="min-w-0">
                         <span dir="auto" className="block text-sm font-bold text-gray-900">{o.label}</span>
                         {o.description && <span dir="auto" className="block text-xs text-gray-500 mt-0.5 whitespace-pre-line">{o.description}</span>}
                       </span>
-                      <span className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ${on ? "bg-violet-600 text-white" : "border-2 border-gray-200 text-transparent"}`} aria-hidden="true"><Check className="w-3.5 h-3.5" /></span>
+                      <span className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${on ? "bg-violet-600 text-white" : "border-2 border-gray-300 text-transparent"}`} aria-hidden="true"><Check className="w-3.5 h-3.5" /></span>
                     </button>
                   );
                 })}
@@ -534,16 +639,27 @@ function Offer({ data, t, lang, money, dir, onRequested, onStale }) {
 
         {step === 3 && pkg && (
           <>
-            <NumTitle n={data.brandingOptions?.length > 0 ? 5 : 4}>{t("review_title")}</NumTitle>
-            <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-sm space-y-1">
-              <p className="flex justify-between gap-3"><span className="text-gray-500">{t("review_package")}</span><span dir="auto" className="font-semibold text-gray-800">{pkg.name}</span></p>
-              <p className="flex justify-between gap-3"><span className="text-gray-500">{t("review_brand")}</span><span dir="auto" className="font-semibold text-gray-800">{cleanName}</span></p>
-              {option && <p className="flex justify-between gap-3"><span className="text-gray-500">{t("review_branding")}</span><span dir="auto" className="font-semibold text-gray-800">{option.label}</span></p>}
+            <NumTitle n={4}>{t("flow_review")}</NumTitle>
+            <div className="flex items-start gap-3 rounded-xl bg-gray-50 border border-gray-100 p-3" data-review-pack>
+              <PackImage src={packCover(pkg)} alt={pkg.name} className="w-20 h-20 rounded-xl bg-white border border-gray-100 p-1 shrink-0" />
+              <div className="min-w-0 flex-1 text-sm space-y-1">
+                <p className="flex justify-between gap-3"><span className="text-gray-500">{t("review_package")}</span><span dir="auto" className="font-semibold text-gray-800 min-w-0 break-words">{pkg.name}</span></p>
+                {pkg.category ? <p className="flex justify-between gap-3"><span className="text-gray-500">{t("pack_category")}</span><span dir="auto" className="font-semibold text-gray-800 min-w-0 break-words">{pkg.category}</span></p> : null}
+                <p className="flex justify-between gap-3"><span className="text-gray-500">{t("review_brand")}</span><span dir="auto" className="font-semibold text-gray-800 min-w-0 break-words">{cleanName}</span></p>
+                {option && <p className="flex justify-between gap-3"><span className="text-gray-500">{t("review_branding")}</span><span dir="auto" className="font-semibold text-gray-800 min-w-0 break-words">{option.label}</span></p>}
+                {pkg.quantity ? <p className="flex justify-between gap-3"><span className="text-gray-500">{t("pack_pieces_label")}</span><span className="font-semibold text-gray-800">{pkg.quantity}</span></p> : null}
+              </div>
             </div>
             <div>
-              <p className="text-xs font-semibold text-gray-600 mb-2">{t("review_products")}</p>
-              <ProductList products={chosen} />
+              <p className="text-xs font-semibold text-gray-600 mb-2">{t("details_contents")}</p>
+              <ProductList products={pkg.products} />
             </div>
+            {pkg.features?.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-gray-600 mb-2">{t("details_services")}</p>
+                <ServiceList items={pkg.features} t={t} />
+              </div>
+            )}
             <Breakdown b={pkg.breakdown} t={t} money={money} />
 
             <div>
@@ -552,8 +668,8 @@ function Offer({ data, t, lang, money, dir, onRequested, onStale }) {
                 <>
                   <div dir="auto" className="max-h-48 overflow-y-auto rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-700 whitespace-pre-line leading-relaxed">{terms.text}</div>
                   <p className="text-[11px] text-gray-400 mt-1">{t("terms_version", { v: terms.version })}</p>
-                  <label className="flex items-start gap-2 mt-2 text-sm text-gray-700 cursor-pointer">
-                    <input type="checkbox" className="mt-1 w-4 h-4 accent-violet-600" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} />
+                  <label className="flex items-start gap-2 mt-2 text-sm text-gray-700 cursor-pointer min-h-[40px]">
+                    <input type="checkbox" className="mt-1 w-5 h-5 accent-violet-600 shrink-0" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} />
                     {t("accept_terms", { v: terms.version })}
                   </label>
                 </>
@@ -577,6 +693,7 @@ function Offer({ data, t, lang, money, dir, onRequested, onStale }) {
 
 /** Brand header (reference "My Brand"): monogram, name, package as category, status chips. */
 function BrandHeader({ access, t, status, sinceDays }) {
+  const reviewing = status !== "ACTIVE" && status !== "CLOSED" && access.paymentProof?.status === "SUBMITTED";
   const letter = (access.brandName || "?").trim().charAt(0).toUpperCase();
   return (
     <div className={`${CARD} p-4 sm:p-5`} data-brand-header>
@@ -586,8 +703,8 @@ function BrandHeader({ access, t, status, sinceDays }) {
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-[11px] font-bold text-violet-600">{t("my_brand")}</p>
-          <p dir="auto" className="text-xl sm:text-2xl font-black text-gray-900 leading-tight truncate">{access.brandName}</p>
-          <p dir="auto" className="text-xs text-gray-500 mt-0.5 truncate">{access.package?.name}{access.branding?.label ? ` · ${access.branding.label}` : ""}</p>
+          <p className="text-xl sm:text-2xl font-black text-gray-900 leading-tight"><bdi dir="auto" className={ISO_TRUNC}>{access.brandName}</bdi></p>
+          <p className="text-xs text-gray-500 mt-0.5"><bdi dir="auto" className={ISO_TRUNC}>{access.package?.name}{access.branding?.label ? ` · ${access.branding.label}` : ""}</bdi></p>
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2 mt-3">
@@ -595,7 +712,7 @@ function BrandHeader({ access, t, status, sinceDays }) {
           ? <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-700 text-xs font-bold"><CheckCircle className="w-3.5 h-3.5" aria-hidden="true" />{t("chip_active")}</span>
           : status === "CLOSED"
           ? <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold"><Info className="w-3.5 h-3.5" aria-hidden="true" />{t("chip_closed")}</span>
-          : <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-amber-50 text-amber-800 text-xs font-bold"><Clock className="w-3.5 h-3.5" aria-hidden="true" />{t("chip_pending")}</span>}
+          : <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-amber-50 text-amber-800 text-xs font-bold"><Clock className="w-3.5 h-3.5" aria-hidden="true" />{t(reviewing ? "chip_review" : "chip_pending")}</span>}
         {sinceDays !== null && <span className="px-2.5 py-1 rounded-xl bg-gray-50 border border-gray-100 text-gray-600 text-xs font-semibold">{t("since_days", { n: sinceDays })}</span>}
       </div>
     </div>
@@ -605,6 +722,10 @@ function BrandHeader({ access, t, status, sinceDays }) {
 /** Bank details + transfer proof upload for a request awaiting payment (one proof per request). */
 function PaymentProof({ access, t, lang, onChanged }) {
   const { dir: marketDir } = useMarketLocale(null);
+  // Bank card + upload box labels in the market language: the Deposit tab's texts (same file types, same 8 MB limit).
+  const dt = makeMarketT(AFFILIATE_TABS_TEXT, lang);
+  const bankLabels = { bankName: dt("dep_bank_name"), accountHolder: dt("dep_bank_holder"), accountNumber: dt("dep_bank_account"), copy: dt("dep_copy"), copied: dt("dep_copied") };
+  const uploadLabels = { click: dt("dep_upload_click"), drag: dt("dep_upload_drag"), uploaded: dt("dep_upload_done"), processing: dt("dep_upload_processing") };
   const [bankInfo, setBankInfo] = useState(null);
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -649,18 +770,18 @@ function PaymentProof({ access, t, lang, onChanged }) {
   return (
     <div className="space-y-3" data-brand-proof>
       <p className="text-xs text-gray-600">{t("pending_payment_step")}</p>
-      <BankDetailsCard bankInfo={bankInfo} labels={{ title: t("proof_bank_title") }} dir={marketDir} valueDir="ltr" />
+      <BankDetailsCard bankInfo={bankInfo} labels={{ ...bankLabels, title: t("proof_bank_title") }} dir={marketDir} valueDir="ltr" />
       <label className="block">
         <span className="block text-xs font-semibold text-gray-600 mb-1">{t("proof_reference")}</span>
         <input dir="auto" value={reference} onChange={(e) => setReference(e.target.value)} maxLength={120}
-          className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:outline-none focus:border-gray-400" />
+          className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:outline-none focus:border-gray-400 [unicode-bidi:plaintext]" />
       </label>
       <ProofUploadCard preview={preview} previewIsPdf={preview === "pdf"} onSelectFile={select} onRemove={() => { setFile(null); setPreview(null); }}
-        accept={PROOF_ACCEPT} labels={{ title: t("proof_title") }} />
+        accept={PROOF_ACCEPT} labels={{ ...uploadLabels, title: t("proof_title"), previewAlt: t("proof_title") }} />
+      {error && <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2" data-proof-error>{error}</p>}
       <button type="button" onClick={submit} disabled={busy || !file} className={`${BTN_PRIMARY} w-full`}>
         {busy && <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />}{t("proof_submit")}
       </button>
-      {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
     </div>
   );
 }
@@ -712,20 +833,23 @@ function PendingCard({ access, terms, t, lang, money, onChanged }) {
     if (r.ok) onChanged(); else setError(errorText(r, t, lang));
   };
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-flow-step="5">
+      <Stepper current={STEP_VERIFY} t={t} />
       <BrandHeader access={access} t={t} status={access.status} sinceDays={null} />
       <div className={`${CARD} p-4 sm:p-5 space-y-3`}>
-        <p className="text-sm font-black text-gray-900 flex items-center gap-1.5"><Clock className="w-4 h-4 text-amber-500" aria-hidden="true" />{t("pending_title")}</p>
+        <NumTitle n={STEP_VERIFY + 1}>{t("flow_verify")}</NumTitle>
+        <p className="text-sm font-black text-gray-900 flex items-center gap-1.5"><Clock className="w-4 h-4 text-amber-500" aria-hidden="true" />{t(access.paymentProof?.status === "SUBMITTED" ? "pending_title_review" : "pending_title")}</p>
         <p className="text-sm text-gray-700">{t("pending_body")}</p>
         <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-sm space-y-1">
           <p className="flex justify-between gap-3"><span className="text-gray-500">{t("review_brand")}</span><span dir="auto" className="font-semibold text-gray-800">{access.brandName}</span></p>
           <p className="flex justify-between gap-3"><span className="text-gray-500">{t("review_package")}</span><span dir="auto" className="font-semibold text-gray-800">{access.package?.name}</span></p>
+          {access.package?.category ? <p className="flex justify-between gap-3"><span className="text-gray-500">{t("pack_category")}</span><span dir="auto" className="font-semibold text-gray-800">{access.package.category}</span></p> : null}
           {access.branding?.label && <p className="flex justify-between gap-3"><span className="text-gray-500">{t("review_branding")}</span><span dir="auto" className="font-semibold text-gray-800">{access.branding.label}</span></p>}
           <p className="flex justify-between gap-3"><span className="text-gray-500">{t("bd_total")}</span><span className="font-black text-violet-600">{money(access.amount)}</span></p>
         </div>
         {access.products?.length > 0 && (
           <div>
-            <p className="text-xs font-semibold text-gray-600 mb-2">{t("review_products")}</p>
+            <p className="text-xs font-semibold text-gray-600 mb-2">{t("details_contents")}</p>
             <ProductList products={access.products} />
           </div>
         )}
@@ -756,7 +880,8 @@ function ActiveDashboard({ access, t, lang, dir, locale, money }) {
   const [dash, setDash] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const fmtDate = (d) => (d ? new Date(d).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" }) : "—");
+  // Same time zone as the order times (BrandDashboard): Morocco time, whatever the browser's zone.
+  const fmtDate = (d) => (d ? new Date(d).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short", timeZone: "Africa/Casablanca" }) : "—");
   const sinceDays = access.activatedAt ? Math.max(0, Math.floor((Date.now() - new Date(access.activatedAt).getTime()) / DAY_MS)) : null;
 
   const load = useCallback(async () => {
@@ -832,9 +957,10 @@ export default function BrandTab() {
     );
   }
 
+  const pending = access?.status === "PENDING_PAYMENT";
   return (
-    <div dir={dir} className="max-w-3xl mx-auto space-y-5 text-start">
-      {access?.status === "PENDING_PAYMENT" ? (
+    <div dir={dir} className={`${pending ? "max-w-3xl" : "max-w-5xl"} mx-auto space-y-5 text-start`}>
+      {pending ? (
         <>
           <PendingCard access={access} terms={data.terms} t={t} lang={lang} money={money} onChanged={load} />
           <WhatYouBuy t={t} />

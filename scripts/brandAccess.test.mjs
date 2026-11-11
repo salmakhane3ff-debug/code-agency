@@ -48,9 +48,10 @@ const PRICING = { deliveryCost: 50, logisticsCost: 25, vatPercent: 20,
 const config = (over = {}) => ({
   enabled: true,
   packages: [
-    { id: "p1", name: "Formation essentielle", price: 1500, active: true, description: "d", features: ["Module A", "Module B"], productCount: 3, productIds: LIST, ...PRICING },
+    // A package lists exactly its contents (3–4 products) — the approved model; the affiliate picks none.
+    { id: "p1", name: "Formation essentielle", price: 1500, active: true, description: "d", features: ["Module A", "Module B"], productCount: 3, productIds: ["prod-1", "prod-2", "prod-3"], ...PRICING },
     { id: "p2", name: "Ancienne formation", price: 900, active: false },
-    { id: "p3", name: "Formation complète", price: 2500, active: true, productCount: 4, productIds: LIST, ...PRICING },
+    { id: "p3", name: "Formation complète", price: 2500, active: true, productCount: 4, productIds: ["prod-1", "prod-2", "prod-3", "prod-4"], ...PRICING },
     { id: "p4", name: "Formation courte", price: 700, active: true, productCount: 3, productIds: ["prod-1", "prod-2", "prod-3"], ...PRICING },
   ],
   brandingOptions: [{ id: "o1", label: "Logo minimaliste", description: "", active: true }, { id: "o2", label: "Caché", active: false }],
@@ -96,29 +97,40 @@ console.log("\n1. Request validation");
   ok("nothing written by refused requests", db._tables.brandAccess.length === 0 && db._tables.brandAuditLog.length === 0);
 }
 
-// ── 1b. Product selection ─────────────────────────────────────────────────────
-console.log("\n1b. Product selection (server-side)");
+// ── 1b. Package contents (the package defines its products; no selection) ───
+// Approved final design (Create Your Own Brand): the affiliate chooses ONE package and no longer picks products —
+// the package's contents (its 3–4 products and their quantities) are what the request takes. The former
+// "choose exactly N of this list" checks (INVALID_PRODUCT_SELECTION / PRODUCT_NOT_AVAILABLE on client ids) no
+// longer exist; what replaces them: client product ids are ignored and an ineligible content product makes the
+// package unavailable (PACKAGE_NOT_FOUND), so a request can never be made with fewer or other products.
+console.log("\n1b. Package contents (server-side, no product selection)");
 {
+  const fresh = async (inp, cfg) => { const db = newDb(cfg ? { config: cfg } : undefined); const out = await requestBrandAccess("a1", inp, { db, now: NOW }); return { out, row: db._tables.brandAccess[0] }; };
+  for (const [label, ids] of [["no product ids", undefined], ["other products", ["prod-4", "prod-x", "prod-locked"]], ["malformed ids", [1, 2, 3]], ["objects with client prices", [{ id: "prod-1", price: 1 }]], ["a string", "prod-1,prod-2"]]) {
+    const { out, row } = await fresh(input({ productIds: ids }));
+    ok(`client ${label} → ignored: the package's own 3 products`, out.products.map((p) => p.id).join() === "prod-1,prod-2,prod-3" && row.selectedProducts.map((p) => p.id).join() === "prod-1,prod-2,prod-3");
+  }
+  const four = (await fresh(input({ packageId: "p3" }))).out;
+  ok("4-product package: its 4 products, in the admin's order", four.products.map((p) => p.id).join() === "prod-1,prod-2,prod-3,prod-4");
+  ok("exact-contents package (3 products listed) → those 3", (await fresh(input({ packageId: "p4" }))).out.products.map((p) => p.id).join() === "prod-1,prod-2,prod-3");
+  const withQty = config({ packages: [{ ...config().packages[3], productQuantities: { "prod-1": 50, "prod-2": 30, "prod-3": 20 }, category: "Beauté", specifications: ["Contenance 50 ml"], images: ["/uploads/pack-1.webp"] }, ...config().packages.slice(0, 3)] });
+  const q = await fresh(input({ packageId: "p4" }), withQty);
+  ok("quantities frozen with the products; category, specifications and gallery snapshotted", q.row.selectedProducts.map((p) => p.quantity).join() === "50,30,20"
+    && q.out.products.map((p) => p.quantity).join() === "50,30,20" && q.row.packageSnapshot.category === "Beauté"
+    && q.row.packageSnapshot.specifications.join() === "Contenance 50 ml" && q.row.packageSnapshot.images.join() === "/uploads/pack-1.webp"
+    && q.out.package.category === "Beauté" && q.out.package.images.join() === "/uploads/pack-1.webp");
+  const withEst = await fresh(input({ packageId: "p4" }), config({ packages: [{ ...config().packages[3], estimatedDailyEarnings: 250, estimatedMonthlyEarnings: 7500 }, ...config().packages.slice(0, 3)] }));
+  ok("admin estimates are informational only: not in the request, its snapshot or its amount", !/estimated/i.test(JSON.stringify(withEst.row)) && withEst.row.amount === "930.00"
+    && !("estimatedDailyEarnings" in withEst.out.package));
+  ok("same price and total whatever the contents (pricing unchanged)", q.row.amount === "930.00" && four.amount === 3090);
   const db = newDb();
   const code = async (inp) => (await rejects(requestBrandAccess("a1", inp, { db, now: NOW })))?.code;
-  ok("no products → INVALID_PRODUCT_SELECTION", await code(input({ productIds: undefined })) === "INVALID_PRODUCT_SELECTION");
-  ok("2 products (too few) → INVALID_PRODUCT_SELECTION", await code(input({ productIds: ["prod-1", "prod-2"] })) === "INVALID_PRODUCT_SELECTION");
-  ok("5 products (too many) → INVALID_PRODUCT_SELECTION", await code(input({ productIds: ["prod-1", "prod-2", "prod-3", "prod-4", "prod-x"] })) === "INVALID_PRODUCT_SELECTION");
-  ok("the same product twice → INVALID_PRODUCT_SELECTION", await code(input({ productIds: ["prod-1", "prod-1", "prod-2"] })) === "INVALID_PRODUCT_SELECTION");
-  ok("non-string / malformed ids → INVALID_PRODUCT_SELECTION", await code(input({ productIds: [1, 2, 3] })) === "INVALID_PRODUCT_SELECTION"
-    && await code(input({ productIds: ["prod-1", "prod-2", "<x>"] })) === "INVALID_PRODUCT_SELECTION" && await code(input({ productIds: "prod-1,prod-2,prod-3" })) === "INVALID_PRODUCT_SELECTION");
-  ok("objects with client prices are refused (only ids accepted)", await code(input({ productIds: [{ id: "prod-1", price: 1 }, "prod-2", "prod-3"] })) === "INVALID_PRODUCT_SELECTION");
-  ok("eligible product outside the brand catalogue → PRODUCT_NOT_AVAILABLE", await code(input({ productIds: ["prod-1", "prod-2", "prod-x"] })) === "PRODUCT_NOT_AVAILABLE");
-  for (const id of ["prod-draft", "prod-off", "prod-locked", "prod-gone"]) {
-    ok(`catalogue product that is ${id.slice(5)} → PRODUCT_NOT_AVAILABLE`, await code(input({ productIds: ["prod-1", "prod-2", id] })) === "PRODUCT_NOT_AVAILABLE");
+  ok("the package is checked first", await code(input({ productIds: ["prod-1"], packageId: "zz", brandName: "x" })) === "PACKAGE_NOT_FOUND");
+  for (const id of ["prod-draft", "prod-off", "prod-locked", "prod-gone", "prod-x"]) {
+    const cfg = config({ packages: [{ ...config().packages[3], productIds: ["prod-1", "prod-2", id] }] });
+    ok(`a content product that is ${id.slice(5)} (or outside the catalogue) → package not offered`, (await rejects(requestBrandAccess("a1", input({ packageId: "p4" }), { db: newDb({ config: cfg }), now: NOW })))?.code === "PACKAGE_NOT_FOUND");
   }
-  ok("the package is checked first (the product count depends on it)", await code(input({ productIds: ["prod-1"], packageId: "zz", brandName: "x" })) === "PACKAGE_NOT_FOUND");
-  ok("4 products for a 3-product package → INVALID_PRODUCT_SELECTION", await code(input({ productIds: ["prod-4", "prod-1", "prod-2", "prod-3"] })) === "INVALID_PRODUCT_SELECTION");
-  ok("3 products for a 4-product package → INVALID_PRODUCT_SELECTION", await code(input({ packageId: "p3" })) === "INVALID_PRODUCT_SELECTION");
-  ok("catalogue product not in this package's list → PRODUCT_NOT_AVAILABLE", await code(input({ packageId: "p4", productIds: ["prod-1", "prod-2", "prod-4"] })) === "PRODUCT_NOT_AVAILABLE");
-  ok("nothing written by refused selections", db._tables.brandAccess.length === 0 && db._tables.brandAuditLog.length === 0);
-  const four = await requestBrandAccess("a1", input({ packageId: "p3", productIds: ["prod-4", "prod-1", "prod-2", "prod-3"] }), { db, now: NOW });
-  ok("4-product package: 4 eligible products accepted, in the participant's order", four.products.map((p) => p.id).join() === "prod-4,prod-1,prod-2,prod-3");
+  ok("nothing written by refused requests", db._tables.brandAccess.length === 0 && db._tables.brandAuditLog.length === 0);
   const empty = newDb({ config: config({ catalogProductIds: [] }) });
   ok("empty catalogue → no package offered (PACKAGE_NOT_FOUND)", (await rejects(requestBrandAccess("a1", input(), { db: empty, now: NOW })))?.code === "PACKAGE_NOT_FOUND");
   const few = newDb({ config: config({ packages: [{ ...config().packages[0], productIds: ["prod-1", "prod-2", "prod-locked"] }] }) });
@@ -147,8 +159,8 @@ console.log("\n2. Request recorded (PENDING_PAYMENT), snapshots, audit");
   ok("audit ACCESS_REQUESTED by the affiliate", db._tables.brandAuditLog.length === 1 && db._tables.brandAuditLog[0].action === "ACCESS_REQUESTED"
     && db._tables.brandAuditLog[0].actorType === "AFFILIATE" && db._tables.brandAuditLog[0].actorId === "a1");
   ok("participant view hides payment reference, request key and admin ids", !("paymentReference" in out) && !("clientRequestId" in out) && !("activatedBy" in out));
-  ok("selected products snapshotted from the store: id, name, first image only", JSON.stringify(row.selectedProducts) === JSON.stringify([
-    { id: "prod-1", title: "Sérum éclat", image: "https://cdn.test/1.jpg" }, { id: "prod-2", title: "Crème de nuit", image: "/uploads/2.jpg" }, { id: "prod-3", title: "Huile d'argan", image: null }]));
+  ok("package contents snapshotted from the store: id, name, first image + the package's quantity (none set here)", JSON.stringify(row.selectedProducts) === JSON.stringify([
+    { id: "prod-1", title: "Sérum éclat", image: "https://cdn.test/1.jpg", quantity: null }, { id: "prod-2", title: "Crème de nuit", image: "/uploads/2.jpg", quantity: null }, { id: "prod-3", title: "Huile d'argan", image: null, quantity: null }]));
   ok("no store price, cost or stock copied into the request", !/regularPrice|salePrice|costPerItem|199|300|\b40\b/.test(JSON.stringify(row.selectedProducts)));
   ok("participant view lists the selected products", out.products.length === 3 && out.products[0].title === "Sérum éclat");
   ok("audit row records the selected product ids", db._tables.brandAuditLog[0].after.productIds.join() === "prod-1,prod-2,prod-3");
@@ -169,7 +181,8 @@ console.log("\n3. Idempotency and one open access per affiliate");
   const again = await requestBrandAccess("a1", input(), { db, now: NOW });
   ok("same request id → same request, one row, one audit row", first.id === again.id && db._tables.brandAccess.length === 1 && db._tables.brandAuditLog.length === 1);
   ok("same request id, different content → IDEMPOTENCY_CONFLICT", (await rejects(requestBrandAccess("a1", input({ brandName: "Autre" }), { db, now: NOW })))?.code === "IDEMPOTENCY_CONFLICT");
-  ok("same request id, different products → IDEMPOTENCY_CONFLICT", (await rejects(requestBrandAccess("a1", input({ productIds: ["prod-1", "prod-2", "prod-4"] }), { db, now: NOW })))?.code === "IDEMPOTENCY_CONFLICT");
+  // (Products are no longer sent: a different package — even one with the same 3 products — is "different content".)
+  ok("same request id, different package → IDEMPOTENCY_CONFLICT", (await rejects(requestBrandAccess("a1", input({ packageId: "p4" }), { db, now: NOW })))?.code === "IDEMPOTENCY_CONFLICT");
   ok("a second request while one is open → ACCESS_EXISTS", (await rejects(requestBrandAccess("a1", input({ clientRequestId: "req-00000002" }), { db, now: NOW })))?.code === "ACCESS_EXISTS");
   ok("another affiliate is not affected", (await requestBrandAccess("a2", input({ clientRequestId: "req-00000009" }), { db, now: NOW })).status === "PENDING_PAYMENT");
 
@@ -336,14 +349,14 @@ console.log("\n7. Route handlers");
   const ov = await (await aff.overview(new Request("http://x"), {}, { affiliateId: "a1" })).json();
   ok("overview returns the offer, published terms and own access", ov.enabled === true && ov.terms.version === 1 && ov.access.id === body.id);
   const p1 = ov.packages.find((p) => p.id === "p1");
-  ok("overview: offered packages with product count, eligible products (admin order, no price) and breakdown",
-    ov.packages.map((p) => p.id).join() === "p4,p1,p3" && p1.productCount === 3 && p1.products.map((p) => p.id).join() === "prod-1,prod-2,prod-3,prod-4"
-    && p1.products.every((p) => Object.keys(p).sort().join() === "id,image,title") && p1.breakdown.total === 1890, ov.packages.map((p) => p.id).join());
+  ok("overview: offered packages with product count, their contents (admin order, quantity, no price) and breakdown",
+    ov.packages.map((p) => p.id).join() === "p4,p1,p3" && p1.productCount === 3 && p1.products.map((p) => p.id).join() === "prod-1,prod-2,prod-3"
+    && p1.products.every((p) => Object.keys(p).sort().join() === "id,image,quantity,title") && p1.breakdown.total === 1890, ov.packages.map((p) => p.id).join());
   ok("inactive / incomplete packages and pricing internals never sent", !ov.packages.some((p) => p.id === "p2") && !("percentages" in p1) && !("productIds" in p1));
-  ok("unsafe image URL never sent", p1.products.find((p) => p.id === "prod-4").image === null);
+  ok("unsafe image URL never sent", ov.packages.find((p) => p.id === "p3").products.find((p) => p.id === "prod-4").image === null);
   ok("own access shows brand name and selected products", ov.access.brandName === "Ma Marque" && ov.access.products.map((p) => p.id).join() === "prod-1,prod-2,prod-3");
-  ok("bad selection → 400, unavailable product → 409", (await aff.requestAccess(post(input({ clientRequestId: "req-00000007", productIds: ["prod-1"] })), {}, { affiliateId: "a2" })).status === 400
-    && (await aff.requestAccess(post(input({ clientRequestId: "req-00000008", productIds: ["prod-1", "prod-2", "prod-locked"] })), {}, { affiliateId: "a2" })).status === 409);
+  ok("client product ids are ignored by the route too (the package's contents are taken)", (await aff.requestAccess(post(input({ clientRequestId: "req-00000007", productIds: ["prod-locked"] })), {}, { affiliateId: "a2" })).status === 201
+    && db._tables.brandAccess.find((r) => r.affiliateId === "a2").selectedProducts.map((p) => p.id).join() === "prod-1,prod-2,prod-3");
   const cands = await (await adm.listProducts(new Request("http://x"), {}, { userId: "admin-1" })).json();
   ok("admin product picker: every store product with eligibility + catalogue flags", cands.length === PRODUCTS.length
     && cands.find((p) => p.id === "prod-x").eligible === true && cands.find((p) => p.id === "prod-x").inCatalog === false
@@ -361,8 +374,8 @@ console.log("\n7. Route handlers");
   const ov2 = await (await aff.overview(new Request("http://x"), {}, { affiliateId: "a1" })).json();
   ok("offer disabled later: participant still gets their active access", ov2.enabled === false && ov2.access.status === "ACTIVE" && !("packages" in ov2));
   ok("cancel via the route only for own requests", (await aff.cancelAccess(post({}), { params: Promise.resolve({ id: body.id }) }, { affiliateId: "a2" })).status === 404);
-  const bad = await affiliateBrandHandlers({ db: newDb(), now: () => NOW }).requestAccess(post(input({ productIds: ["prod-1"] })), {}, { affiliateId: "a2" }); // offer is off in `db` by now
-  ok("selection error tells the client the package's exact count", bad.status === 400 && (await bad.json()).expected === 3);
+  const bad = await affiliateBrandHandlers({ db: newDb(), now: () => NOW }).requestAccess(post(input({ packageId: "zz" })), {}, { affiliateId: "a2" }); // offer is off in `db` by now
+  ok("unknown package → 404 with its code (no product-count error any more)", bad.status === 404 && (await bad.json()).code === "PACKAGE_NOT_FOUND");
   const reqAudit = await (await adm.listAudit(new Request(`http://x/api/admin/brand/audit?entityId=${body.id}`), {}, { userId: "admin-1" })).json();
   ok("audit filtered to one request", reqAudit.length >= 2 && reqAudit.every((r) => r.entityId === body.id)
     && reqAudit.some((r) => r.action === "ACCESS_REQUESTED") && reqAudit.some((r) => r.action === "ACCESS_ACTIVATED"));

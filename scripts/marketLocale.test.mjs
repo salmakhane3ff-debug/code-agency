@@ -158,10 +158,19 @@ const ALLOWED = [
   // Store header + selector: changed ONLY for market-scoped routes (pinned below); the first-paint CSS gate.
   /^src\/components\/template\/Header\.jsx$/, /^src\/components\/template\/LanguageSwitcher\.jsx$/, /^src\/app\/globals\.css$/,
 ];
-const outside = [...changed, ...untracked].filter((f) => !ALLOWED.some((re) => re.test(f)));
+// Create Your Own Brand — approved final design (after Task 7): each package defines its 3–4 products and their
+// quantities (no product-selection step), with category, gallery and specifications managed by the admin. These exact
+// brand files change for it (admin package form + labels, the package model, the request taking the package's
+// contents); every other admin file, API route, service, schema and migration stays untouched (checked below).
+const BRAND_FINAL_DESIGN = [
+  "src/app/admin/brand/PackagesTab.jsx", "src/app/admin/brand/ProductsTab.jsx", "src/app/admin/brand/AccessesTab.jsx", "src/app/admin/brand/ui.jsx",
+  "src/lib/brandProgram.js", "src/lib/services/brandAccessService.js",
+];
+const isBrandFinal = (f) => BRAND_FINAL_DESIGN.includes(f);
+const outside = [...changed, ...untracked].filter((f) => !ALLOWED.some((re) => re.test(f)) && !isBrandFinal(f));
 ok("src changes stay inside the four areas + the shared language plumbing", outside.length === 0, outside);
-ok("no admin file changed", ![...changed, ...untracked].some((f) => /^src\/(app|components)\/admin\//.test(f) || /^src\/app\/api\/admin\//.test(f)));
-ok("no API route, service, schema or migration changed", ![...changed, ...untracked].some((f) => /^src\/app\/api\/|^src\/lib\/services\/|^prisma\//.test(f)));
+ok("no admin file changed (except the approved brand package-management files)", ![...changed, ...untracked].some((f) => !isBrandFinal(f) && (/^src\/(app|components)\/admin\//.test(f) || /^src\/app\/api\/admin\//.test(f))));
+ok("no API route, service, schema or migration changed (except the approved brand request service)", ![...changed, ...untracked].some((f) => !isBrandFinal(f) && /^src\/app\/api\/|^src\/lib\/services\/|^prisma\//.test(f)));
 ok("the store header's route wiring is unchanged (same routes show / hide it)", !changed.includes("src/components/template/MainHeaderWrapper.jsx"));
 
 // ── 8. Store header + selector: market-scoped routes only ─────────────────────

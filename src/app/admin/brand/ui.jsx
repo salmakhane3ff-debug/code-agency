@@ -28,13 +28,18 @@ export const ERROR_TEXT = {
   INVALID_PRODUCT_ID: "Identifiant de produit invalide",
   TOO_MANY_PRODUCTS: "Trop de produits dans le catalogue",
   INVALID_AMOUNT: "Montant invalide (0 ou plus, 2 décimales)",
+  INVALID_ESTIMATE: "Estimation invalide : montant supérieur à 0 (2 décimales au plus), ou laissez vide",
   INVALID_PRODUCT_COUNT: "Le nombre de produits doit être 3 ou 4",
   INVALID_QUANTITY: "Nombre de pièces invalide (entier, 1 ou plus)",
   INVALID_BASE: "Base de calcul invalide",
   PERCENT_SUM_OVER_100: "Les pourcentages appliqués à une même base ne peuvent pas dépasser 100 %",
   REQUIRED_WHEN_ACTIVE: "Requis pour activer le pack",
-  NOT_ENOUGH_PRODUCTS: "Le pack doit contenir au moins autant de produits que le nombre à choisir",
+  NOT_ENOUGH_PRODUCTS: "Le pack ne contient pas assez de produits",
   PRODUCT_NOT_IN_CATALOGUE: "Un produit du pack n’est plus dans le catalogue (onglet Catalogue produits)",
+  PACK_PRODUCTS_COUNT: "Le pack doit contenir 3 ou 4 produits",
+  INVALID_IMAGE: "Image invalide (URL https://… ou /uploads/…)",
+  TOO_MANY_IMAGES: "Trop d’images (10 au maximum)",
+  TOO_MANY_SPECIFICATIONS: "Trop de spécifications (20 au maximum)",
 };
 
 export const errText = (code) => (code ? ERROR_TEXT[code] || code : null);

@@ -86,7 +86,7 @@ function Authorizations({ affiliateId, refresh }) {
 const INTEGRITY_LABELS = {
   amountMatchesSnapshot: "montant = total enregistré",
   breakdownRecomputes: "détail du prix recalculable",
-  productsValid: "produits choisis valides",
+  productsValid: "produits du pack valides",
   brandNameValid: "nom de marque valide",
   requestIdValid: "identifiant de demande valide",
   authorizationConsistent: "autorisation cohérente",
@@ -143,7 +143,7 @@ function AccessRow({ a, onChanged }) {
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p dir="auto" className="text-sm font-bold text-gray-900">{a.brandName}</p>
-          <p className="text-xs text-gray-500">@{a.affiliate?.username || a.affiliateId} · {a.package?.name} · {money(a.amount)} · conditions v{a.termsVersion}</p>
+          <p className="text-xs text-gray-500">@{a.affiliate?.username || a.affiliateId} · <bdi>{a.package?.name}</bdi> · <bdi className="whitespace-nowrap">{money(a.amount)}</bdi> · conditions v{a.termsVersion}</p>
           <p className="text-[11px] text-gray-400">Demandé le {fmt(a.createdAt)}{a.activatedAt ? ` · activé le ${fmt(a.activatedAt)}` : ""}{a.closedAt ? ` · clôturé le ${fmt(a.closedAt)}` : ""}</p>
           {a.paymentReference && <p className="text-[11px] text-gray-500">Paiement vérifié : {a.paymentReference}</p>}
           {a.closeReason && <p className="text-[11px] text-gray-500">Motif : {a.closeReason}</p>}
@@ -176,7 +176,7 @@ function AccessRow({ a, onChanged }) {
             );
           })()}
           {a.products?.length > 0 && (
-            <p dir="auto" className="text-[11px] text-gray-600">Produits choisis : {a.products.map((p) => p.title).join(" · ")}</p>
+            <p dir="auto" className="text-[11px] text-gray-600">Contenu du pack : {a.products.map((p) => (p.quantity ? `${p.title} ×${p.quantity}` : p.title)).join(" · ")}</p>
           )}
         </div>
         <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${ui.cls}`}>{ui.label}</span>
