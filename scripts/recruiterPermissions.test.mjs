@@ -804,6 +804,9 @@ console.log('\n4. Regression and scope');
     'src/app/affiliate/dashboard/RewardsTab.jsx', 'src/app/affiliate/dashboard/_brand/BrandDashboard.jsx', 'src/app/globals.css',
     'src/components/template/Header.jsx', 'src/components/template/LanguageSwitcher.jsx',
     'src/lib/brandI18n.js', 'src/lib/serverText/affiliateServerText.js', 'src/lib/serverText/liveText.js',
+    // Create Your Own Brand visual review (UI only): the simulated-orders chart keeps its last date label inside the
+    // chart (text anchor only) — no data, API or service change.
+    'src/components/brand/BrandSimStats.jsx',
     // Phase 7 Stage F (approved clarification): an affiliate with children cannot be deleted — the deletion helper and the
     // 409 mapping of the admin DELETE route and of the legacy controller (pinned in recruiterAffiliates.test.mjs).
     'src/app/api/admin/affiliates/route.js', 'src/lib/affiliateDeletion.js', 'src/lib/controllers/affiliateController.js',

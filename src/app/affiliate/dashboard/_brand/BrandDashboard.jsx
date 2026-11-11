@@ -203,8 +203,8 @@ function Hero({ access, t, d, closed, locale }) {
           <span className="text-lg font-black text-amber-400 font-serif">{letter}</span>
         </div>
         <div className="min-w-0 flex-1">
-          <p dir="auto" className="text-sm font-black truncate">{access.brandName}</p>
-          <p dir="auto" className="text-[11px] text-violet-50/85 truncate">{access.package?.name}{access.branding?.label ? ` · ${access.branding.label}` : ""}</p>
+          <p className="text-sm font-black"><bdi dir="auto" className="inline-block max-w-full truncate align-top">{access.brandName}</bdi></p>
+          <p className="text-[11px] text-violet-50/85"><bdi dir="auto" className="inline-block max-w-full truncate align-top">{access.package?.name}{access.branding?.label ? ` · ${access.branding.label}` : ""}</bdi></p>
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
           <span className={`px-2 py-0.5 rounded-lg text-[11px] font-bold ${closed ? "bg-slate-100 text-slate-700" : "bg-emerald-100 text-emerald-800"}`}>{t(closed ? "chip_closed" : "chip_active")}</span>
@@ -326,7 +326,11 @@ function OrderMoney({ m, status, d, money, locale, detailed = false }) {
     <dl className="mt-2 rounded-xl bg-gray-50/80 px-2.5 py-1.5 grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5 text-[11px]" data-order-money={m ? m.kind : "none"}>
       <dt className="text-gray-500">{d("fin_price")}</dt><dd dir="ltr" className="font-bold text-gray-800 text-end">{m ? money(m.price) : "—"}</dd>
       <dt className="text-gray-500 min-w-0">
-        {d("fin_expenses")}{m && !detailed && <span className="text-gray-400"> ({d("fin_exp_delivery")} {n(m.expenses.delivery)} · {d("fin_exp_notification")} {n(m.expenses.notification)} · {d("fin_exp_confirmation")} {n(m.expenses.confirmation)})</span>}
+        {d("fin_expenses")}{m && !detailed && (
+          <span className="block text-gray-400" data-exp-breakdown>
+            <bdi>{d("fin_exp_delivery")} {n(m.expenses.delivery)}</bdi> · <bdi>{d("fin_exp_notification")} {n(m.expenses.notification)}</bdi> · <bdi>{d("fin_exp_confirmation")} {n(m.expenses.confirmation)}</bdi>
+          </span>
+        )}
       </dt>
       <dd dir="ltr" className="font-bold text-gray-800 text-end">{m ? `−${money(m.expenses.total)}` : "—"}</dd>
       {rows.map(([label, value]) => (
@@ -346,7 +350,7 @@ function OrderCard({ o, d, ago, money, locale, onOpen }) {
       <Thumb src={o.product?.image} className="w-11 h-11 rounded-full" />
       <div className="flex-1 min-w-0">
         <div className="flex items-start justify-between gap-2">
-          <p className="text-sm font-black text-gray-800 truncate min-w-0"><bdi>{o.product?.title || "—"}</bdi></p>
+          <p className="text-sm font-black text-gray-800 min-w-0"><bdi dir="auto" className="inline-block max-w-full truncate align-top">{o.product?.title || "—"}</bdi></p>
           <span className="text-[11px] text-gray-400 shrink-0 whitespace-nowrap" data-order-time>{ago(o.at)}</span>
         </div>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1">
@@ -380,7 +384,7 @@ function OrderSheet({ order, t, d, locale, ago, money, onClose }) {
         <div className="flex items-center gap-3 rounded-2xl bg-violet-50/60 p-3 mb-1">
           <Thumb src={order.product?.image} className="w-14 h-14 rounded-xl border border-white" />
           <div className="min-w-0 flex-1">
-            <p dir="auto" className="text-sm font-black text-gray-900 truncate">{order.product?.title || "—"}</p>
+            <p className="text-sm font-black text-gray-900"><bdi dir="auto" className="inline-block max-w-full truncate align-top">{order.product?.title || "—"}</bdi></p>
             <span className="inline-block mt-1 px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-black tracking-wide">{d("sim_tag")}</span>
           </div>
         </div>

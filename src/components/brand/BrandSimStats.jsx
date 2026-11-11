@@ -159,7 +159,7 @@ export function LineChart({ stats, t, locale, series = [] }) {
           <text x="40" y="11" textAnchor="middle" fontSize="8.5" fontWeight="700" fill="#fff">{t("chart_tip", { n: cur.total })}</text>
           <text x="40" y="21" textAnchor="middle" fontSize="7.5" fill="#d1d5db">{fmt(cur.start, true)}</text>
         </g>
-        {buckets.map((b, i) => (i % every === 0 ? <text key={b.start} x={pts[i][0]} y={H - 6} textAnchor="middle" fontSize="8" fill="#9ca3af">{fmt(b.start)}</text> : null))}
+        {buckets.map((b, i) => (i % every === 0 ? <text key={b.start} x={pts[i][0]} y={H - 6} textAnchor={pts[i][0] > W - P.r - 14 ? "end" : "middle"} fontSize="8" fill="#9ca3af">{fmt(b.start)}</text> : null))}
       </svg>
     </div>
   );
