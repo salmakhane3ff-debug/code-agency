@@ -275,7 +275,7 @@ function EditStoreMap({ data, onChange }) {
       <Field label="Message WhatsApp pré-rempli">
         <input className="field" dir="rtl" value={data.whatsappMessage ?? ""} onChange={set("whatsappMessage")}
           placeholder="السلام عليكم، بغيت نستفسر على المحل والمنتجات." />
-        <p className="text-[11px] text-gray-400 mt-1">Le bouton WhatsApp utilise le numéro de téléphone ci-dessus (normalisé au format 212…). Il est masqué si aucun numéro n'est renseigné.</p>
+        <p className="text-[11px] text-gray-400 mt-1">Le bouton WhatsApp utilise le numéro de téléphone ci-dessus (normalisé au format 212…). Il est masqué si aucun numéro n&apos;est renseigné.</p>
       </Field>
 
       {/* Preview uses the EXACT storefront renderer — the two can never differ. */}
@@ -500,7 +500,7 @@ function EditCollectionSection({ data, onChange }) {
           checked={data.showViewMore !== false}
           onChange={e => onChange({ ...data, showViewMore: e.target.checked })}
         />
-        Show "View More" button
+        Show &quot;View More&quot; button
       </label>
     </div>
   );
@@ -544,10 +544,13 @@ function EditDemoLeaderboard({ data, onChange, max, placeholder, page }) {
       <label className="flex items-center gap-2 text-sm cursor-pointer">
         <input type="checkbox" checked={data.showViewAll !== false} onChange={e => onChange({ ...data, showViewAll: e.target.checked })} /> Lien « Voir tout » vers {page}
       </label>
-      <p className="text-xs text-gray-400">Données de démonstration (simulation) : la section l&apos;indique toujours aux visiteurs.</p>
+      <p className="text-xs text-gray-400">Données de démonstration (simulation) : la section l&apos;indique toujours aux affiliés.</p>
+      <p className="text-xs text-gray-500" data-applies-to-dashboard>Ces réglages s&apos;appliquent à la section du tableau de bord affilié (elle n&apos;est plus affichée sur la page d&apos;accueil).</p>
     </div>
   );
 }
+// Shown on the Affiliate Dashboard (not on the homepage): fixed position there, so no move buttons in the list.
+const DASHBOARD_SECTION_TYPES = new Set(["top_members", "top_brands"]);
 function EditTopMembers(props) { return <EditDemoLeaderboard {...props} max={21} placeholder="Top Membres" page="/top-members" />; }
 function EditTopBrands(props)  { return <EditDemoLeaderboard {...props} max={20} placeholder="Top Marques" page="/top-brands" />; }
 
@@ -748,7 +751,7 @@ export default function HomepageBuilder() {
             <div className="text-center py-16 bg-white rounded-2xl border-2 border-dashed border-gray-200">
               <LayoutGrid className="mx-auto mb-3 text-gray-300" size={40} />
               <p className="text-gray-500 font-medium">No sections yet</p>
-              <p className="text-gray-400 text-sm mt-1">Click "Add Section" to get started</p>
+              <p className="text-gray-400 text-sm mt-1">Click &quot;Add Section&quot; to get started</p>
             </div>
           )}
 
@@ -784,14 +787,19 @@ export default function HomepageBuilder() {
 
                   {/* Actions */}
                   <div className="flex items-center gap-1 shrink-0">
-                    <button onClick={() => moveUp(idx)} disabled={idx === 0}
-                      className="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-30 transition-colors">
-                      <ChevronUp size={14} />
-                    </button>
-                    <button onClick={() => moveDown(idx)} disabled={idx === sections.length - 1}
-                      className="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-30 transition-colors">
-                      <ChevronDown size={14} />
-                    </button>
+                    {/* Top Members / Top Brands: fixed position on the Affiliate Dashboard → no move buttons. */}
+                    {!DASHBOARD_SECTION_TYPES.has(sec.type) && (
+                      <>
+                        <button onClick={() => moveUp(idx)} disabled={idx === 0}
+                          className="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-30 transition-colors">
+                          <ChevronUp size={14} />
+                        </button>
+                        <button onClick={() => moveDown(idx)} disabled={idx === sections.length - 1}
+                          className="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-30 transition-colors">
+                          <ChevronDown size={14} />
+                        </button>
+                      </>
+                    )}
                     <button onClick={() => toggle(sec.id)}
                       className={`p-1.5 rounded-lg transition-colors ${sec.visible ? "hover:bg-gray-100 text-gray-600" : "hover:bg-yellow-50 text-yellow-500"}`}>
                       {sec.visible ? <Eye size={14} /> : <EyeOff size={14} />}

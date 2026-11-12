@@ -382,10 +382,18 @@ console.log("\n4. Landing mode, sitemap, homepage builder");
   ok("builder: EDIT_FORMS has both, previewCount bounded 1..21 / 1..20, showViewAll checkbox",
     /top_members: EditTopMembers/.test(hb) && /top_brands: EditTopBrands/.test(hb) && /max=\{21\}/.test(hb) && /max=\{20\}/.test(hb) && /showViewAll: e\.target\.checked/.test(hb));
   const rr = read("src/components/HomeBuilder/HomeSectionRenderer.jsx");
-  ok("renderer: RENDERERS map has both", /top_members:\s+\(\{ data, id \}\) => <HomeTopMembers data=\{data\} sectionId=\{id\} \/>/.test(rr) && /top_brands:\s+\(\{ data, id \}\) => <HomeTopBrands data=\{data\} sectionId=\{id\} \/>/.test(rr));
-  ok("renderer: consecutive demo sections are grouped in one DemoCompetitionBlock (community heading once), other sections unchanged",
-    /export function groupDemoSections\(sections\)/.test(rr) && /<DemoCompetitionBlock count=\{sec\.group\.length\}>/.test(rr) && /groupDemoSections\(sections\.filter\(s => s\.visible !== false\)\)/.test(rr));
-  ok("renderer: both contained (CONTAINER_SECTIONS)", /CONTAINER_SECTIONS = new Set\(\[[\s\S]*"top_members",\s*"top_brands",[\s\S]*?\]\)/.test(rr));
+  // Moved to the Affiliate Dashboard (approved): the Store Homepage no longer renders Top Members / Top Brands. Saved
+  // layouts keep their entries (the admin settings above are unchanged); the renderer skips them explicitly.
+  const rrCode = stripJs(rr);
+  ok("homepage: Top Members / Top Brands are not rendered any more (explicit HIDDEN_ON_HOMEPAGE, stored entries skipped)",
+    /export const HIDDEN_ON_HOMEPAGE = new Set\(\["top_members", "top_brands"\]\);/.test(rrCode)
+    && /sections\.filter\(s => s\.visible !== false && !HIDDEN_ON_HOMEPAGE\.has\(s\.type\)\)/.test(rrCode)
+    && !/top_members:|top_brands:/.test(rrCode.slice(rrCode.indexOf("const RENDERERS"), rrCode.indexOf("HIDDEN_ON_HOMEPAGE"))));
+  ok("homepage: no Demo Competition component, block or grouping left in the renderer",
+    !/HomeTopMembers|HomeTopBrands|DemoCompetitionBlock|groupDemoSections/.test(rrCode));
+  ok("homepage: both removed from CONTAINER_SECTIONS, the other contained sections unchanged",
+    !/"top_members"|"top_brands"/.test(rrCode.slice(rrCode.indexOf("CONTAINER_SECTIONS"), rrCode.indexOf("]);", rrCode.indexOf("CONTAINER_SECTIONS"))))
+    && /CONTAINER_SECTIONS = new Set\(\[[\s\S]*"before_after",\s*"store_map",\s*\]\)/.test(rrCode));
   {
     // Approved mobile design (homepage leaderboards).
     const card = stripJs(SRC[`${UI_DIR}/LeaderCard.jsx`]);

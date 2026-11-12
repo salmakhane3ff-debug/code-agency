@@ -14,8 +14,9 @@ import { previewCountOf } from "./HomeTopMembers";
 import HomeSectionFrame from "./HomeSectionFrame";
 import { useDemoBlockReport } from "./DemoCompetitionBlock";
 
-export default function HomeTopBrands({ data = {}, sectionId = "top_brands" }) {
-  const { t, lang, dir } = useNeutralDemoText(useDemoText());
+/** `lang` (optional): the page's own language (the Affiliate Dashboard passes its market language); default: the site language. */
+export default function HomeTopBrands({ data = {}, sectionId = "top_brands", lang: langOverride }) {
+  const { t, lang, dir } = useNeutralDemoText(useDemoText(langOverride));
   const count = previewCountOf(data.previewCount, MAX_BRANDS);
   const { data: res, error, ref } = useLivePolling(`/api/demo-competition/brands?limit=${count}`);
   const brands = res?.brands;
