@@ -10,8 +10,11 @@
  *     `cache: "no-store"`; diffRanks / movementOf (up / down / new / value change)
  *   • i18n: same keys ar / fr, no empty value, every key used by the UI exists,
  *     money / relative time / initials helpers
- *   • static: the UI only calls /api/demo-competition/*, the disclosure is on
- *     every page and every card, the flame classes are keyed on rank 1 / 2 / 3
+ *   • public wording: no demo / test / beta / internal label in the FR + AR texts,
+ *     the page metadata or the JSX; ONE central simulation disclosure
+ *     (src/lib/demoCompetition/disclosure.js) shown discreetly once per page and
+ *     once under the dashboard block, nothing when disabled
+ *   • static: the UI only calls /api/demo-competition/*, the flame classes are keyed on rank 1 / 2 / 3
  *     only, reduced-motion handling (CSS media query + MotionConfig /
  *     useReducedMotion), no Math.random, landing-mode allowlist, homepage
  *     builder types + DEFAULTS, renderer map, sitemap.
@@ -28,6 +31,7 @@ import {
   DEMO_COMP_TEXT, DEMO_EVENT_TYPES, demoT, demoLang, demoDir, formatAmount, formatMoney, formatCount,
   relativeTime, initials, hueOf, currencyUnit,
 } from "../src/lib/demoCompetition/i18n.js";
+import { SIMULATION_DISCLOSURE, simulationDisclosure, demoPageMetadata } from "../src/lib/demoCompetition/disclosure.js";
 import { flameClass, flameSpaceClass, FLAME_RANKS } from "../src/components/demoCompetition/flame.js";
 import * as L from "../src/lib/landingMode.js";
 
@@ -211,7 +215,7 @@ console.log("\n2. i18n");
 const UI_DIR = "src/components/demoCompetition";
 const UI_FILES = readdirSync(join(ROOT, UI_DIR)).filter((f) => /\.(jsx?|css)$/.test(f)).map((f) => `${UI_DIR}/${f}`);
 const PAGE_FILES = ["src/app/top-members/page.jsx", "src/app/top-members/[id]/page.jsx", "src/app/top-brands/page.jsx", "src/app/top-brands/[id]/page.jsx"];
-const LIB_FILES = ["src/lib/demoCompetition/i18n.js", "src/lib/demoCompetition/livePolling.js"];
+const LIB_FILES = ["src/lib/demoCompetition/i18n.js", "src/lib/demoCompetition/livePolling.js", "src/lib/demoCompetition/disclosure.js"];
 const ALL_UI = [...UI_FILES, ...PAGE_FILES, ...LIB_FILES];
 const SRC = Object.fromEntries(ALL_UI.map((f) => [f, read(f)]));
 {
@@ -233,10 +237,9 @@ const SRC = Object.fromEntries(ALL_UI.map((f) => [f, read(f)]));
   ok(`every t("key") used by the UI exists (${used.size} keys)`, used.size > 40 && missing.length === 0, missing);
   const dynamic = [...DEMO_EVENT_TYPES.map((x) => `event_${x}`), "moved_up", "moved_down", "moved_up_24h", "moved_down_24h"];
   ok("dynamic keys (event_<TYPE>, moved_<dir>[_24h]) exist", dynamic.every((k) => k in fr && k in ar), dynamic.filter((k) => !(k in fr)));
-  ok("disclosure wording: fr \"Démo / Simulation\", ar \"عرض توضيحي / محاكاة\"", fr.sim_badge === "Démo / Simulation" && ar.sim_badge === "عرض توضيحي / محاكاة");
-  ok("banner says simulated, not real sales / earnings, not withdrawable (fr + ar)",
-    /simulées/.test(fr.sim_banner) && /vraies ventes/.test(fr.sim_banner) && /vrais gains/.test(fr.sim_banner) && /retirable/.test(fr.sim_banner)
-    && /محاكاة/.test(ar.sim_banner) && /مبيعات حقيقية/.test(ar.sim_banner) && /سحب/.test(ar.sim_banner));
+  // Changed requirement: no "Démo / Simulation" label any more; the disclosure moved out of the dictionaries to the ONE
+  // central module (src/lib/demoCompetition/disclosure.js, §2b), so the sim_* keys are gone.
+  ok("no sim_* label keys left in the dictionaries (the disclosure lives in disclosure.js)", !kf.some((k) => /^sim_/.test(k)), kf.filter((k) => /^sim_/.test(k)));
 
   const t = demoT("fr"), ta = demoT("ar");
   ok("demoT interpolation {var}", t("rank_of", { rank: 2, total: 21 }) === "Rang 2 sur 21" && ta("rank_of", { rank: 2, total: 21 }) === "المرتبة 2 من 21");
@@ -252,6 +255,57 @@ const SRC = Object.fromEntries(ALL_UI.map((f) => [f, read(f)]));
   ok("relative time (ar) + invalid date → ''", relativeTime("2026-11-09T11:55:00Z", now, "ar") === "منذ 5 دقيقة" && relativeTime("bad", now, "fr") === "");
   ok("initials fallback (never a generic logo)", initials("Sara El Amrani") === "SA" && initials("nadia") === "N" && initials("  ") === "?" && initials("مريم بنعلي") === "مب");
   ok("deterministic hue", hueOf("abc") === hueOf("abc") && hueOf("abc") >= 0 && hueOf("abc") < 360);
+}
+
+// ── 2b. Public wording + central simulation disclosure ───────────────────────
+console.log("\n2b. Public wording and the central simulation disclosure");
+const FORBIDDEN = /\bd[ée]mo\b|d[ée]monstration|\btest\b|b[êe]ta|exp[ée]rimental|temporaire|interne|توضيحي|تجريبي|تجربة/i;
+{
+  const fr = DEMO_COMP_TEXT.fr, ar = DEMO_COMP_TEXT.ar;
+  const bad = [...Object.entries(fr).map(([k, v]) => [`fr.${k}`, v]), ...Object.entries(ar).map(([k, v]) => [`ar.${k}`, v])].filter(([, v]) => FORBIDDEN.test(v)).map(([k]) => k);
+  ok("no demo / test / beta / experimental / temporary / internal wording in the FR + AR dictionaries", bad.length === 0, bad);
+  const DT = SIMULATION_DISCLOSURE.text;
+  ok("disclosure: one frozen config { enabled: true, text: { fr, ar } }", Object.isFrozen(SIMULATION_DISCLOSURE) && Object.isFrozen(DT) && SIMULATION_DISCLOSURE.enabled === true
+    && Object.keys(DT).sort().join() === "ar,fr");
+  ok("disclosure is accurate (simulated data, not real sales / earnings) in FR + AR, and has no demo / test wording itself",
+    /simulées/.test(DT.fr) && /ventes/.test(DT.fr) && /gains réels/.test(DT.fr) && /محاكاة/.test(DT.ar) && /مبيعات/.test(DT.ar) && /حقيقية/.test(DT.ar)
+    && !FORBIDDEN.test(DT.fr) && !FORBIDDEN.test(DT.ar) && /[\u0600-\u06FF]/.test(DT.ar) && !/[\u0600-\u06FF]/.test(DT.fr));
+  ok("simulationDisclosure(lang): fr / ar text, other languages → fr", simulationDisclosure("fr") === DT.fr && simulationDisclosure("ar") === DT.ar && simulationDisclosure("en") === DT.fr && simulationDisclosure(undefined) === DT.fr);
+  ok("disabled (enabled: false) or empty text → null (the note renders nothing)",
+    simulationDisclosure("fr", { ...SIMULATION_DISCLOSURE, enabled: false }) === null && simulationDisclosure("ar", { enabled: false, text: DT }) === null
+    && simulationDisclosure("fr", { enabled: true, text: { fr: "  ", ar: "" } }) === null && simulationDisclosure("ar", null) === null);
+  const kinds = ["members", "brands", "member", "brand"];
+  const metas = kinds.map((k) => demoPageMetadata(k));
+  ok("page metadata: neutral titles (Top Membres / Top Marques / Profil membre / Profil marque), no demo / test wording",
+    metas.map((m) => m.title).join("|") === "Top Membres|Top Marques|Profil membre|Profil marque" && metas.every((m) => !FORBIDDEN.test(m.title) && !FORBIDDEN.test(m.description)));
+  ok("page metadata: the description carries the central disclosure while enabled, and drops it when disabled",
+    metas.every((m) => m.description.endsWith(` ${DT.fr}`))
+    && kinds.every((k) => { const d = demoPageMetadata(k, { enabled: false, text: DT }).description; return !d.includes(DT.fr) && d.length > 0; }));
+  let threw = false;
+  try { demoPageMetadata("nope"); } catch { threw = true; }
+  ok("page metadata: unknown page → error (no silent empty metadata)", threw);
+
+  // Visible JSX text (text nodes + title / aria-label / alt / placeholder literals) of every public component / page.
+  const visible = [];
+  for (const f of [...UI_FILES, ...PAGE_FILES].filter((x) => x.endsWith(".jsx"))) {
+    const code = stripJs(SRC[f]);
+    for (const m of code.matchAll(/>([^<>{}]*[A-Za-zÀ-ÿ\u0600-\u06FF][^<>{}]*)</g)) visible.push([f, m[1].trim()]);
+    for (const m of code.matchAll(/\b(?:title|aria-label|alt|placeholder)="([^"]*)"/g)) visible.push([f, m[1]]);
+  }
+  const badJsx = visible.filter(([, v]) => FORBIDDEN.test(v));
+  ok(`no demo / test / beta wording in the visible JSX text of the public components and pages (${visible.length} literals)`, badJsx.length === 0, badJsx);
+
+  // The disclosure is defined in exactly ONE place.
+  const walk = (dir) => readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(`${dir}/${e.name}`) : [`${dir}/${e.name}`]));
+  const srcFiles = walk("src").filter((f) => /\.(m?jsx?|tsx?|json)$/.test(f));
+  const holders = srcFiles.filter((f) => { const c = read(f); return c.includes(DT.fr) || c.includes(DT.ar); });
+  ok(`the disclosure sentences appear in exactly one src file (${srcFiles.length} scanned): disclosure.js`, holders.length === 1 && holders[0] === "src/lib/demoCompetition/disclosure.js", holders);
+  const oldLabels = srcFiles.filter((f) => /Démo \/ Simulation|عرض توضيحي \/ محاكاة/.test(read(f)) && !f.startsWith("src/app/admin/"));
+  ok("no \"Démo / Simulation\" label left in the public src (admin excluded)", oldLabels.length === 0, oldLabels);
+  const users = srcFiles.filter((f) => /<SimulationNote\b/.test(stripJs(read(f))));
+  ok("the note is rendered exactly by PageShell and DemoCompetitionBlock", users.sort().join() === [`${UI_DIR}/DemoCompetitionBlock.jsx`, `${UI_DIR}/ProfileParts.jsx`].join(), users);
+  const disc = stripJs(SRC["src/lib/demoCompetition/disclosure.js"]);
+  ok("disclosure.js is pure (no import at all: safe on the server and in the browser)", !/^\s*import\b/m.test(disc) && !/require\(/.test(disc));
 }
 
 // ── 3. static checks ──────────────────────────────────────────────────────────
@@ -279,43 +333,52 @@ console.log("\n3. Static checks");
     && /io\.disconnect\(\)/.test(hook) && /status === 404/.test(hook) && /notFound: true/.test(hook));
   ok("hook: error keeps the previous data (functional update spreading prev)", /setState\(\(prev\) => \(\{ \.\.\.prev, error: err/.test(hook));
 
-  // Disclosure on every page and card
+  // ONE discreet disclosure per page (changed requirement: no per-card / header "Démo / Simulation" badges any more)
   const shell = stripJs(SRC[`${UI_DIR}/ProfileParts.jsx`]);
-  ok("PageShell always renders <SimulationDisclosure> (before any branch)", /export function PageShell[\s\S]*?<SimulationDisclosure t=\{t\} \/>[\s\S]*?\{children\}/.test(shell));
+  ok("PageShell always renders the central <SimulationNote> once, after the content (every state: loading, error, not found)",
+    /export function PageShell[\s\S]*?<main\b[\s\S]*?\{children\}\s*<SimulationNote lang=\{lang\} className="[^"]*" \/>\s*<\/main>/.test(shell) && (shell.match(/<SimulationNote\b/g) || []).length === 1);
   for (const p of ["TopMembersPage", "TopBrandsPage", "MemberProfile", "BrandProfile"]) {
     const s = stripJs(SRC[`${UI_DIR}/${p}.jsx`]);
-    ok(`${p}: rendered inside PageShell (disclosure) + SimulationBadge`, /<PageShell\b/.test(s) && /<SimulationBadge\b/.test(s));
+    ok(`${p}: rendered inside PageShell (disclosure), no simulation badge`, /<PageShell\b/.test(s) && !/SimulationBadge|SimulationDisclosure|sim_badge/.test(s));
   }
   for (const p of ["HomeTopMembers", "HomeTopBrands"]) {
     const s = stripJs(SRC[`${UI_DIR}/${p}.jsx`]);
     // Approved design: the homepage sections share HomeSectionFrame, which renders the badge + the disclaimer.
-    ok(`${p}: rendered inside HomeSectionFrame (badge + disclaimer)`, /<HomeSectionFrame\b/.test(s));
+    ok(`${p}: rendered inside HomeSectionFrame`, /<HomeSectionFrame\b/.test(s));
   }
   {
     const frame = stripJs(SRC[`${UI_DIR}/HomeSectionFrame.jsx`]);
-    // Compact homepage preview: every panel keeps its "Démo / Simulation" badge; the disclaimer is shown ONCE for the
-    // block (DemoCompetitionBlock banner) instead of being repeated in each section (owner's request: no repeated disclaimers).
+    // Changed requirement: no "Démo / Simulation" badge in the panels nor kicker in the block banner; the disclosure is
+    // shown ONCE for the block, as the discreet central <SimulationNote> under the sections (not repeated per section).
     const blk = stripJs(SRC[`${UI_DIR}/DemoCompetitionBlock.jsx`]);
-    // On phones the panel badge is icon-only (label kept as accessible name / tooltip) so the panel header stays one line.
-    ok("HomeSectionFrame: <SimulationBadge> always rendered; the block banner carries the single disclaimer (sim_banner)", /<SimulationBadge t=\{t\} iconOnlyOnPhone \/>/.test(frame)
-      && /"aria-label": t\("sim_badge"\)/.test(stripJs(SRC[`${UI_DIR}/Badges.jsx`]))
-      && !/SimulationDisclosure/.test(frame) && /t\("sim_banner"\)/.test(blk) && /t\("sim_banner_title"\)/.test(blk) && /t\("sim_badge"\)/.test(blk));
+    ok("HomeSectionFrame: no simulation badge; the block renders the single central <SimulationNote> under the sections",
+      !/SimulationBadge|SimulationDisclosure|SimulationNote|sim_/.test(frame)
+      && /\{children\}\s*<\/div>\s*<SimulationNote lang=\{lang\} className="[^"]*" \/>/.test(blk) && (blk.match(/<SimulationNote\b/g) || []).length === 1 && !/sim_/.test(blk));
   }
   for (const c of ["MemberRow", "BrandRow"]) {
     const s = stripJs(SRC[`${UI_DIR}/${c}.jsx`]);
     // Approved design: both rows render the shared LeaderCard, which carries the badge on every card.
-    ok(`${c}: every card is a LeaderCard (which shows <SimulationBadge>)`, /export function \w+Row[\s\S]*?<LeaderCard\b[\s\S]*?export function \w+sLeaderboard/.test(s));
+    ok(`${c}: every card is a LeaderCard`, /export function \w+Row[\s\S]*?<LeaderCard\b[\s\S]*?export function \w+sLeaderboard/.test(s));
   }
   {
     const card = stripJs(SRC[`${UI_DIR}/LeaderCard.jsx`]);
-    ok("LeaderCard: <SimulationBadge> on every card (unconditional), live badge, movement, rank badge", /<SimulationBadge t=\{t\} \/>/.test(card) && /<LiveBadge live=\{live\}/.test(card)
+    // Changed requirement: no per-card simulation badge any more (the page carries one discreet note).
+    ok("LeaderCard: no per-card simulation badge; live badge, movement, rank badge kept", !/SimulationBadge|sim_badge/.test(card) && /<LiveBadge live=\{live\}/.test(card)
       && /<MovementIndicator diff=\{diff\}/.test(card) && /<RankBadge rank=\{rank\}/.test(card));
   }
   const badges = stripJs(SRC[`${UI_DIR}/Badges.jsx`]);
-  ok("SimulationBadge / SimulationDisclosure use the i18n disclosure texts", /t\("sim_badge"\)/.test(badges) && /t\("sim_banner"\)/.test(badges) && /t\("sim_banner_title"\)/.test(badges));
+  ok("SimulationNote takes its text from the central disclosure only (nothing when disabled), role=note, page direction; old badge / banner removed",
+    /import \{ simulationDisclosure \} from "@\/lib\/demoCompetition\/disclosure";/.test(badges)
+    && /export function SimulationNote\(\{ lang, className = "" \}\) \{\s*const text = simulationDisclosure\(lang\);\s*if \(!text\) return null;/.test(badges)
+    && /<p role="note" dir=\{demoDir\(lang\)\} lang=\{lang\}/.test(badges) && /\{text\}/.test(badges)
+    && !/SimulationBadge|SimulationDisclosure|sim_/.test(badges));
   const pageMap = { "src/app/top-members/page.jsx": "TopMembersPage", "src/app/top-brands/page.jsx": "TopBrandsPage", "src/app/top-members/[id]/page.jsx": "MemberProfile", "src/app/top-brands/[id]/page.jsx": "BrandProfile" };
   for (const [f, comp] of Object.entries(pageMap)) {
-    ok(`${f} renders ${comp} + metadata labelled Démo / Simulation`, new RegExp(`import ${comp} from "@/components/demoCompetition/${comp}"`).test(SRC[f]) && new RegExp(`<${comp}\\b`).test(SRC[f]) && /Démo \/ Simulation/.test(SRC[f]));
+    // Changed requirement: neutral metadata built by the central module (title without "Démo / Simulation"; the
+    // description carries the disclosure sentence) instead of a hard-coded label per page.
+    const kind = { TopMembersPage: "members", TopBrandsPage: "brands", MemberProfile: "member", BrandProfile: "brand" }[comp];
+    ok(`${f} renders ${comp} + metadata = demoPageMetadata("${kind}") (central, neutral)`, new RegExp(`import ${comp} from "@/components/demoCompetition/${comp}"`).test(SRC[f]) && new RegExp(`<${comp}\\b`).test(SRC[f])
+      && new RegExp(`export const metadata = demoPageMetadata\\("${kind}"\\);`).test(SRC[f]) && !/title:|description:/.test(stripJs(SRC[f])));
   }
 
   // Brand identity: circular product image + initials fallback

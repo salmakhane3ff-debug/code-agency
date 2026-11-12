@@ -16,6 +16,8 @@ import { badRequest, serverError } from '../utils/apiResponse.js';
 import { REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID } from '../rewards.js';
 import { BRAND_SETTING_ID, BRAND_TERMS_SETTING_ID } from '../brandProgram.js';
 import { BRAND_SIM_SPEED_SETTING_ID } from '../brandSimSpeed.js';
+import { PROOF_DISPLAY_SETTING_ID } from '../paymentProofs.js';
+import { RECHARGE_SETTING_ID } from '../services/rechargeFeatureService.js';
 
 /**
  * Settings rows that have their own service and must never be written raw:
@@ -32,7 +34,11 @@ import { BRAND_SIM_SPEED_SETTING_ID } from '../brandSimSpeed.js';
  */
 // 'brand-sim-speed' (per-brand simulation speed) is written only by brandSimSpeedService (validated, versioned, audited);
 // 'homepage_layout' only by homepageLayoutService (see above). Both stay readable as before.
-const RESERVED_SETTING_TYPES = new Set([REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID, BRAND_SETTING_ID, BRAND_TERMS_SETTING_ID, BRAND_SIM_SPEED_SETTING_ID, 'homepage_layout']);
+// 'payment-proof-display' (payment-proof display duration) only by paymentProofSettingsService (validated, revisioned,
+// history) through /api/admin/payment-proofs/settings; 'affiliate-recharge' (the "Recharge de solde des Affiliés" switch)
+// only by rechargeFeatureService through /api/admin/affiliate-recharge (revisioned, history).
+const RESERVED_SETTING_TYPES = new Set([REWARDS_SETTING_ID, REWARDS_RECONCILE_STATE_ID, BRAND_SETTING_ID, BRAND_TERMS_SETTING_ID, BRAND_SIM_SPEED_SETTING_ID, 'homepage_layout',
+  PROOF_DISPLAY_SETTING_ID, RECHARGE_SETTING_ID]);
 
 // ── Generic settings (/api/setting) ──────────────────────────────────────────
 

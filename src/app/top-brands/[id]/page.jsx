@@ -1,11 +1,10 @@
 import BrandProfile from "@/components/demoCompetition/BrandProfile";
+import { demoPageMetadata } from "@/lib/demoCompetition/disclosure";
 
-// Public demo brand profile (SIMULATION ONLY), polled client-side from
+// Public brand profile (simulated data), polled client-side from
 // /api/demo-competition/brands/[id]; an unknown id renders the friendly not-found state.
-export const metadata = {
-  title: "Profil marque — Démo / Simulation",
-  description: "Profil de démonstration d'une marque du Top Marques. Toutes les valeurs sont simulées.",
-};
+// Neutral title + description carrying the central simulation disclosure (src/lib/demoCompetition/disclosure.js).
+export const metadata = demoPageMetadata("brand");
 
 export default async function Page({ params }) {
   const { id } = await params;

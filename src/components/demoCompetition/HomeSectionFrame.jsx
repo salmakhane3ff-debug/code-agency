@@ -1,14 +1,13 @@
 "use client";
 /**
  * HomeSectionFrame — a COMPACT homepage leaderboard panel (Top Members / Top Brands): a white
- * rounded panel with a one-line header (small icon, title, live dot, "Démo / Simulation" badge,
- * small "Voir tout" link) and the compact rows. The simulation disclaimer is shown once for the
- * whole block, in the DemoCompetitionBlock banner — not repeated here. The section element is the
+ * rounded panel with a one-line header (small icon, title, live dot, small "Voir tout" link) and
+ * the compact rows. The simulation footnote is shown once for the whole block, under the
+ * DemoCompetitionBlock (<SimulationNote>) — not repeated here. The section element is the
  * live-polling target (`sectionRef`) and hides itself when the competition is empty.
  */
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
-import { SimulationBadge } from "./Badges";
 
 export default function HomeSectionFrame({
   sectionRef, dir, lang, hidden, title, icon, viewAllHref, showViewAll = true, t, error, hasData, children,
@@ -22,7 +21,6 @@ export default function HomeSectionFrame({
             <h3 className="text-[15px] font-extrabold leading-tight text-gray-900"><bdi>{title}</bdi></h3>
             <span className="dc-live-dot dc-live-dot--green" role="img" aria-label={t("updates_live")} title={t("updates_live")} />
           </span>
-          <SimulationBadge t={t} iconOnlyOnPhone />
         </div>
         {showViewAll && (
           <Link

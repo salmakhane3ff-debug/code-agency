@@ -12,10 +12,14 @@
  *
  * ONE global feed: every active affiliate sees exactly the same proofs, in the same
  * order. Visibility (server-side, the only rule the slider uses):
- *   status = PUBLISHED  AND  publishedAt <= now  AND  publishedAt > now − 72 h
- * i.e. a proof published exactly 72 h ago is no longer visible. publishedAt is
- * the ACTUAL publication instant (written when the proof is published), never the
- * creation, upload, transfer or scheduled date.
+ *   status = PUBLISHED  AND  not removed  AND  publishedAt <= now  AND  now < visibleUntil
+ * visibleUntil = publishedAt + the display duration captured AT PUBLICATION (admin setting
+ * "Durée d'affichage", 72 h by default; 7 d, 30 d or a custom number of hours). A proof
+ * published before that setting existed has no visibleUntil and keeps publishedAt + 72 h.
+ * So a proof published exactly N hours ago (its duration) is no longer visible, and a later
+ * change of the setting never moves a proof already published. publishedAt is the ACTUAL
+ * publication instant (written when the proof is published), never the creation, upload,
+ * transfer or scheduled date. A removed proof ("Supprimer") is hidden at once.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -35,6 +39,52 @@ export const HOUR_MS = 3_600_000;
 export const VISIBILITY_HOURS = 72;
 export const VISIBILITY_MS = VISIBILITY_HOURS * HOUR_MS;
 
+// ── Display duration (admin setting "Durée d'affichage des preuves de paiement") ──
+/** Settings row (existing admin settings table) holding { hours, updatedAt, updatedBy, history }. */
+export const PROOF_DISPLAY_SETTING_ID = 'payment-proof-display';
+/** Default and rule of the proofs published before the setting existed. */
+export const DEFAULT_DISPLAY_HOURS = VISIBILITY_HOURS;
+/** Custom duration: whole hours, 1 … 8760 (365 days) — the DB CHECK mirrors it. */
+export const MIN_DISPLAY_HOURS = 1;
+export const MAX_DISPLAY_HOURS = 8760;
+export const DISPLAY_DURATION_PRESETS = Object.freeze([
+  Object.freeze({ key: '72h', hours: 72 }),
+  Object.freeze({ key: '7d', hours: 7 * 24 }),
+  Object.freeze({ key: '30d', hours: 30 * 24 }),
+]);
+
+/** A custom duration typed by the admin (number or digits only) → whole hours, or null when invalid / ≤ 0 / too long. */
+export function parseDisplayHours(value) {
+  let n;
+  if (typeof value === 'number') n = value;
+  else if (typeof value === 'string' && /^\s*\d{1,6}\s*$/.test(value)) n = Number(value.trim());
+  else return null;
+  return Number.isInteger(n) && n >= MIN_DISPLAY_HOURS && n <= MAX_DISPLAY_HOURS ? n : null;
+}
+
+/** The duration stored in the setting row's data, or the 72 h default (missing / invalid row). */
+export function displayHoursOf(settingData) {
+  const h = settingData && typeof settingData === 'object' ? parseDisplayHours(settingData.hours) : null;
+  return h ?? DEFAULT_DISPLAY_HOURS;
+}
+
+/** The preset key of a duration ('72h' | '7d' | '30d') or 'custom'. */
+export const displayPresetOf = (hours) => DISPLAY_DURATION_PRESETS.find((p) => p.hours === hours)?.key ?? 'custom';
+
+/** "72 heures (3 jours)", "36 heures (1 jour et 12 heures)", "5 heures" — the French label of a duration. */
+export function describeDisplayHours(hours) {
+  const h = Number(hours);
+  if (!Number.isInteger(h) || h <= 0) return '';
+  const days = Math.floor(h / 24), rest = h % 24;
+  const H = (n) => `${n} heure${n > 1 ? 's' : ''}`;
+  const D = (n) => `${n} jour${n > 1 ? 's' : ''}`;
+  if (!days) return H(h);
+  return `${H(h)} (${D(days)}${rest ? ` et ${H(rest)}` : ''})`;
+}
+
+/** End of display of a proof published at `publishedAtMs` with `hours`. */
+export const visibleUntilOf = (publishedAtMs, hours) => new Date(publishedAtMs + hours * HOUR_MS);
+
 export const PROOF_LIMITS = Object.freeze({
   MAX_AMOUNT_CENTS: 100_000_000,       // 1,000,000.00 MAD (DB CHECK mirrors it)
   ALIAS_MIN: 2,
@@ -52,16 +102,45 @@ export { err as proofError };
 
 // ── Visibility ────────────────────────────────────────────────────────────────
 
-/** [from (exclusive), to (inclusive)] bounds of the affiliate window at `nowMs`. */
+/** [from (exclusive), to (inclusive)] publication bounds of the LEGACY 72 h window at `nowMs` (proofs without visibleUntil). */
 export function visibilityWindow(nowMs) {
   return { fromExclusive: nowMs - VISIBILITY_MS, toInclusive: nowMs };
 }
 
-/** The single visibility rule (mirrors the database query). */
+/** End of display (ms) of a published proof: its captured visibleUntil, else the legacy publishedAt + 72 h. */
+export function displayEndMs(proof) {
+  if (!proof?.publishedAt) return null;
+  if (proof.visibleUntil) return new Date(proof.visibleUntil).getTime();
+  return new Date(proof.publishedAt).getTime() + VISIBILITY_MS;
+}
+
+/**
+ * The single visibility rule (mirrors the database query). `proof.removed` (or `removedAt`)
+ * = a REMOVE event exists ("Supprimer") → never visible.
+ */
 export function isVisibleAt(proof, nowMs) {
   if (!proof || proof.status !== PROOF_STATUS.PUBLISHED || !proof.publishedAt) return false;
+  if (proof.removed || proof.removedAt) return false;
   const p = new Date(proof.publishedAt).getTime();
-  return Number.isFinite(p) && p <= nowMs && p > nowMs - VISIBILITY_MS;
+  const end = displayEndMs(proof);
+  return Number.isFinite(p) && Number.isFinite(end) && p <= nowMs && nowMs < end;
+}
+
+/**
+ * Prisma `where` of the visible feed at `now` (mirrors isVisibleAt): published, not removed,
+ * publishedAt <= now, and now < visibleUntil (legacy rows: publishedAt > now − 72 h).
+ */
+export function visibleFeedWhere(now) {
+  const nowMs = new Date(now).getTime();
+  return {
+    status: PROOF_STATUS.PUBLISHED,
+    publishedAt: { lte: new Date(nowMs) },
+    OR: [
+      { visibleUntil: { gt: new Date(nowMs) } },
+      { visibleUntil: null, publishedAt: { gt: new Date(nowMs - VISIBILITY_MS) } },
+    ],
+    events: { none: { action: 'REMOVE' } },
+  };
 }
 
 // ── Input validation ──────────────────────────────────────────────────────────
@@ -184,12 +263,14 @@ export function decodeFeedCursor(raw) {
 }
 
 /** Admin shape (no storage key, no fingerprint). */
-export const PROOF_EVENT_ACTIONS = Object.freeze(['CREATE', 'CONFIRM_PRIVACY', 'CONFIRM_AUTHENTICITY', 'EDIT', 'CANCEL', 'PUBLISH', 'FAIL']);
+export const PROOF_EVENT_ACTIONS = Object.freeze(['CREATE', 'CONFIRM_PRIVACY', 'CONFIRM_AUTHENTICITY', 'EDIT', 'CANCEL', 'PUBLISH', 'FAIL', 'REMOVE']);
 /**
  * `publishedImmediately`: the proof was published by "Publier maintenant" (its PUBLISH event has
  * mode IMMEDIATE) — the admin list then shows only the actual publication time, not the planned one.
+ * `removal`: { at, by } of its REMOVE event ("Supprimer"), or null.
+ * `nowMs` (optional): adds `onSlider` — shown to affiliates right now (published, not removed, not expired).
  */
-export function adminProof(row, { publishedImmediately = false } = {}) {
+export function adminProof(row, { publishedImmediately = false, removal = null, nowMs = null } = {}) {
   const iso = (d) => (d ? new Date(d).toISOString() : null);
   return {
     id: row.id,
@@ -200,6 +281,13 @@ export function adminProof(row, { publishedImmediately = false } = {}) {
     scheduledLocal: row.scheduledAt ? casablancaLocal(new Date(row.scheduledAt).getTime()) : null,
     publishedAt: iso(row.publishedAt),
     publishedImmediately: row.status === 'PUBLISHED' && publishedImmediately === true,
+    visibleHours: row.publishedAt ? (row.visibleHours ?? VISIBILITY_HOURS) : null,
+    visibleUntil: row.publishedAt ? new Date(displayEndMs(row)).toISOString() : null,
+    removed: !!removal,
+    removedAt: removal ? iso(removal.at) : null,
+    removedBy: removal ? removal.by || null : null,
+    removedByName: removal ? removal.byName || null : null, // display name (adminNameService), never the e-mail
+    ...(nowMs === null ? {} : { onSlider: isVisibleAt({ ...row, removed: !!removal }, nowMs) }),
     cancelledAt: iso(row.cancelledAt),
     failedAt: iso(row.failedAt),
     failureReason: row.failureReason || null,

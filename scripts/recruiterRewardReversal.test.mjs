@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { makeRecruiterFakeDb } from './lib/recruiterFakeDb.mjs';
 import { dropDemoCompSrc } from './lib/demoCompetitionAllowance.mjs';
+import { dropDacSrc } from './lib/dashboardAdminControlsAllowance.mjs';
 
 const RS = await import('../src/lib/services/recruiterRewardService.js');
 const WS = await import('../src/lib/services/recruiterWalletService.js');
@@ -543,7 +544,9 @@ console.log('\n11. Affiliate commissions, points, balances and payouts untouched
   const RECRUITER_SIDE_SHARED = ['src/app/affiliate/dashboard/page.jsx', 'src/app/affiliate/dashboard/_brand/BrandDashboard.jsx',
     'src/components/brand/BrandSimStats.jsx', 'src/lib/controllers/settingsController.js'];
   const allSrc = dropDemoCompSrc([...new Set([...changed, ...untracked])], ['src/components/admin/SideBar.jsx', 'src/lib/landingMode.js', ...RECRUITER_SIDE_SHARED]).sort();
-  ok('src/ changed versus the part 3 base commit ONLY in the Part 3a files + the Part 3b files errorLabels.js / recruiterRewardAdminHandlers.js + the exact Part 3c recruiter KYC files + the exact Part 4 permission files (no commission / points / balance / payout / affiliate KYC file)', eq(allSrc, [
+  // Affiliate Dashboard & Admin Controls (approved, isolated): its exact src files are dropped unless the list below already
+  // names them (scripts/lib/dashboardAdminControlsAllowance.mjs — exact list + SHA-256-pinned migration / deposits-route lines).
+  ok('src/ changed versus the part 3 base commit ONLY in the Part 3a files + the Part 3b files errorLabels.js / recruiterRewardAdminHandlers.js + the exact Part 3c recruiter KYC files + the exact Part 4 permission files (no commission / points / balance / payout / affiliate KYC file)', ((exp) => eq(dropDacSrc(allSrc, exp), exp))([
     'src/app/admin/recruiter-identity/page.jsx', 'src/app/admin/recruiter-rewards/page.jsx', 'src/app/api/admin/affiliate-orders/route.js',
     'src/app/api/admin/recruiter-identity/[id]/[side]/route.js', 'src/app/api/admin/recruiter-identity/route.js', 'src/app/api/recruiter/identity/route.js',
     'src/app/recruiter/errorLabels.js', 'src/app/recruiter/page.jsx', 'src/app/recruiter/verification/page.jsx', 'src/app/recruiter/wallet/page.jsx',

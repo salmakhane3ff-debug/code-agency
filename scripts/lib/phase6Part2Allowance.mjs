@@ -28,6 +28,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { DAC_BASE, dacRoutePinHolds } from './dashboardAdminControlsAllowance.mjs';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const PART2_BASE = '003c6f12c97c330536c7e6debb95cbd35397760b';
@@ -71,6 +72,7 @@ export function checkUnchangedExceptPart2(base, paths) {
   const mismatched = [];
   const allowed = [];
   const stageF = [];
+  const dac = [];
   for (const file of [...changed].sort()) {
     // Phase 7 Stage F: exactly the pinned lines versus 7e111e1; the Part 2 rule then judges the 7e111e1 version
     if (STAGE_F_PINS[file] && linesSha(changedLines(STAGE_F_BASE, file)) === STAGE_F_PINS[file]) {
@@ -78,6 +80,9 @@ export function checkUnchangedExceptPart2(base, paths) {
       const pin2 = PART2_PINS[file];
       if (atF.length === 0 || (pin2 && JSON.stringify(atF) === JSON.stringify(changedLines(PART2_BASE, file, STAGE_F_BASE)) && linesSha(atF) === pin2)) { stageF.push(file); continue; }
     }
+    // Affiliate Dashboard & Admin Controls: a guarded route that differs from DAC_BASE (a1cdad3) by exactly its pinned lines
+    // (scripts/lib/dashboardAdminControlsAllowance.mjs) and was otherwise unchanged versus `base` → reported in `dac`.
+    if (dacRoutePinHolds(file) && changedLines(base, file, DAC_BASE).length === 0) { dac.push(file); continue; }
     const pin = PART2_PINS[file];
     if (!pin) { unexpected.push(file); continue; }
     const sinceBase = changedLines(base, file);
@@ -85,7 +90,7 @@ export function checkUnchangedExceptPart2(base, paths) {
     if (JSON.stringify(sinceBase) !== JSON.stringify(part2) || linesSha(part2) !== pin) mismatched.push(file);
     else allowed.push(file);
   }
-  return { ok: unexpected.length === 0 && mismatched.length === 0, unexpected, mismatched, allowed, stageF };
+  return { ok: unexpected.length === 0 && mismatched.length === 0, unexpected, mismatched, allowed, stageF, dac };
 }
 
 // `node scripts/lib/phase6Part2Allowance.mjs` prints the current pins (for a reviewed refresh).

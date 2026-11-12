@@ -1869,6 +1869,11 @@ model PaymentProof {
   failedAt                DateTime?
   failureReason           String?
   publishAttempts         Int                 @default(0)
+  /// Display duration captured at the ACTUAL publication (global setting at that moment) and the
+  /// resulting end of display (= publishedAt + visibleHours). NULL before publication and for proofs
+  /// published before 20261114 (those keep the original 72 h rule). Never changes once published.
+  visibleHours            Int?
+  visibleUntil            DateTime?
   batchId                 String?
   clientRef               String              @unique
   privacyConfirmedAt      DateTime
@@ -1883,11 +1888,13 @@ model PaymentProof {
 
   @@index([status, scheduledAt])
   @@index([status, publishedAt])
+  @@index([status, visibleUntil])
   @@index([batchId])
   @@map("payment_proofs")
 }
 
-/// Append-only audit history of one payment proof (DB trigger: no UPDATE / DELETE).
+/// Append-only audit history of one payment proof (DB trigger: no UPDATE / DELETE). A REMOVE event
+/// ("Supprimer") takes the proof off the slider for good; at most one per proof (partial unique index in SQL).
 model PaymentProofEvent {
   id      String       @id @default(uuid())
   /// Insertion order (events of one transaction share the same `at`).

@@ -1,24 +1,27 @@
 "use client";
 /**
- * Building blocks of the public Demo Competition pages: page shell (language
- * direction + the persistent SIMULATION disclosure), status notices, back link,
+ * Building blocks of the public Top Members / Top Brands pages: page shell (language
+ * direction + the discreet simulation footnote), status notices, back link,
  * not-found state, stat tiles (highlighted ~1.5 s when their value changes),
- * the 30-day CSS bar chart and the recent demo activity list.
+ * the 30-day CSS bar chart and the recent activity list.
  */
 import Link from "next/link";
 import { ChevronLeft, SearchX } from "lucide-react";
 import { Money, Count } from "./CountUp";
-import { SimulationDisclosure } from "./Badges";
+import { SimulationNote } from "./Badges";
 import { useValueFlash } from "./useLivePolling";
 import { dayLabel, formatMoney, formatCount, relativeTime } from "@/lib/demoCompetition/i18n";
 import "./demoCompetition.css";
 
-/** Page root: direction + language of the storefront, mobile-first width, the disclosure always on top. */
-export function PageShell({ shellRef, dir, lang, t, children }) {
+/**
+ * Page root: direction + language of the storefront, mobile-first width, and — on every page and profile, whatever
+ * the state (loading, error, not found) — the discreet simulation footnote at the bottom (central disclosure).
+ */
+export function PageShell({ shellRef, dir, lang, children }) {
   return (
     <main ref={shellRef} dir={dir} lang={lang} className="mx-auto w-full max-w-3xl overflow-x-clip px-4 pb-12 pt-6 text-start sm:pt-10">
-      <div className="mb-5"><SimulationDisclosure t={t} /></div>
       {children}
+      <SimulationNote lang={lang} className="mt-8" />
     </main>
   );
 }

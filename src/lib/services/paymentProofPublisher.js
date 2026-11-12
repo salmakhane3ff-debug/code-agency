@@ -24,14 +24,25 @@
  * receipt file present. Otherwise the proof becomes FAILED (never visible) with a
  * reason; the admin may edit and reschedule it. publishedAt = the actual instant of
  * the successful publication (server clock), never the planned time: a restart, a late
- * tick or an early admin publication only moves it; the 72 h window always starts at
+ * tick or an early admin publication only moves it; the display window always starts at
  * the real publishedAt.
+ *
+ * Display duration: the global admin setting ("Durée d'affichage", 72 h by default) is read
+ * INSIDE the publishing transaction and captured on the proof by the same conditional UPDATE
+ * (visibleHours + visibleUntil = publishedAt + visibleHours). A scheduled proof therefore takes
+ * the setting in force when it is actually published, and a later change of the setting never
+ * moves a proof already published (a PUBLISHED row never changes — payment_proofs_guard).
+ *
+ * Removed proofs ("Supprimer", a REMOVE event): never published — checked here, the
+ * removal also cancels an unpublished proof in its own transaction, and the DB trigger
+ * payment_proofs_no_publish_removed refuses it whatever the caller.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
 import prisma from '../prisma.js';
 import { defaultPaymentProofStorage } from '../paymentProofStorage.js';
-import { PROOF_STATUS, PROOF_LIMITS, normalizeAlias } from '../paymentProofs.js';
+import { PROOF_STATUS, PROOF_LIMITS, normalizeAlias, visibleUntilOf } from '../paymentProofs.js';
+import { readPaymentProofDisplayHours } from './paymentProofSettingsService.js';
 
 export const PAYMENT_PROOF_PUBLISHER_LOCK_KEY = 0x50505046; // "PPPF" — distinct from UGCE/FKOE/DEMC/BSTI/BRSM
 export const PAYMENT_PROOF_TICK_MS = 60_000;
@@ -62,18 +73,26 @@ export async function publishOnePaymentProof(id, {
     const row = await tx.paymentProof.findUnique({ where: { id } });
     if (!row || row.status !== PROOF_STATUS.SCHEDULED) return 'skipped';
     if (!immediate && new Date(row.scheduledAt).getTime() > now.getTime()) return 'skipped';
+    const removed = await tx.paymentProofEvent.findFirst({ where: { proofId: id, action: 'REMOVE' }, select: { id: true } });
+    if (removed) return 'skipped'; // "Supprimer" wins: a removed proof is never published
     const reason = await failureReason(row, storage);
+    const hours = reason ? null : await readPaymentProofDisplayHours({ db: tx });
     const where = immediate ? { id, status: PROOF_STATUS.SCHEDULED } : { id, status: PROOF_STATUS.SCHEDULED, scheduledAt: { lte: now } };
     const res = await tx.paymentProof.updateMany({
       where,
       data: reason
         ? { status: PROOF_STATUS.FAILED, failedAt: now, failureReason: reason, publishAttempts: { increment: 1 }, updatedBy: actor }
-        : { status: PROOF_STATUS.PUBLISHED, publishedAt: now, publishAttempts: { increment: 1 }, updatedBy: actor },
+        : {
+          status: PROOF_STATUS.PUBLISHED, publishedAt: now, visibleHours: hours, visibleUntil: visibleUntilOf(now.getTime(), hours),
+          publishAttempts: { increment: 1 }, updatedBy: actor,
+        },
     });
     if (res.count !== 1) return 'skipped';
     const mode = immediate ? { mode: 'IMMEDIATE', plannedAt: new Date(row.scheduledAt).toISOString() } : {};
     await tx.paymentProofEvent.create({
-      data: { proofId: id, action: reason ? 'FAIL' : 'PUBLISH', actor, at: now, details: reason ? { reason, ...mode } : { publishedAt: now.toISOString(), ...mode } },
+      data: { proofId: id, action: reason ? 'FAIL' : 'PUBLISH', actor, at: now, details: reason
+        ? { reason, ...mode }
+        : { publishedAt: now.toISOString(), visibleHours: hours, visibleUntil: visibleUntilOf(now.getTime(), hours).toISOString(), ...mode } },
     });
     return reason ? 'failed' : 'published';
   });

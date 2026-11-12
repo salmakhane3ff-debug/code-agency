@@ -98,6 +98,20 @@ a:hover > .dc-card { box-shadow: 0 2px 4px rgba(15, 23, 42, 0.06), 0 10px 24px r
   box-shadow: 0 0 0 2.5px #fff;
 }
 
+/* 3-stat card (the full /top-members list: earnings · orders · network, class dc-stats-3 from LeaderCard).
+   On a NARROW card (< 28rem: phones, and each column of the desktop two-column list) three equal columns
+   left the money columns 90-103 px: a 6-digit amount + "درهم" at 17 px was cut with "…". There the money
+   columns get the room the short orders count does not need (its label may use its second line, as allowed
+   by CardStat; never narrower than its longest label word), the network column also gets back the width its
+   divider padding takes, and the values are 2 px smaller. Wide 3-stat cards and every 2-stat card are unchanged.
+   Last resort (any width, e.g. 7 digits in Arabic): the currency unit wraps under the amount, never "…". */
+@container (width < 28rem) {
+  .dc-stats-3 { grid-template-columns: minmax(0, 1fr) minmax(min-content, 0.75fr) minmax(0, 1.1fr); }
+  .dc-stats-3 dd { font-size: 15px; }
+}
+.dc-stats-3 dd,
+.dc-stats-3 dd > span { white-space: normal; }
+
 /* Homepage compact rows (CompactLeaderboard): same structure for every rank; the Top 3 only
    get a gold / silver / bronze tint + border (no oversized card, no glow animation). */
 .dc-row {

@@ -646,8 +646,14 @@ console.log('\n8. Isolation: only payment_proofs / payment_proof_events (+ the i
   const feed = await bodyOf(await w2.aff.list(req('/api/affiliate/payment-proofs', { bearer: affToken('a1') }), ctx({})));
   await w2.aff.image(req(`/api/affiliate/payment-proofs/${feed.proofs[0].token}/image`, { bearer: affToken('a1') }), ctx({ token: feed.proofs[0].token }));
   const models = new Set(db._log.map((l) => l.model));
-  ok('the whole flow touches only paymentProof, paymentProofEvent, affiliate and transactions',
-    [...models].every((m) => ['paymentProof', 'paymentProofEvent', 'affiliate', '$transaction'].includes(m)), [...models].join(','));
+  // 20261114: publication also reads the feature's OWN settings row (display duration) — nothing else.
+  // Final fixes: the admin history also READS users (findMany: id / email / name only) for the admins' display names.
+  ok('the whole flow touches only paymentProof, paymentProofEvent, affiliate, its own setting row, users (read) and transactions',
+    [...models].every((m) => ['paymentProof', 'paymentProofEvent', 'affiliate', 'setting', 'user', '$transaction'].includes(m)), [...models].join(','));
+  ok('users: only READ (findMany), selecting only id / email / name — never written, no other field',
+    db._log.filter((l) => l.model === 'user').every((l) => l.op === 'findMany' && JSON.stringify(l.select) === '["id","email","name"]'));
+  ok('settings: only the payment-proof display row is read, never written by the flow',
+    db._log.filter((l) => l.model === 'setting').every((l) => l.op === 'findUnique' && l.id === 'payment-proof-display'));
   const affOps = db._log.filter((l) => l.model === 'affiliate');
   // Phase 6 part 2: the auth layer reads exactly isActive + tokenVersion; the handlers still read
   // only isActive. Both are findUnique by id; nothing else is ever selected or written.
@@ -658,13 +664,15 @@ console.log('\n8. Isolation: only payment_proofs / payment_proof_events (+ the i
     && affSelects.includes('["isActive"]') && affSelects.includes('["isActive","tokenVersion"]'), affSelects.join(' '));
   ok('the published proof reached the global feed', feed.total === 1 && feed.proofs[0].name === 'Client 1');
   const strip = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/.*$/gm, '');
-  const code = ['../src/lib/services/paymentProofService.js', '../src/lib/services/paymentProofPublisher.js', '../src/lib/paymentProofRouteHandlers.js', '../src/lib/paymentProofs.js', './payment-proofs-publisher.mjs']
+  const code = ['../src/lib/services/paymentProofService.js', '../src/lib/services/paymentProofPublisher.js', '../src/lib/paymentProofRouteHandlers.js', '../src/lib/paymentProofs.js', './payment-proofs-publisher.mjs',
+    '../src/lib/services/paymentProofSettingsService.js']
     .map((f) => [f, strip(read(f))]);
   const forbidden = /payout|commission|balance|wallet|reward|deposit|withdraw|\border\b|orders|affiliateOrder|ledger/i;
   ok('feature code references no payout / commission / balance / wallet / reward / deposit / order model', code.every(([, s]) => !forbidden.test(s)), code.filter(([, s]) => forbidden.test(s)).map(([f, s]) => `${f}: ${s.match(forbidden)[0]}`).join('; '));
   const modelRefs = new Set(code.flatMap(([, s]) => [...s.matchAll(/\b(?:db|tx|prisma)\.([$\w]+)(?=\s*[.(])/g)].map((m) => m[1])));
-  ok('database models used by the feature: paymentProof, paymentProofEvent, affiliate (isActive check), $transaction only',
-    [...modelRefs].every((m) => ['paymentProof', 'paymentProofEvent', 'affiliate', '$transaction', '$disconnect'].includes(m)), [...modelRefs].join(','));
+  // 20261114: + setting (the display-duration row, paymentProofSettingsService) and $executeRaw (its advisory lock).
+  ok('database models used by the feature: paymentProof, paymentProofEvent, affiliate (isActive check), its setting row, $transaction only',
+    [...modelRefs].every((m) => ['paymentProof', 'paymentProofEvent', 'affiliate', 'setting', '$transaction', '$disconnect', '$executeRaw'].includes(m)), [...modelRefs].join(','));
   const schema = read('../prisma/schema.prisma');
   const model = schema.slice(schema.indexOf('model PaymentProof {'), schema.indexOf('model PaymentProofEvent {'));
   ok('Prisma model PaymentProof has no affiliate / user / payout field or relation', !/affiliate|userId|payout|Affiliate\b|User\b/.test(model) && /@@map\("payment_proofs"\)/.test(model));

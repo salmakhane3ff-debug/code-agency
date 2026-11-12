@@ -10,12 +10,10 @@
  *                           with a temporary highlight set (~1.5 s).
  *   useValueFlash(value)  — true for ~1.5 s after `value` changed (not on first render).
  *   useDemoText()         — { lang, dir, t } for the current storefront language.
- *   useNeutralDemoText()  — temporary neutral-wording preview of those texts (text only).
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLanguage } from "@/context/LanguageContext";
 import { demoDir, demoLang, demoT } from "@/lib/demoCompetition/i18n";
-import { DEMO_COMP_NEUTRAL, neutralize } from "@/lib/neutralWording";
 import {
   POLL_INTERVAL_MS, HIGHLIGHT_MS, createPoller, createJsonFetcher, diffRanks,
 } from "@/lib/demoCompetition/livePolling";
@@ -29,16 +27,6 @@ export function useDemoText(langOverride) {
   const l = demoLang(langOverride || lang);
   const t = useMemo(() => demoT(l), [l]);
   return { lang: l, dir: demoDir(l), t };
-}
-
-/**
- * TEMPORARY design-review preview (src/lib/neutralWording.js, switch NEUTRAL_WORDING_PREVIEW): the same { lang, dir, t }
- * with the demo / simulation LABELS of the homepage block and the dashboard leaderboard replaced by neutral text — text
- * only. Usage: useNeutralDemoText(useDemoText(...)).
- */
-export function useNeutralDemoText(text) {
-  const t = useMemo(() => neutralize(text.t, DEMO_COMP_NEUTRAL[text.lang]), [text.t, text.lang]);
-  return { ...text, t };
 }
 
 export function useLivePolling(url, { intervalMs = POLL_INTERVAL_MS, observe = true } = {}) {

@@ -1,11 +1,10 @@
 import TopMembersPage from "@/components/demoCompetition/TopMembersPage";
+import { demoPageMetadata } from "@/lib/demoCompetition/disclosure";
 
-// Public Demo Competition leaderboard (SIMULATION ONLY). Data is polled client-side
+// Public Top Members leaderboard (simulated data). Data is polled client-side
 // from /api/demo-competition/members; the server only provides the metadata.
-export const metadata = {
-  title: "Top Membres — Démo / Simulation",
-  description: "Classement de démonstration des membres sur 30 jours. Toutes les valeurs sont simulées : ni vraies ventes, ni vrais gains.",
-};
+// Neutral title + description carrying the central simulation disclosure (src/lib/demoCompetition/disclosure.js).
+export const metadata = demoPageMetadata("members");
 
 export default function Page() {
   return <TopMembersPage />;

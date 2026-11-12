@@ -1,11 +1,10 @@
 import MemberProfile from "@/components/demoCompetition/MemberProfile";
+import { demoPageMetadata } from "@/lib/demoCompetition/disclosure";
 
-// Public demo member profile (SIMULATION ONLY), polled client-side from
+// Public member profile (simulated data), polled client-side from
 // /api/demo-competition/members/[id]; an unknown id renders the friendly not-found state.
-export const metadata = {
-  title: "Profil membre — Démo / Simulation",
-  description: "Profil de démonstration d'un membre du Top Membres. Toutes les valeurs sont simulées.",
-};
+// Neutral title + description carrying the central simulation disclosure (src/lib/demoCompetition/disclosure.js).
+export const metadata = demoPageMetadata("member");
 
 export default async function Page({ params }) {
   const { id } = await params;

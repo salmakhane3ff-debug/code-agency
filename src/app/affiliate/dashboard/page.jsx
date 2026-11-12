@@ -234,7 +234,7 @@ function ReferralCta({ link, ratePct }) {
 // ── Mobile bottom navigation (mobile/tablet only, ≤768px) ──────────────────────
 // Additive: the existing desktop header + tab bar are untouched. Reuses the same
 // tabs/actions and the SAME referral link (center button copies it, no new URL).
-function MobileBottomNav({ activeTab, setActiveTab, refLink, onLogout, unread = 0, onOpenNotifications }) {
+function MobileBottomNav({ activeTab, setActiveTab, refLink, onLogout, unread = 0, onOpenNotifications, rechargeEnabled = true }) {
   const router = useRouter();
   const { t } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
   const [toast, setToast] = useState(false);
@@ -299,7 +299,8 @@ function MobileBottomNav({ activeTab, setActiveTab, refLink, onLogout, unread = 
               <button type="button" onClick={() => setMoreOpen(false)} aria-label={t("close")} title={t("close")} className="text-gray-400 hover:text-gray-700"><X className="w-5 h-5" /></button>
             </div>
             <div className="grid grid-cols-3 gap-3">
-              {moreItems.map(({ icon: Icon, label, tab, badge }) => (
+              {/* "Recharge de solde" entry only while the admin switch is ON */}
+              {moreItems.filter((m) => m.tab !== "deposit" || rechargeEnabled).map(({ icon: Icon, label, tab, badge }) => (
                 <button key={tab} type="button" onClick={() => go(tab)}
                   className={`relative flex flex-col items-center justify-center gap-2 rounded-2xl py-4 px-2 transition-colors ${activeTab === tab ? "bg-violet-50 text-violet-600" : "bg-gray-50 text-gray-600 hover:bg-gray-100"}`}>
                   <Icon className="w-6 h-6" />
@@ -1296,10 +1297,13 @@ export default function AffiliateDashboard() {
     if (typeof document !== "undefined") document.getElementById("identity-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, 60); };
   const goToUgc = () => setActiveTab("ugc");
-  const goToDeposit = () => setActiveTab("deposit");
-
   // Security deposit — SEPARATE from Solde disponible (never withdrawable).
   const deposit = data?.deposit || { approvedBalance: 0, pendingTotal: 0 };
+  // Admin switch "Recharge de solde des Affiliés" (ON unless the server says false). OFF hides the
+  // recharge widget, tab, menu entry and Booster shortcuts; the API refuses new requests anyway.
+  // Balances (incl. the already-recharged one) are shown unchanged.
+  const rechargeEnabled = deposit.rechargeEnabled !== false;
+  const goToDeposit = rechargeEnabled ? () => setActiveTab("deposit") : null;
 
   // UGC progression (validated = admin-approved). Target from admin config (not
   // hardcoded); refreshed by the live poll like every other progression value.
@@ -1451,7 +1455,7 @@ export default function AffiliateDashboard() {
 
         {/* ── Tab nav ── */}
         <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-hide">
-          {tabs.map((tb) => (
+          {tabs.filter((tb) => tb.id !== "deposit" || rechargeEnabled).map((tb) => (
             <button
               key={tb.id}
               onClick={() => setActiveTab(tb.id)}
@@ -1546,9 +1550,6 @@ export default function AffiliateDashboard() {
               </div>
             )}
 
-            {/* ── Recent payment proofs (last 72 h, server-side) — the only slider ── */}
-            <PaymentProofsSlider lang={lang} />
-
             {/* ── BOUTIQUE (store / order) earnings — unchanged calculations ── */}
             <div className="flex items-center gap-2 px-0.5">
               <ShoppingBag className="w-4 h-4 text-gray-400" />
@@ -1600,8 +1601,8 @@ export default function AffiliateDashboard() {
               </button>
             ))}
 
-            {/* ── 💰 Dépôt de solde — balance top-up (credited after validation) ── */}
-            <button onClick={goToDeposit} className="w-full text-start">
+            {/* ── 💰 Dépôt de solde — balance top-up (credited after validation); hidden while the admin switch is OFF ── */}
+            {rechargeEnabled && <button onClick={goToDeposit} className="w-full text-start">
               <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4 flex items-center justify-between gap-3 hover:bg-indigo-50 transition-colors">
                 <div>
                   <div className="flex items-center gap-2 text-indigo-700 text-xs font-semibold">
@@ -1617,7 +1618,7 @@ export default function AffiliateDashboard() {
                 </div>
                 <svg className="w-4 h-4 text-indigo-400 shrink-0 rtl:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg>
               </div>
-            </button>
+            </button>}
 
             {/* ── UGC (simulated video sales) — separate source, never mixed ── */}
             <div className="flex items-center gap-2 px-0.5 pt-1">
@@ -1692,6 +1693,11 @@ export default function AffiliateDashboard() {
                 )}
               </Section>
             )}
+
+            {/* ── Recent payment proofs — the only slider, LAST section of the overview. One global feed
+                (same proofs for every active affiliate); each proof stays for the display duration captured
+                at its publication (admin setting, 72 h by default), server-side. ── */}
+            <PaymentProofsSlider lang={lang} />
           </div>
         )}
 
@@ -2613,9 +2619,17 @@ export default function AffiliateDashboard() {
         })()}
 
         {/* ══ COMPETITION ═══════════════════════════════════════════════════ */}
-        {activeTab === "deposit" && (
+        {activeTab === "deposit" && (rechargeEnabled ? (
           <DepositTab token={token} onChanged={() => fetchAll(token, { silent: true })} />
-        )}
+        ) : (
+          // Reached while the admin switch is OFF (e.g. a page opened before): no form, just a notice.
+          <Section title={t("deposit_disabled_title")} icon={Wallet}>
+            <p className="text-sm text-gray-600" data-recharge-disabled>{t("deposit_disabled_body")}</p>
+            <button type="button" onClick={() => setActiveTab("overview")} className="mt-3 text-xs text-blue-600 font-semibold hover:underline">
+              {t("tab_overview")}
+            </button>
+          </Section>
+        ))}
 
         {/* No menu entry any more ("Create Your Own Brand" took its place): still
             opened from the overview widget so existing boosters stay visible. */}
@@ -2790,6 +2804,7 @@ export default function AffiliateDashboard() {
         onLogout={handleLogout}
         unread={unread}
         onOpenNotifications={markNotifsRead}
+        rechargeEnabled={rechargeEnabled}
       />
 
     </div>

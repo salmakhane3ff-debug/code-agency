@@ -97,6 +97,7 @@ export const SERVER_MESSAGES = Object.freeze(Object.fromEntries([
   fr('La preuve du virement est requise.', 'إثبات التحويل مطلوب.'),
   fr('Fichier trop volumineux (max 8 Mo).', 'الملف كبير جداً (الحد الأقصى 8 ميغابايت).'),
   fr('Vous avez déjà une demande en attente de validation.', 'لديك بالفعل طلب في انتظار التحقق.'),
+  fr('La recharge de solde est désactivée pour le moment.', 'شحن الرصيد متوقف حالياً.'), // admin switch "Recharge de solde des Affiliés" OFF
   fr('Montant invalide.', 'مبلغ غير صالح.'),
   fr('Méthode de paiement requise.', 'طريقة الدفع مطلوبة.'),
   fr('Fichier invalide (JPG/PNG/WEBP/PDF, max 8 Mo).', 'ملف غير صالح (JPG أو PNG أو WEBP أو PDF، 8 ميغابايت كحد أقصى).'),
@@ -225,6 +226,7 @@ export const SERVER_CODES = Object.freeze(Object.fromEntries([
   code('DEPOSIT_NO_METHOD', 'Méthode de paiement requise.', 'طريقة الدفع مطلوبة.'),
   code('DEPOSIT_NO_PROOF', 'La preuve du virement est requise.', 'إثبات التحويل مطلوب.'),
   code('DEPOSIT_INVALID_FILE', 'Fichier invalide (JPG/PNG/WEBP/PDF, max 8 Mo).', 'ملف غير صالح (JPG أو PNG أو WEBP أو PDF، 8 ميغابايت كحد أقصى).'),
+  code('DEPOSIT_DISABLED', 'La recharge de solde est désactivée pour le moment.', 'شحن الرصيد متوقف حالياً.'),
   code('CIN_BOTH_REQUIRED', 'Les deux faces de la CIN sont requises.', 'وجها البطاقة الوطنية مطلوبان.'),
   code('CIN_INVALID_FILE', 'Fichier invalide (type JPG/PNG/WEBP, max 5 Mo).', 'ملف غير صالح (JPG أو PNG أو WEBP، 5 ميغابايت كحد أقصى).'),
   code('CIN_INVALID_IMAGE', 'Fichier image invalide', 'ملف الصورة غير صالح'),

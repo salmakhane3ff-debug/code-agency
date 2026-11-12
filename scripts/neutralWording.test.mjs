@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 /**
  * scripts/neutralWording.test.mjs — TEMPORARY design-review preview (src/lib/neutralWording.js):
- *   • TEXT ONLY: the visible "Démo / Simulation" words of the homepage Demo Competition block, the dashboard
- *     leaderboard and the active Brand dashboard are replaced by neutral labels (or not shown when they are a
- *     standalone badge / disclaimer); every system stays mounted — no component, API call or polling is removed;
- *   • one switch (NEUTRAL_WORDING_PREVIEW) restores every original text;
- *   • the full pages (/top-members, /top-brands, profiles), landing pages and the Brand offer keep their texts.
+ *   • TEXT ONLY: the visible "simulation" words of the active Brand dashboard are replaced by neutral labels (or
+ *     not shown when they are a standalone badge / disclaimer); every system stays mounted — no component, API
+ *     call or polling is removed; one switch (NEUTRAL_WORDING_PREVIEW) restores every original text;
+ *   • Top Members / Top Brands (dashboard block, full pages, profiles) are no longer handled here: their texts are
+ *     neutral at the source (src/lib/demoCompetition/i18n.js) and their single simulation disclosure lives in
+ *     src/lib/demoCompetition/disclosure.js (scripts/demoCompetitionPublic.test.mjs) — checked below;
+ *   • landing pages and the Brand offer keep their texts.
  *
  *   node scripts/neutralWording.test.mjs
  */
@@ -40,7 +42,8 @@ console.log('\n1. neutralize()');
 }
 
 console.log('\n2. Neutral maps — complete for fr + ar, no demo / simulation word');
-for (const [name, map, translator] of [['DEMO_COMP_NEUTRAL', W.DEMO_COMP_NEUTRAL, demoT], ['BRAND_DASH_NEUTRAL', W.BRAND_DASH_NEUTRAL, brandT], ['BRAND_DASH_TEXT_NEUTRAL', W.BRAND_DASH_TEXT_NEUTRAL, dashboardT]]) {
+// DEMO_COMP_NEUTRAL was removed: the Top Members / Top Brands texts are neutral at the source (§3 checks them as rendered).
+for (const [name, map, translator] of [['BRAND_DASH_NEUTRAL', W.BRAND_DASH_NEUTRAL, brandT], ['BRAND_DASH_TEXT_NEUTRAL', W.BRAND_DASH_TEXT_NEUTRAL, dashboardT]]) {
   const fr = Object.keys(map.fr || {}).sort(), ar = Object.keys(map.ar || {}).sort();
   ok(`${name}: same keys in fr and ar`, fr.length > 0 && JSON.stringify(fr) === JSON.stringify(ar));
   const bad = ['fr', 'ar'].flatMap((l) => Object.entries(map[l]).filter(([, v]) => DEMO_WORDS.test(v)).map(([k]) => `${l}.${k}`));
@@ -55,7 +58,7 @@ for (const [name, map, translator] of [['DEMO_COMP_NEUTRAL', W.DEMO_COMP_NEUTRAL
   ok(`${name}: neutral texts keep the original placeholders`, varsKept.length === 0, varsKept.join(', '));
 }
 
-console.log('\n3. In-scope texts, as rendered with the preview on: no demo / simulation word');
+console.log('\n3. In-scope texts, as rendered: no demo / simulation label (the one disclosure is the central SimulationNote)');
 {
   const keysOf = (files, fn) => [...new Set(files.flatMap((f) => [...read(f).matchAll(new RegExp(`\\b${fn}\\("([a-zA-Z0-9_]+)"`, 'g'))].map((m) => m[1])))];
   const dcFiles = ['DemoCompetitionBlock', 'HomeSectionFrame', 'HomeTopMembers', 'HomeTopBrands', 'CompactLeaderboard', 'MemberRow', 'LeaderCard', 'Badges']
@@ -65,28 +68,35 @@ console.log('\n3. In-scope texts, as rendered with the preview on: no demo / sim
   const brandFiles = ['src/app/affiliate/dashboard/_brand/BrandDashboard.jsx', 'src/components/brand/BrandSimStats.jsx'];
   const hits = [];
   for (const l of ['fr', 'ar']) {
-    const t = W.neutralize(demoT(l), W.DEMO_COMP_NEUTRAL[l]);
+    // Top Members / Top Brands: the base texts themselves, whatever the switch (no neutral overrides any more).
+    const t = demoT(l);
     for (const k of dcKeys) if (DEMO_WORDS.test(t(k, VARS))) hits.push(`demo ${l}.${k}`);
     const bt = W.neutralize(brandT(l), W.BRAND_DASH_NEUTRAL[l]);
     for (const k of keysOf(brandFiles, 't')) if (DEMO_WORDS.test(bt(k, VARS))) hits.push(`brand ${l}.${k}`);
     const d = W.neutralize(dashboardT(l), W.BRAND_DASH_TEXT_NEUTRAL[l]);
     for (const k of keysOf(brandFiles, 'd')) if (DEMO_WORDS.test(d(k, VARS))) hits.push(`dashboardText ${l}.${k}`);
   }
-  ok(`homepage block + dashboard leaderboard + active Brand dashboard: ${W.NEUTRAL_WORDING_PREVIEW ? 'no visible demo / simulation word' : '(preview off — originals shown)'}`,
-    !W.NEUTRAL_WORDING_PREVIEW || hits.length === 0, hits.join(', '));
+  const dcHits = hits.filter((h) => h.startsWith('demo '));
+  ok('dashboard leaderboard block (Top Members / Top Brands): no demo / simulation label, preview switch or not', dcHits.length === 0, dcHits.join(', '));
+  ok(`active Brand dashboard: ${W.NEUTRAL_WORDING_PREVIEW ? 'no visible demo / simulation word' : '(preview off — originals shown)'}`,
+    !W.NEUTRAL_WORDING_PREVIEW || hits.length === dcHits.length, hits.join(', '));
 }
 
 console.log('\n4. Text only — every system stays mounted, one switch, scope limited');
 {
   const hook = read('src/components/demoCompetition/useLivePolling.js');
-  ok('useNeutralDemoText wraps the translator only (same lang / dir)', /export function useNeutralDemoText\(text\)[\s\S]{0,200}neutralize\(text\.t, DEMO_COMP_NEUTRAL\[text\.lang\]\)[\s\S]{0,80}return \{ \.\.\.text, t \}/.test(hook));
+  // Changed requirement: the Top Members / Top Brands wording is neutral at the source, so the neutral-wording
+  // wrapper (useNeutralDemoText + DEMO_COMP_NEUTRAL) is gone and the components read the base texts directly.
+  ok('Top Members / Top Brands no longer go through the neutral-wording module (useNeutralDemoText / DEMO_COMP_NEUTRAL removed)',
+    !/useNeutralDemoText|neutralWording|DEMO_COMP_NEUTRAL/.test(hook) && W.DEMO_COMP_NEUTRAL === undefined);
   for (const f of ['DemoCompetitionBlock', 'HomeTopMembers', 'HomeTopBrands']) {
     // Optional page language since the move to the Affiliate Dashboard (default: the site language, as before).
-    ok(`homepage ${f} uses the neutral texts`, /useNeutralDemoText\(useDemoText\(langOverride\)\)/.test(read(`src/components/demoCompetition/${f}.jsx`)));
+    const src = read(`src/components/demoCompetition/${f}.jsx`);
+    ok(`dashboard ${f} reads the (neutral) base texts in the page language`, /= useDemoText\(langOverride\);/.test(src) && !/useNeutralDemoText|neutralWording/.test(src));
   }
   const page = read('src/app/affiliate/dashboard/page.jsx');
   // The dashboard shows the homepage components (neutral texts above) in the dashboard language.
-  ok('dashboard leaderboard uses the neutral texts in the dashboard language',
+  ok('dashboard leaderboard uses the texts in the dashboard language',
     // count = the number of sections the admin shows (Hide / Show), see demoCompetitionIntegration.
     /<DemoCompetitionBlock count=\{count\} lang=\{lang\}>/.test(page) && /<HomeTopMembers lang=\{lang\}/.test(page) && /<HomeTopBrands lang=\{lang\}/.test(page));
   ok('dashboard still mounts Live Activity, the Top Members / Top Brands sections and the Booster widget',
@@ -98,8 +108,11 @@ console.log('\n4. Text only — every system stays mounted, one switch, scope li
   ok('active Brand dashboard wraps both translators', /neutralize\(brandText, BRAND_DASH_NEUTRAL\[brandLang\(lang\)\]\)/.test(dash) && /neutralize\(dashboardT\(lang\), BRAND_DASH_TEXT_NEUTRAL\[brandLang\(lang\)\]\)/.test(dash));
   ok('Brand offer / purchase terms (BrandTab) keep their texts', !/neutralWording|neutralize/.test(read('src/app/affiliate/dashboard/BrandTab.jsx')));
   const badges = read('src/components/demoCompetition/Badges.jsx'), stats = read('src/components/brand/BrandSimStats.jsx');
+  // Changed requirement: SimulationBadge / SimulationDisclosure were removed (no labels); the one remaining
+  // leaderboard disclosure (SimulationNote) renders nothing when the central disclosure is disabled.
   ok('an empty badge / disclosure renders nothing (no blank pill or box)',
-    /SimulationBadge\(\{[^)]*\}\) \{\s*if \(!t\("sim_badge"\)\) return null;/.test(badges) && /SimulationDisclosure\(\{[^)]*\}\) \{\s*if \(!t\("sim_banner"\)\) return null;/.test(badges)
+    /export function SimulationNote\(\{[^)]*\}\) \{\s*const text = simulationDisclosure\(lang\);\s*if \(!text\) return null;/.test(badges)
+    && !/SimulationBadge|SimulationDisclosure/.test(badges)
     && /SimulatedBadge\(\{ t \}\) \{\s*if \(!t\("dash_badge"\)\) return null;/.test(stats));
   ok('the "training orders" note (recent_note) is not shown, fr + ar, and its paragraphs collapse when empty',
     !W.NEUTRAL_WORDING_PREVIEW || (W.BRAND_DASH_NEUTRAL.fr.recent_note === '' && W.BRAND_DASH_NEUTRAL.ar.recent_note === ''

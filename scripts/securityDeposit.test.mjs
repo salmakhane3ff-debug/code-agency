@@ -105,6 +105,8 @@ console.log('2b) Only ONE pending request at a time:');
       findFirst: async () => null,
       create:    async () => { throw Object.assign(new Error('unique violation'), { code: 'P2002' }); },
     },
+    // submitDeposit now also reads the admin switch "Recharge de solde des Affiliés" (no row = ON).
+    setting: { findUnique: async () => null },
   };
   let removed = false;
   const raceStorage = { process: async () => 'race.jpg', remove: async () => { removed = true; } };

@@ -38,6 +38,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { makeRecruiterFakeDb } from './lib/recruiterFakeDb.mjs';
 import { dropDemoCompSrc, isDemoCompPrisma, demoCompPinsHold } from './lib/demoCompetitionAllowance.mjs';
+import { dropDacSrc, isDacPrisma, dacMigrationPinHolds, dacRoutePinHolds } from './lib/dashboardAdminControlsAllowance.mjs';
 
 const { adminRecruiterHandlers, recruiterHandlers } = await import('../src/lib/recruiterRouteHandlers.js');
 const { recruiterNetworkHandlers } = await import('../src/lib/recruiterNetworkRouteHandlers.js');
@@ -742,7 +743,9 @@ console.log('\n4. Regression and scope');
   // Committed or not: changed-since-base and untracked files are counted together (same answer before and after commit).
   // Demo Competition (simulation only, separate feature): its migration 20261113 is dropped here; its schema blocks and
   // migration are SHA-256 pinned in scripts/lib/demoCompetitionAllowance.mjs (asserted just below).
-  const prismaAll = [...new Set([...prismaChanged, ...prismaNew])].filter((f) => !isDemoCompPrisma(f)).sort();
+  // Affiliate Dashboard & Admin Controls: its ONE additive migration 20261114 is dropped here (SHA-256 pinned, asserted below).
+  const prismaAll = [...new Set([...prismaChanged, ...prismaNew])].filter((f) => !isDemoCompPrisma(f) && !isDacPrisma(f)).sort();
+  ok('Dashboard & Admin Controls allowance: its migration is exactly the pinned one', dacMigrationPinHolds());
   { const pins = demoCompPinsHold(); ok('Demo Competition allowance: its schema blocks and migration are exactly the pinned ones', pins.schema && pins.migration, pins); }
   ok('no schema or migration change in Part 4 (the permission columns already exist); since then only the Phase 7 schema fields + migration 20261112',
     eq(prismaAll, ['prisma/migrations/20261112_recruiter_group_rewards/migration.sql', 'prisma/schema.prisma']), big({ prismaChanged, prismaNew }));
@@ -755,7 +758,9 @@ console.log('\n4. Regression and scope');
   const RECRUITER_SIDE_SHARED = ['src/app/affiliate/dashboard/page.jsx', 'src/app/affiliate/dashboard/_brand/BrandDashboard.jsx',
     'src/components/brand/BrandSimStats.jsx', 'src/lib/controllers/settingsController.js'];
   const allSrc = dropDemoCompSrc([...new Set([...changed, ...untracked])], ['src/lib/landingMode.js', ...RECRUITER_SIDE_SHARED]).sort();
-  ok('src/ changed versus the Part 4 base ONLY in the exact Part 4 files', eq(allSrc, [
+  // Affiliate Dashboard & Admin Controls (approved, isolated): its exact src files are dropped unless the list below already
+  // names them (scripts/lib/dashboardAdminControlsAllowance.mjs — exact list + SHA-256-pinned migration / deposits-route lines).
+  ok('src/ changed versus the Part 4 base ONLY in the exact Part 4 files', ((exp) => eq(dropDacSrc(allSrc, exp), exp))([
     'src/app/admin/recruiters/page.jsx', 'src/app/api/admin/recruiters/[id]/permissions/route.js',
     'src/app/recruiter/affiliates/activation/page.jsx', 'src/app/recruiter/affiliates/new/page.jsx',
     'src/app/recruiter/network/networkUi.jsx', 'src/app/recruiter/network/page.jsx', 'src/app/recruiter/network/stats/page.jsx', 'src/app/recruiter/page.jsx',
@@ -1015,7 +1020,7 @@ console.log('\n4. Regression and scope');
   const dirs = [...new Set([
     ...git(['diff', '--name-only', PART4_BASE, '--', ...guardedDirs]).split('\n').filter(Boolean),
     ...git(['ls-files', '--others', '--exclude-standard', '--', ...guardedDirs]).split('\n').filter(Boolean),
-  ])].sort();
+  ])].sort().filter((f) => !dacRoutePinHolds(f)); // Dashboard & Admin Controls: the deposits route differs by exactly its pinned lines (DEPOSIT_DISABLED → 403)
   ok('no file changed under the affiliate API, the admin identity API, the recruiter API or the middleware (only the new Phase 7 route src/app/api/recruiter/progress/route.js)',
     eq(dirs, ['src/app/api/recruiter/progress/route.js']), dirs.join(','));
   ok('the creation permission check stays in the service under the row lock, before the replay lookup (unchanged order)', (() => {

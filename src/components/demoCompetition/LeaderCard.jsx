@@ -4,9 +4,10 @@
  * (homepage, /top-members, /top-brands, affiliate dashboard).
  *
  *   rank (gold / silver / bronze for 1-3) · circular photo or product image (crown on #1,
- *   green "online" dot when there was demo activity in the last minutes) · name, optional
- *   sub-line (brand owner), "En direct" + "Démo / Simulation" badges · movement (▲ +1 / ▼ -1 / =)
- *   · stats (demo earnings 30 d in orange, demo orders 30 d, …).
+ *   green "online" dot when there was activity in the last minutes) · name, optional
+ *   sub-line (brand owner), "En direct" badge when live · movement (▲ +1 / ▼ -1 / =)
+ *   · stats (earnings 30 d in orange, orders 30 d, …). No per-card simulation label: the
+ *   page carries one discreet <SimulationNote> (src/lib/demoCompetition/disclosure.js).
  *
  * Layout is driven by the card's OWN width (container queries, `@container` on each list row):
  *   narrow (phones, and each column of the desktop two-column block) → two rows, the stats
@@ -19,7 +20,7 @@
  */
 import Link from "next/link";
 import { Crown } from "lucide-react";
-import { LiveBadge, MovementIndicator, RankBadge, SimulationBadge } from "./Badges";
+import { LiveBadge, MovementIndicator, RankBadge } from "./Badges";
 import "./demoCompetition.css";
 
 /**
@@ -35,7 +36,8 @@ export function CardStat({ label, children, divider = false }) {
   );
 }
 
-const STAT_COLS = { 2: "grid-cols-2", 3: "grid-cols-3" };
+// dc-stats-3 (demoCompetition.css): on a narrow card the 3 columns are re-sized for the money values (see there).
+const STAT_COLS = { 2: "grid-cols-2", 3: "grid-cols-3 dc-stats-3" };
 
 // Card grid. The one-row layout (wide card) is used only with 2 stats: a 3-stat card (the full
 // /top-members list, with the network column) keeps the two-row layout at every width, so the
@@ -75,9 +77,8 @@ export default function LeaderCard({
           <div className="min-w-0">
             <p className="truncate text-[16px] font-extrabold leading-snug text-gray-900"><bdi>{name}</bdi></p>
             {sub}
-            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 empty:hidden">
               <LiveBadge live={live} t={t} />
-              <SimulationBadge t={t} />
             </div>
           </div>
           <div className={L.move}>

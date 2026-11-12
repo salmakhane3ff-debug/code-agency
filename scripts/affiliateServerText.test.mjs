@@ -74,7 +74,9 @@ const INVENTORY = {
   "src/app/api/affiliate/boosters/route.js": ["Erreur serveur"],
   "src/lib/services/boosterService.js": ["Méthode de paiement invalide", "Les boosters sont désactivés pour le moment", "Pack introuvable ou inactif", "Vous avez déjà ce pack (actif ou en attente)", "Solde insuffisant"],
   "src/app/api/affiliate/deposits/route.js": ["La preuve du virement est requise.", "Fichier trop volumineux (max 8 Mo).", "Erreur serveur"],
-  "src/lib/services/depositService.js": ["Vous avez déjà une demande en attente de validation.", "Montant invalide.", "Méthode de paiement requise.", "La preuve du virement est requise.", "Fichier invalide (JPG/PNG/WEBP/PDF, max 8 Mo)."],
+  "src/lib/services/depositService.js": ["Vous avez déjà une demande en attente de validation.", "Montant invalide.", "Méthode de paiement requise.", "La preuve du virement est requise.", "Fichier invalide (JPG/PNG/WEBP/PDF, max 8 Mo).",
+    // admin switch "Recharge de solde des Affiliés" OFF (rechargeFeatureService) — new message, localized
+    "La recharge de solde est désactivée pour le moment."],
   "src/lib/services/ugcService.js": [
     "affiliate identity required", "UGC uploads are currently disabled", "productId required", "advertising consent is required",
     "product not found", "product is not active", "a submission already exists for this product — replace it instead",

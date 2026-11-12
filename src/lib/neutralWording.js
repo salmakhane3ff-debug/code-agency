@@ -1,23 +1,20 @@
 /**
  * src/lib/neutralWording.js
  * ─────────────────────────────────────────────────────────────────────────────
- * TEMPORARY DESIGN-REVIEW PREVIEW — TEXT ONLY.
+ * Neutral wording of the active "Create Your Own Brand" dashboard (src/app/affiliate/dashboard/_brand/*) —
+ * TEMPORARY DESIGN-REVIEW PREVIEW, TEXT ONLY.
  *
- * While NEUTRAL_WORDING_PREVIEW is true, the visible "Démo / Simulation"-type WORDS are
- * replaced by neutral labels (or removed when they are a standalone badge / disclaimer)
- * in exactly these places:
- *   • storefront homepage   — the Demo Competition block (banner, Top Members / Top Brands rows);
- *   • affiliate dashboard   — the Top Members leaderboard and the active "Create Your Own Brand"
- *                             dashboard (labels, badges, disclaimers, the "training orders" note, and the
- *                             "SIM-" prefix of the DISPLAYED order references — the reference values themselves
- *                             are unchanged);
- *   • recruiter dashboard   — no such wording there (nothing to change).
- * NOTHING else changes: every component, section, number, image, ranking, API call, polling,
- * engine and record stays exactly as it is. The full /top-members, /top-brands pages, landing
- * pages and the Create Your Own Brand OFFER / purchase terms keep their original texts.
+ * While NEUTRAL_WORDING_PREVIEW is true, the visible "simulation"-type labels, badges and disclaimers of that
+ * dashboard are replaced by neutral labels (or not shown), including the "training orders" note and the "SIM-"
+ * prefix of the DISPLAYED order references (the reference values themselves are unchanged). Every component,
+ * number, chart, API call and polling stays exactly as it is. The Brand OFFER / purchase terms keep their texts.
  *
- * ⚠ Not for publication: simulated activity shown to real visitors needs its disclosure.
- * To restore every original label, set NEUTRAL_WORDING_PREVIEW to false (one switch).
+ * ⚠ Not for publication (Brand dashboard): simulated activity shown to real users needs its disclosure.
+ * To restore every original Brand dashboard label, set NEUTRAL_WORDING_PREVIEW to false (one switch).
+ *
+ * Top Members / Top Brands (affiliate dashboard block, /top-members, /top-brands, profiles) are NOT handled here
+ * any more: their texts are neutral at the source (src/lib/demoCompetition/i18n.js) and their simulation disclosure
+ * is defined in ONE place, src/lib/demoCompetition/disclosure.js (shown by <SimulationNote>; change or disable it there).
  * ─────────────────────────────────────────────────────────────────────────────
  */
 export const NEUTRAL_WORDING_PREVIEW = true;
@@ -29,26 +26,6 @@ export function neutralize(t, overrides) {
   if (!NEUTRAL_WORDING_PREVIEW || !overrides) return t;
   return (key, vars) => (Object.prototype.hasOwnProperty.call(overrides, key) ? interpolate(overrides[key], vars) : t(key, vars));
 }
-
-/** Demo Competition texts (src/lib/demoCompetition/i18n.js keys) used on the homepage / dashboard. */
-export const DEMO_COMP_NEUTRAL = Object.freeze({
-  fr: Object.freeze({
-    sim_badge: "", sim_banner_title: "", sim_banner: "",
-    members_subtitle: "Classement des membres selon leurs gains sur 30 jours glissants.",
-    brands_subtitle: "Classement des marques selon leurs gains sur 30 jours glissants.",
-    live_title: "Activité au cours des 10 dernières minutes",
-    earnings_30d: "Gains (30 j)", orders_30d: "Commandes (30 j)", network_30d: "Réseau (30 j)",
-    leaderboard_members_label: "Classement Top Membres", leaderboard_brands_label: "Classement Top Marques",
-  }),
-  ar: Object.freeze({
-    sim_badge: "", sim_banner_title: "", sim_banner: "",
-    members_subtitle: "ترتيب الأعضاء حسب الأرباح خلال آخر 30 يوماً.",
-    brands_subtitle: "ترتيب العلامات التجارية حسب الأرباح خلال آخر 30 يوماً.",
-    live_title: "نشاط خلال آخر 10 دقائق",
-    earnings_30d: "الأرباح (30 يوماً)", orders_30d: "الطلبات (30 يوماً)", network_30d: "الشبكة (30 يوماً)",
-    leaderboard_members_label: "ترتيب أفضل الأعضاء", leaderboard_brands_label: "ترتيب أفضل العلامات التجارية",
-  }),
-});
 
 /** Active / closed "Create Your Own Brand" dashboard — brandI18n keys (t). */
 export const BRAND_DASH_NEUTRAL = Object.freeze({

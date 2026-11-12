@@ -217,7 +217,7 @@ const fr = {
 
   // ── Payment-proofs slider ─────────────────────────────────────────────────
   proofs_title: "Preuves de paiement récentes",
-  proofs_caption: "Paiements des dernières 72 h",
+  proofs_caption: "Paiements récents",
   proofs_prev: "Preuve précédente",
   proofs_next: "Preuve suivante",
   proofs_open: "Agrandir le reçu",
@@ -500,7 +500,7 @@ const ar = {
 
   // ── Payment-proofs slider ─────────────────────────────────────────────────
   proofs_title: "إثباتات الدفع الأخيرة",
-  proofs_caption: "مدفوعات آخر 72 ساعة",
+  proofs_caption: "أحدث المدفوعات",
   proofs_prev: "الإثبات السابق",
   proofs_next: "الإثبات التالي",
   proofs_open: "تكبير الوصل",

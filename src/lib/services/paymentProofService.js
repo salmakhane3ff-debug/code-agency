@@ -14,6 +14,11 @@
  * Publication goes through ONE pipeline (paymentProofPublisher.publishOnePaymentProof):
  * the dedicated worker publishes due proofs; an admin "Publier maintenant" publishes one
  * scheduled proof early through the same function (publishPaymentProofNow below).
+ *
+ * "Supprimer" (removePaymentProof) hides a proof from every affiliate at once, in any state,
+ * WITHOUT deleting anything: an append-only REMOVE event is written (at most one per proof —
+ * partial unique index), and an unpublished proof is also cancelled in the same transaction so
+ * the worker can never publish it. Removal is separate from expiration (visibleUntil).
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -21,9 +26,10 @@ import { randomBytes } from 'crypto';
 import prisma from '../prisma.js';
 import { defaultPaymentProofStorage } from '../paymentProofStorage.js';
 import { publishOnePaymentProof } from './paymentProofPublisher.js';
+import { resolveAdminNames, nameOf } from './adminNameService.js';
 import {
-  PROOF_STATUS, PROOF_LIMITS, VISIBILITY_MS, proofError as err, validateProofInput, isVisibleAt, isValidId,
-  isValidPublicToken, publicProof, adminProof, casablancaLocal, encodeFeedCursor, decodeFeedCursor,
+  PROOF_STATUS, PROOF_LIMITS, proofError as err, validateProofInput, isVisibleAt, isValidId,
+  isValidPublicToken, publicProof, adminProof, casablancaLocal, encodeFeedCursor, decodeFeedCursor, visibleFeedWhere,
 } from '../paymentProofs.js';
 
 const ms = (d) => new Date(d).getTime();
@@ -246,7 +252,59 @@ export async function cancelPaymentProof(id, { db = prisma, now = new Date(), ac
 }
 
 /**
- * The ONE global affiliate feed: every proof published during the last 72 h, the same
+ * "Supprimer" — remove a proof from the affiliate slider at once (any status), keeping the
+ * record and its whole history. ONE transaction:
+ *   1. an unpublished proof (SCHEDULED / FAILED) becomes CANCELLED (conditional UPDATE — a
+ *      concurrent publication wins or loses atomically; either way the proof ends hidden);
+ *   2. an append-only REMOVE event records who / when / the state it had.
+ * Idempotent: a proof already removed → { alreadyRemoved: true }, nothing written (a
+ * concurrent second request hits the partial unique index and gets the same answer).
+ * Hidden from then on: the feed and the receipt image exclude removed proofs, the publication
+ * pipeline skips them and the DB trigger payment_proofs_no_publish_removed refuses publishing one.
+ *   → { proof, alreadyRemoved }
+ */
+export async function removePaymentProof(id, { db = prisma, now = new Date(), actorId = null } = {}) {
+  const actor = actorOrThrow(actorId);
+  if (!isValidId(id)) throw err('NOT_FOUND', 'Preuve introuvable.');
+  const finish = async (alreadyRemoved) => {
+    const [row, w] = await Promise.all([
+      db.paymentProof.findUnique({ where: { id } }),
+      db.paymentProofEvent.findFirst({ where: { proofId: id, action: 'REMOVE' } }),
+    ]);
+    if (!row) throw err('NOT_FOUND', 'Preuve introuvable.');
+    const names = await resolveAdminNames(w ? [w.actor] : [], { db });
+    return { proof: adminProof(row, { removal: w ? { at: w.at, by: w.actor, byName: nameOf(names, w.actor) } : null, nowMs: ms(now) }), alreadyRemoved };
+  };
+  let changed;
+  try {
+    changed = await db.$transaction(async (tx) => {
+      const row = await tx.paymentProof.findUnique({ where: { id } });
+      if (!row) throw err('NOT_FOUND', 'Preuve introuvable.');
+      const prior = await tx.paymentProofEvent.findFirst({ where: { proofId: id, action: 'REMOVE' }, select: { id: true } });
+      if (prior) return false;
+      const res = await tx.paymentProof.updateMany({
+        where: { id, status: { in: EDITABLE } },
+        data: { status: PROOF_STATUS.CANCELLED, cancelledAt: now, updatedBy: actor },
+      });
+      const after = res.count === 1 ? null : await tx.paymentProof.findUnique({ where: { id } });
+      const previous = res.count === 1 ? row.status : after.status;
+      await event(tx, id, 'REMOVE', actor, now, {
+        previousStatus: previous,
+        cancelled: res.count === 1,
+        wasVisible: res.count === 1 ? false : isVisibleAt(after, ms(now)),
+      });
+      return true;
+    });
+  } catch (e) {
+    if (isUnique(e, 'proofId') || isUnique(e, 'remove')) return finish(true); // a concurrent "Supprimer" won
+    throw e;
+  }
+  return finish(!changed);
+}
+
+/**
+ * The ONE global affiliate feed: every proof whose display has not ended (visibleUntil, captured
+ * at publication — legacy proofs: 72 h) and that was not removed, the same
  * for every active affiliate, ordered publishedAt DESC then publicToken ASC, served in
  * pages of FEED_PAGE_SIZE with a cursor — no cap, nothing is ever omitted.
  * Read-only (never publishes). → { proofs, total, nextCursor }
@@ -255,7 +313,7 @@ export async function listVisiblePaymentProofs({ db = prisma, now = new Date(), 
   const c = decodeFeedCursor(cursor);
   if (c?.invalid) throw err('INVALID_INPUT', 'Curseur invalide.');
   const nowMs = ms(now);
-  const windowWhere = { status: PROOF_STATUS.PUBLISHED, publishedAt: { lte: now, gt: new Date(nowMs - VISIBILITY_MS) } };
+  const windowWhere = visibleFeedWhere(now);
   const where = c
     ? { AND: [windowWhere, { OR: [{ publishedAt: { lt: new Date(c.publishedAtMs) } }, { publishedAt: new Date(c.publishedAtMs), publicToken: { gt: c.token } }] }] }
     : windowWhere;
@@ -263,7 +321,7 @@ export async function listVisiblePaymentProofs({ db = prisma, now = new Date(), 
   const [rows, total] = await Promise.all([
     db.paymentProof.findMany({
       where, orderBy: [{ publishedAt: 'desc' }, { publicToken: 'asc' }], take: size + 1,
-      select: { publicToken: true, displayName: true, displayAmountCents: true, publishedAt: true, status: true },
+      select: { publicToken: true, displayName: true, displayAmountCents: true, publishedAt: true, visibleUntil: true, status: true },
     }),
     db.paymentProof.count({ where: windowWhere }),
   ]);
@@ -274,8 +332,10 @@ export async function listVisiblePaymentProofs({ db = prisma, now = new Date(), 
 /** Receipt image for affiliates: only while the proof is visible; anything else → NOT_FOUND (no leak). */
 export async function readVisiblePaymentProofImage(token, { db = prisma, storage = defaultPaymentProofStorage, now = new Date() } = {}) {
   if (!isValidPublicToken(token)) throw err('NOT_FOUND', 'Introuvable.');
-  const row = await db.paymentProof.findUnique({ where: { publicToken: token }, select: { status: true, publishedAt: true, fileKey: true } });
+  const row = await db.paymentProof.findUnique({ where: { publicToken: token }, select: { id: true, status: true, publishedAt: true, visibleUntil: true, fileKey: true } });
   if (!row || !isVisibleAt(row, ms(now))) throw err('NOT_FOUND', 'Introuvable.');
+  const removed = await db.paymentProofEvent.findFirst({ where: { proofId: row.id, action: 'REMOVE' }, select: { id: true } });
+  if (removed) throw err('NOT_FOUND', 'Introuvable.');
   const file = await storage.read(row.fileKey);
   if (!file) throw err('NOT_FOUND', 'Introuvable.');
   return file;
@@ -290,8 +350,11 @@ export async function readAdminPaymentProofImage(id, { db = prisma, storage = de
   return file;
 }
 
-/** Admin list (paged) with status counts. Read-only. */
-export async function listPaymentProofsAdmin({ status = 'ALL', batchId = null, page = 1, db = prisma } = {}) {
+/**
+ * Admin list (paged) with status counts. Read-only. Removed proofs stay listed (history), with
+ * `removed` / `removedAt` / `removedBy`; `onSlider` = shown to affiliates right now.
+ */
+export async function listPaymentProofsAdmin({ status = 'ALL', batchId = null, page = 1, db = prisma, now = new Date() } = {}) {
   const where = {};
   if (status !== 'ALL') {
     if (!Object.values(PROOF_STATUS).includes(status)) throw err('INVALID_INPUT', 'Statut invalide.');
@@ -303,21 +366,35 @@ export async function listPaymentProofsAdmin({ status = 'ALL', batchId = null, p
   }
   const size = PROOF_LIMITS.ADMIN_PAGE_SIZE;
   const pageNo = Number.isInteger(page) && page > 0 ? Math.min(page, 100_000) : 1;
-  const [rows, total, groups] = await Promise.all([
+  const [rows, total, groups, removedCount] = await Promise.all([
     db.paymentProof.findMany({ where, orderBy: [{ scheduledAt: 'desc' }, { id: 'asc' }], skip: (pageNo - 1) * size, take: size }),
     db.paymentProof.count({ where }),
     db.paymentProof.groupBy({ by: ['status'], _count: { _all: true } }),
+    db.paymentProofEvent.count({ where: { action: 'REMOVE' } }),
   ]);
   const counts = Object.fromEntries(Object.values(PROOF_STATUS).map((s) => [s, 0]));
   for (const g of groups) counts[g.status] = g._count._all;
-  // Published by "Publier maintenant"? (its PUBLISH event says mode IMMEDIATE) — one query for the page.
-  const publishedIds = rows.filter((r) => r.status === PROOF_STATUS.PUBLISHED).map((r) => r.id);
+  counts.REMOVED = removedCount;
+  // ONE event query for the page: published by "Publier maintenant"? (PUBLISH mode IMMEDIATE) and removed?
   const immediate = new Set();
-  if (publishedIds.length) {
-    const pubs = await db.paymentProofEvent.findMany({ where: { proofId: { in: publishedIds }, action: 'PUBLISH' }, select: { proofId: true, details: true } });
-    for (const e of pubs) if (e.details && e.details.mode === 'IMMEDIATE') immediate.add(e.proofId);
+  const removals = new Map();
+  if (rows.length) {
+    const evs = await db.paymentProofEvent.findMany({
+      where: { proofId: { in: rows.map((r) => r.id) }, action: { in: ['PUBLISH', 'REMOVE'] } },
+      select: { proofId: true, action: true, actor: true, at: true, details: true },
+    });
+    for (const e of evs) {
+      if (e.action === 'PUBLISH' && e.details && e.details.mode === 'IMMEDIATE') immediate.add(e.proofId);
+      if (e.action === 'REMOVE') removals.set(e.proofId, { at: e.at, by: e.actor });
+    }
   }
-  return { items: rows.map((r) => adminProof(r, { publishedImmediately: immediate.has(r.id) })), total, page: pageNo, pageSize: size, counts };
+  const nowMs = ms(now);
+  const names = await resolveAdminNames([...removals.values()].map((x) => x.by), { db });
+  for (const x of removals.values()) x.byName = nameOf(names, x.by);
+  return {
+    items: rows.map((r) => adminProof(r, { publishedImmediately: immediate.has(r.id), removal: removals.get(r.id) ?? null, nowMs })),
+    total, page: pageNo, pageSize: size, counts,
+  };
 }
 
 /** Audit history of one proof, in insertion order (`seq`; events of one transaction share `at`). */
@@ -326,5 +403,7 @@ export async function listPaymentProofEvents(id, { db = prisma } = {}) {
   const proof = await db.paymentProof.findUnique({ where: { id }, select: { id: true } });
   if (!proof) throw err('NOT_FOUND', 'Preuve introuvable.');
   const rows = await db.paymentProofEvent.findMany({ where: { proofId: id }, orderBy: [{ seq: 'asc' }] });
-  return { events: rows.map((e) => ({ action: e.action, actor: e.actor, at: new Date(e.at).toISOString(), details: e.details ?? null })) };
+  // actorName: display name of the admin (or "Publication automatique" / "Administrateur"); the stored actor is unchanged.
+  const names = await resolveAdminNames(rows.map((e) => e.actor), { db });
+  return { events: rows.map((e) => ({ action: e.action, actor: e.actor, actorName: nameOf(names, e.actor), at: new Date(e.at).toISOString(), details: e.details ?? null })) };
 }

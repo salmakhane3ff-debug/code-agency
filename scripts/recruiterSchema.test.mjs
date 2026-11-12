@@ -31,6 +31,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { DEMO_COMP_MODELS, demoCompPinsHold } from './lib/demoCompetitionAllowance.mjs';
+import { stripDacSchema, dacSchemaPinHolds } from './lib/dashboardAdminControlsAllowance.mjs';
 
 const R = await import('../src/lib/recruiterSettings.js');
 
@@ -471,7 +472,10 @@ const NEW_TABLES = ['recruiters', 'recruiter_affiliate_links', 'recruiter_reward
 // ── 3. Prisma schema vs the pre-recruiter base (ef79c6b) ─────────────────────
 console.log('\n3. Prisma schema (vs pre-recruiter base ef79c6b)');
 {
-  const now = read('prisma/schema.prisma');
+  // Affiliate Dashboard & Admin Controls (approved): its exact PaymentProof / PaymentProofEvent lines are set aside here
+  // (scripts/lib/dashboardAdminControlsAllowance.mjs — SHA-256 pinned, asserted just below); every other check is unchanged.
+  const now = stripDacSchema(read('prisma/schema.prisma'));
+  ok('Dashboard & Admin Controls allowance: its schema lines are exactly the pinned ones', dacSchemaPinHolds());
   const head = git(['show', 'ef79c6bb1e445c964f915effe558e817844db9f0:prisma/schema.prisma']);
   const blocks = (s) => {
     const out = new Map();

@@ -7,7 +7,7 @@
  *
  *   • data: GET /api/affiliate/payment-proofs[?cursor=] — ONE global feed (same for
  *     every active affiliate): the SERVER returns only proofs published during the
- *     last 72 h, in pages of 50 ({ proofs, total, nextCursor }). The next page is
+ *     display duration (72 h by default, admin setting), in pages of 50 ({ proofs, total, nextCursor }). The next page is
  *     fetched lazily when the viewer nears the end of the loaded proofs, so EVERY
  *     eligible proof is reachable; the slider wraps only once all pages are loaded
  *   • receipts: GET /api/affiliate/payment-proofs/{token}/image with the Bearer

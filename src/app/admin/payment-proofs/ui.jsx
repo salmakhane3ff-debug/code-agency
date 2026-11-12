@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { CASABLANCA_TZ, casablancaToday as casablancaTodayAt, formatCasablanca } from "@/lib/casablancaTime";
 import { checkProofSchedule } from "@/lib/paymentProofSchedule";
+import { describeDisplayHours, MIN_DISPLAY_HOURS, MAX_DISPLAY_HOURS } from "@/lib/paymentProofs";
 
 // Shared helpers for /admin/payment-proofs (client side, French admin).
 // Payment proofs are an independent DISPLAY feed: name and amount are typed by the
@@ -34,6 +35,7 @@ export const ERROR_TEXT = {
   DUPLICATE_IN_BATCH: "Ligne en double dans le lot",
   ALREADY_CREATED: "Déjà programmée",
   REQUIRED: "Reçu requis",
+  INVALID_DURATION: `Durée invalide : nombre entier d'heures entre ${MIN_DISPLAY_HOURS} et ${MAX_DISPLAY_HOURS} (365 jours)`,
   type: "Type de fichier refusé (JPEG, PNG ou WebP)",
   size: "Fichier trop volumineux (8 Mo maximum)",
   "type,size": "Type de fichier refusé et fichier trop volumineux",
@@ -51,6 +53,8 @@ export const API_ERROR_TEXT = {
   BODY_TOO_LARGE: "Fichier trop volumineux (8 Mo maximum).",
   INVALID_FILE: "Reçu refusé (image JPEG, PNG ou WebP valide, 8 Mo maximum).",
   NOT_FOUND: "Preuve introuvable.",
+  INVALID_DURATION: `Durée invalide : saisissez un nombre entier d'heures entre ${MIN_DISPLAY_HOURS} et ${MAX_DISPLAY_HOURS} (365 jours).`,
+  SETTINGS_CONFLICT: "Ce réglage a été modifié entre-temps par un autre administrateur : la valeur actuelle vient d'être rechargée. Vérifiez-la, puis enregistrez à nouveau si besoin.",
   UNAUTHORIZED: "Session administrateur expirée — reconnectez-vous.",
 };
 
@@ -164,7 +168,54 @@ export const EVENT_TEXT = {
   CANCEL: "Annulation",
   PUBLISH: "Publication",
   FAIL: "Échec de publication",
+  REMOVE: "Supprimée (retirée du slider)",
 };
+
+const yesNo = (v) => (v ? "oui" : "non");
+
+/**
+ * Short French summary of an audit event's details (shown above the raw details):
+ * PUBLISH → the display duration captured at that publication; REMOVE → the state the proof had.
+ */
+export function eventSummary(e) {
+  const d = e?.details;
+  if (!d || typeof d !== "object") return null;
+  if (e.action === "PUBLISH" && d.visibleHours) {
+    return `Durée d'affichage : ${describeDisplayHours(d.visibleHours)}${d.visibleUntil ? ` · visible jusqu'au ${fmtInstant(d.visibleUntil)} (heure du Maroc)` : ""}`;
+  }
+  if (e.action === "REMOVE") {
+    const prev = STATUS_META[d.previousStatus]?.label || d.previousStatus || "—";
+    return `Statut précédent : ${prev} · annulée par la suppression : ${yesNo(d.cancelled)} · était sur le slider : ${yesNo(d.wasVisible)}`;
+  }
+  return null;
+}
+
+/**
+ * The global "Durée d'affichage des preuves de paiement" (GET /api/admin/payment-proofs/settings),
+ * loaded once by the page and passed down. `settings` = the API view ({ hours, label, … }) or null.
+ */
+export function useDisplaySettings() {
+  const [state, setState] = useState({ settings: null, error: null, loading: true, seq: 0 });
+  useEffect(() => {
+    let alive = true;
+    api("/api/admin/payment-proofs/settings").then((res) => {
+      if (alive) setState((s) => ({ ...s, loading: false, settings: res.ok ? res.data : s.settings, error: res.ok ? null : apiErrorText(res) }));
+    });
+    return () => { alive = false; };
+  }, [state.seq]);
+  return {
+    settings: state.settings,
+    error: state.error,
+    loading: state.loading,
+    reload: () => setState((s) => ({ ...s, loading: true, error: null, seq: s.seq + 1 })),
+    replace: (settings) => setState((s) => ({ ...s, settings, error: null })),
+  };
+}
+
+/** "la durée d'affichage en vigueur (actuellement 72 heures (3 jours))" — the configured duration, never hard-coded. */
+export function durationInForceText(settings) {
+  return settings?.label ? `la durée d'affichage en vigueur (actuellement ${settings.label})` : "la durée d'affichage en vigueur";
+}
 
 export function StatusBadge({ status }) {
   const m = STATUS_META[status] || { label: status, cls: "bg-gray-100 text-gray-600 border-gray-200" };

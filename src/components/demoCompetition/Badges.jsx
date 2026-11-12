@@ -1,11 +1,13 @@
 "use client";
 /**
- * Small Demo Competition badges: RankBadge, LiveBadge, SimulationBadge,
- * SimulationDisclosure (the persistent "Démo / Simulation" banner) and
- * MovementIndicator (▲ / ▼ from live diffs, else from the 24 h rank change).
+ * Small leaderboard badges: RankBadge, LiveBadge, MovementIndicator (▲ / ▼ from live
+ * diffs, else from the 24 h rank change) and SimulationNote — the discreet simulation
+ * footnote, whose text comes ONLY from src/lib/demoCompetition/disclosure.js.
  */
-import { FlaskConical, Info } from "lucide-react";
+import { Info } from "lucide-react";
 import { movementOf } from "@/lib/demoCompetition/livePolling";
+import { demoDir } from "@/lib/demoCompetition/i18n";
+import { simulationDisclosure } from "@/lib/demoCompetition/disclosure";
 import "./demoCompetition.css";
 
 // Gold / silver / bronze medals for 1-3, a light neutral disc for the others.
@@ -40,31 +42,18 @@ export function LiveBadge({ live, t }) {
   );
 }
 
-/** `iconOnlyOnPhone`: below 640 px only the flask icon shows (label kept as accessible name + tooltip). */
-export function SimulationBadge({ t, className = "", iconOnlyOnPhone = false }) {
-  if (!t("sim_badge")) return null; // neutral-wording preview (src/lib/neutralWording.js): no empty pill
+/**
+ * Discreet simulation footnote (small muted text, direction of the page language). The sentence is the central
+ * disclosure (src/lib/demoCompetition/disclosure.js); when it is disabled there, nothing is rendered.
+ */
+export function SimulationNote({ lang, className = "" }) {
+  const text = simulationDisclosure(lang);
+  if (!text) return null;
   return (
-    <span
-      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800 ${iconOnlyOnPhone ? "max-sm:px-1.5" : ""} ${className}`}
-      {...(iconOnlyOnPhone ? { title: t("sim_badge"), "aria-label": t("sim_badge"), role: "img" } : {})}
-    >
-      <FlaskConical className="h-3 w-3 shrink-0" aria-hidden="true" />
-      {iconOnlyOnPhone ? <span className="max-sm:hidden" aria-hidden="true">{t("sim_badge")}</span> : t("sim_badge")}
-    </span>
-  );
-}
-
-export function SimulationDisclosure({ t, compact = false }) {
-  if (!t("sim_banner")) return null; // neutral-wording preview: no empty note box
-  return (
-    <div role="note" className={`flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 ${compact ? "px-3 py-2 text-xs" : "px-4 py-3 text-sm"}`}>
-      <Info className={`${compact ? "h-4 w-4" : "h-5 w-5"} mt-0.5 shrink-0`} aria-hidden="true" />
-      <p className="min-w-0">
-        <strong className="font-bold">{t("sim_banner_title")}</strong>
-        {" — "}
-        {t("sim_banner")}
-      </p>
-    </div>
+    <p role="note" dir={demoDir(lang)} lang={lang} className={`flex items-start justify-center gap-1 text-center text-[11px] leading-snug text-gray-500 ${className}`}>
+      <Info className="mt-px h-3 w-3 shrink-0" aria-hidden="true" />
+      <span className="min-w-0">{text}</span>
+    </p>
   );
 }
 

@@ -8,7 +8,7 @@
  */
 import { withAffiliateAuth } from '@/lib/middleware/withAffiliateAuth';
 import { rateLimit } from '@/lib/rateLimit';
-import { getDepositSummary, getAffiliateDeposits, submitDeposit, getConfiguredDepositAmount } from '@/lib/services/depositService';
+import { getDepositSummary, getAffiliateDeposits, submitDeposit, getConfiguredDepositAmount, ensureRechargeEnabled } from '@/lib/services/depositService';
 import { DEPOSIT_MAX_BYTES } from '@/lib/depositStorage';
 
 export const dynamic = 'force-dynamic';
@@ -33,6 +33,7 @@ async function postHandler(req, _ctx, decoded) {
   const limited = rateLimit(req, 'deposit_submit', { max: 10, windowMs: 60_000 });
   if (limited) return limited;
   try {
+    await ensureRechargeEnabled(); // switch OFF → 403 DEPOSIT_DISABLED for every new request, before the upload is read
     const form = await req.formData();
     const file = form.get('proof');
     if (!file || typeof file.arrayBuffer !== 'function') {
@@ -52,6 +53,10 @@ async function postHandler(req, _ctx, decoded) {
     });
     return Response.json(created, { status: 201 });
   } catch (err) {
+    // Admin switch "Recharge de solde des Affiliés" is OFF: no new request (feature disabled).
+    if (err.code === 'DEPOSIT_DISABLED') {
+      return Response.json({ error: err.message, code: err.code, featureDisabled: true }, { status: 403 });
+    }
     const clientCodes = new Set(['DEPOSIT_INVALID_AMOUNT', 'DEPOSIT_NO_METHOD', 'DEPOSIT_NO_PROOF', 'DEPOSIT_INVALID_FILE', 'DEPOSIT_PENDING_EXISTS']);
     if (clientCodes.has(err.code)) {
       return Response.json({ error: err.message, code: err.code }, { status: 400 });

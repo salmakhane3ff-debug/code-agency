@@ -1,12 +1,12 @@
 "use client";
 /**
- * /top-members/[id] — a demo member's public profile, polled live.
- * Personal demo earnings and the demo NETWORK earnings are kept separate (the
+ * /top-members/[id] — a member's public profile, polled live.
+ * Personal earnings and the NETWORK earnings are kept separate (the
  * ranking uses the personal ones only); "not configured" when the network is off.
  */
 import Link from "next/link";
 import Avatar from "./Avatar";
-import { LiveBadge, MovementIndicator, RankBadge, SimulationBadge } from "./Badges";
+import { LiveBadge, MovementIndicator, RankBadge } from "./Badges";
 import {
   BackLink, HistoryChart, NotFoundState, PageShell, PeriodTiles, ProfileSkeleton, RecentActivity, Section, StatTile, StatusNotice,
 } from "./ProfileParts";
@@ -35,7 +35,7 @@ export default function MemberProfile({ id }) {
     body = (
       <>
         <StatusNotice error={error} hasData t={t} />
-        <div className={`${flameClass(m.rank) || "rounded-2xl"} ${m.rank <= 3 ? "mt-6" : ""}`}>
+        <div className={`relative isolate rounded-2xl ${flameClass(m.rank)} ${m.rank <= 3 ? "mt-6" : ""}`}>
           <div className="dc-flame-inner rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
             <div className="flex items-center gap-4">
               <Avatar src={m.photoUrl} name={m.name} id={m.id} alt={t("photo_alt", { name: m.name })} size={80} ring="ring-4 ring-amber-100" />
@@ -46,9 +46,8 @@ export default function MemberProfile({ id }) {
                   <span>{t("rank_of", { rank: m.rank, total: m.total })}</span>
                   <MovementIndicator rankChange24h={m.rankChange24h} t={t} />
                 </div>
-                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 empty:hidden">
                   <LiveBadge live={m.live} t={t} />
-                  <SimulationBadge t={t} />
                 </div>
               </div>
             </div>
@@ -91,7 +90,6 @@ export default function MemberProfile({ id }) {
                   <Link href={`/top-brands/${encodeURIComponent(b.id)}`} className="flex items-center gap-3 rounded-xl border border-gray-100 bg-white p-2.5 shadow-sm hover:shadow-md">
                     <Avatar src={b.imageUrl} name={b.name} id={b.id} alt={t("product_alt", { name: b.name })} size={40} ring="ring-2 ring-amber-100" />
                     <span className="min-w-0 flex-1 truncate text-sm font-bold text-gray-900"><bdi>{b.name}</bdi></span>
-                    <SimulationBadge t={t} />
                   </Link>
                 </li>
               ))}

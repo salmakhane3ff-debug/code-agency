@@ -25,6 +25,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
 import { DEMO_COMP_MIGRATION_DIR, DEMO_COMP_MIGRATION, demoCompPinsHold } from './lib/demoCompetitionAllowance.mjs';
+import { DAC_MIGRATION_DIR, DAC_MIGRATION, dacMigrationPinHolds } from './lib/dashboardAdminControlsAllowance.mjs';
 
 process.env.JWT_SECRET = process.env.JWT_SECRET_TEST_ONLY || 'login-throttle-test-secret-not-real';
 delete process.env.TRUSTED_PROXY_MODE;
@@ -353,7 +354,9 @@ console.log('\n8. Sensitive data, no migration');
   // The only migration after 20261109 is the Phase 6 part 3a reward-cycles migration (recruiter_reward_ledger only).
   // Demo Competition (simulation only): + exactly 20261113_demo_competition (demo_comp_* tables only, SHA-256 pinned in
   // scripts/lib/demoCompetitionAllowance.mjs). It is excluded from the exact list below and checked separately.
-  const after = migrations.slice(migrations.indexOf('20261109_account_token_version') + 1).filter((d) => d !== DEMO_COMP_MIGRATION_DIR);
+  // Affiliate Dashboard & Admin Controls: + exactly 20261114_payment_proof_display_controls (payment_proofs /
+  // payment_proof_events only, SHA-256 pinned in scripts/lib/dashboardAdminControlsAllowance.mjs), checked separately below.
+  const after = migrations.slice(migrations.indexOf('20261109_account_token_version') + 1).filter((d) => d !== DEMO_COMP_MIGRATION_DIR && d !== DAC_MIGRATION_DIR);
   // Phase 7: + 20261112_recruiter_group_rewards (recruiter group reward: settings columns + ledger guards only).
   ok('no database migration for D5: 20261109_account_token_version is followed only by 20261110_recruiter_reward_cycles (Phase 6 part 3a, ledger only), 20261111_recruiter_identity_verifications (Phase 6 part 3c, recruiter KYC only) and 20261112_recruiter_group_rewards (Phase 7, group reward only), and nothing in prisma/ stores login attempts',
     migrations.includes('20261109_account_token_version') && JSON.stringify(after) === JSON.stringify(['20261110_recruiter_reward_cycles', '20261111_recruiter_identity_verifications', '20261112_recruiter_group_rewards'])
@@ -366,6 +369,9 @@ console.log('\n8. Sensitive data, no migration');
     ok('Demo Competition migration: the only other addition, pinned, and it stores no login attempts',
       pins.schema && pins.migration && !/login|throttle|attempt/i.test(read(DEMO_COMP_MIGRATION)), pins);
   }
+  ok('Dashboard & Admin Controls migration: pinned, payment-proof tables only, and it stores no login attempts',
+    dacMigrationPinHolds() && !/login|throttle|attempt/i.test(read(DAC_MIGRATION))
+    && [...read(DAC_MIGRATION).replace(/--[^\n]*/g, '').matchAll(/(?:ALTER TABLE|ON|INDEX IF NOT EXISTS "\w+" ON) "(\w+)"/g)].every((m) => /^payment_proof/.test(m[1]) || /_idx$|_key$/.test(m[1])));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

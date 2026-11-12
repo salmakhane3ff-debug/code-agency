@@ -6,7 +6,8 @@
  * db, storage, clock and rate limiter.
  *
  *   Admin (role ADMIN only): list, review a batch, create one proof (multipart),
- *     edit before publication, cancel, receipt image, audit history.
+ *     edit before publication, cancel, publish now, remove ("Supprimer"), receipt image,
+ *     audit history, and the global display-duration setting.
  *   Affiliate (GET only, ACTIVE affiliates — the same existence + isActive check
  *     the CYOB affiliate routes use): the ONE global feed and the receipt image of
  *     a proof visible right now. Nothing is filtered by affiliate.
@@ -21,13 +22,14 @@ import { defaultPaymentProofStorage, PROOF_IMAGE_MAX_BYTES } from './paymentProo
 import {
   createPaymentProof, validatePaymentProofBatch, updatePaymentProofSchedule, cancelPaymentProof, publishPaymentProofNow,
   listPaymentProofsAdmin, readAdminPaymentProofImage, listVisiblePaymentProofs, readVisiblePaymentProofImage,
-  listPaymentProofEvents,
+  listPaymentProofEvents, removePaymentProof,
 } from './services/paymentProofService.js';
+import { getPaymentProofDisplaySettings, savePaymentProofDisplaySettings } from './services/paymentProofSettingsService.js';
 
 const STATUS = {
   INVALID_INPUT: 400, INVALID_FILE: 400, BODY_TOO_LARGE: 413,
   CLIENT_REF_CONFLICT: 409, DUPLICATE_RECEIPT: 409, NOT_EDITABLE: 409, NOT_CANCELLABLE: 409, RECEIPT_MISSING: 409,
-  NOT_PUBLISHABLE: 409, PUBLISH_FAILED: 422,
+  NOT_PUBLISHABLE: 409, PUBLISH_FAILED: 422, INVALID_DURATION: 400, SETTINGS_CONFLICT: 409,
   NOT_FOUND: 404, UNAUTHORIZED: 401, AFFILIATE_INACTIVE: 403,
 };
 
@@ -41,7 +43,7 @@ export function proofErrorResponse(e) {
   }
   return json({
     error: e.message, code: e.code, ...(e.errors ? { errors: e.errors } : {}), ...(e.status ? { status: e.status } : {}),
-    ...(e.reason ? { reason: e.reason } : {}), ...(e.proof ? { proof: e.proof } : {}),
+    ...(e.reason ? { reason: e.reason } : {}), ...(e.proof ? { proof: e.proof } : {}), ...(e.current ? { current: e.current } : {}),
   }, status);
 }
 
@@ -93,7 +95,7 @@ export function adminPaymentProofHandlers(deps = {}) {
     list: safe(async (req) => {
       const sp = new URL(req.url).searchParams;
       return json(await listPaymentProofsAdmin({
-        status: (sp.get('status') || 'ALL').toUpperCase(), batchId: sp.get('batchId') || null, page: Number(sp.get('page')) || 1, db,
+        status: (sp.get('status') || 'ALL').toUpperCase(), batchId: sp.get('batchId') || null, page: Number(sp.get('page')) || 1, db, now: now(),
       }));
     }),
     /**
@@ -126,11 +128,17 @@ export function adminPaymentProofHandlers(deps = {}) {
       const body = await readJsonObject(req);
       return json(await updatePaymentProofSchedule(await param(ctx, 'id'), body, { db, storage, now: now(), actorId: actorOf(user) }));
     }),
-    /** POST { action: 'cancel' } | { action: 'publish_now' } (a SCHEDULED proof, before its time — same pipeline as the worker) */
+    /**
+     * POST { action: 'cancel' } | { action: 'publish_now' } (a SCHEDULED proof, before its time — same pipeline as the worker)
+     *    | { action: 'remove' } ("Supprimer": hidden from every affiliate at once, record + history kept; idempotent)
+     */
     act: safe(async (req, ctx, user) => {
       const body = await readJsonObject(req);
       if (body.action === 'publish_now') {
         return json(await publishPaymentProofNow(await param(ctx, 'id'), { db, storage, clock: now, actorId: actorOf(user) }));
+      }
+      if (body.action === 'remove') {
+        return json(await removePaymentProof(await param(ctx, 'id'), { db, now: now(), actorId: actorOf(user) }));
       }
       if (body.action !== 'cancel') throw bad('Action invalide.');
       return json(await cancelPaymentProof(await param(ctx, 'id'), { db, now: now(), actorId: actorOf(user) }));
@@ -138,6 +146,13 @@ export function adminPaymentProofHandlers(deps = {}) {
     image: safe(async (_req, ctx) => imageResponse(await readAdminPaymentProofImage(await param(ctx, 'id'), { db, storage }))),
     /** GET → audit history of one proof. */
     events: safe(async (_req, ctx) => json(await listPaymentProofEvents(await param(ctx, 'id'), { db }))),
+    /** GET → the global display duration ("Durée d'affichage"): { hours, preset, label, presets, history, revision, … }. */
+    getSettings: safe(async () => json(await getPaymentProofDisplaySettings({ db }))),
+    /** PUT { hours, revision } → save it (applies to proofs published from now on; never to proofs already published). */
+    saveSettings: safe(async (req, _ctx, user) => {
+      const body = await readJsonObject(req);
+      return json(await savePaymentProofDisplaySettings({ hours: body.hours, revision: body.revision }, { db, now: now(), actorId: actorOf(user) }));
+    }),
   };
 }
 
@@ -153,7 +168,7 @@ export function affiliatePaymentProofHandlers(deps = {}) {
     if (!acc?.isActive) throw Object.assign(new Error('Compte inactif'), { code: 'AFFILIATE_INACTIVE' });
   };
   return {
-    /** GET ?cursor= → one page of the global 72 h feed: { proofs, total, nextCursor }. */
+    /** GET ?cursor= → one page of the global feed (proofs still on display): { proofs, total, nextCursor }. */
     list: safe(async (req, _ctx, decoded) => {
       const limited = rateLimit(req, 'payment_proofs_feed', { max: 60, windowMs: 60_000 });
       if (limited) return limited;

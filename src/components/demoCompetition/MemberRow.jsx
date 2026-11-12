@@ -1,9 +1,9 @@
 "use client";
 /**
- * MemberRow — the approved leaderboard card for a demo member (see LeaderCard): rank, circular
- * photo (crown on #1, "online" dot when live), name, live + SIMULATION badges, movement, demo
- * earnings (30 d, count-up, orange) and demo orders (30 d). `showNetwork` (the full /top-members
- * page) adds the separate demo network earnings (30 d) — never mixed into the ranking.
+ * MemberRow — the approved leaderboard card for a member (see LeaderCard): rank, circular
+ * photo (crown on #1, "online" dot when live), name, live badge, movement, earnings
+ * (30 d, count-up, orange) and orders (30 d). `showNetwork` (the full /top-members
+ * page) adds the separate network earnings (30 d) — never mixed into the ranking.
  * Top-3 glow from the CURRENT rank. MembersLeaderboard — the animated list with live diffs.
  */
 import Avatar from "./Avatar";

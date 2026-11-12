@@ -24,6 +24,7 @@
 
 import prisma from '../prisma.js';
 import { toDecimal, serializeAmount } from '../balance/composeBalance.js';
+import { isRechargeEnabled, isRechargeEnabledForDisplay } from './rechargeFeatureService.js';
 import {
   validateDepositUpload, processAndStoreDeposit, readDepositByKey, deleteDepositByKey,
 } from '../depositStorage.js';
@@ -64,13 +65,25 @@ export async function getPendingDepositTotal(affiliateId, db = prisma) {
   return sumAmounts(rows);
 }
 
-/** Combined summary for the affiliate dashboard/page. */
+/**
+ * Combined summary for the affiliate dashboard/page. `rechargeEnabled` = the admin switch
+ * "Recharge de solde des Affiliés" (display only — submitDeposit enforces it); the balances are
+ * returned unchanged whatever the switch says.
+ */
 export async function getDepositSummary(affiliateId, db = prisma) {
-  const [approved, pending] = await Promise.all([
+  const [approved, pending, rechargeEnabled] = await Promise.all([
     getDepositBalance(affiliateId, db),
     getPendingDepositTotal(affiliateId, db),
+    isRechargeEnabledForDisplay(db),
   ]);
-  return { approvedBalance: approved, pendingTotal: pending };
+  return { approvedBalance: approved, pendingTotal: pending, rechargeEnabled };
+}
+
+const rechargeDisabled = () => Object.assign(new Error('La recharge de solde est désactivée pour le moment.'), { code: 'DEPOSIT_DISABLED' });
+
+/** Throws DEPOSIT_DISABLED while the admin switch is OFF — the route calls it first, before reading the upload. */
+export async function ensureRechargeEnabled(db = prisma) {
+  if (!(await isRechargeEnabled(db))) throw rechargeDisabled();
 }
 
 /** This affiliate's deposit requests — NO storage keys ever (only `hasProof`). */
@@ -100,6 +113,8 @@ function mapAffiliateDeposit(r) {
  * @param {{amount, paymentMethod, transferReference?, affiliateNote?, proof:{buffer,mime,size}}} input
  */
 export async function submitDeposit(affiliateId, input, db = prisma, storage = { process: processAndStoreDeposit, remove: deleteDepositByKey }) {
+  // Admin switch "Recharge de solde des Affiliés": OFF → no NEW request (nothing stored).
+  if (!(await isRechargeEnabled(db))) throw rechargeDisabled();
   // Only ONE open request at a time. Fast pre-check for a clean error in the
   // common case; the DB PARTIAL UNIQUE INDEX (one PENDING per affiliate) is the
   // real concurrency guard — two simultaneous submits can never both insert.
@@ -125,6 +140,12 @@ export async function submitDeposit(affiliateId, input, db = prisma, storage = {
   if (perr.length) throw Object.assign(new Error('Fichier invalide (JPG/PNG/WEBP/PDF, max 8 Mo).'), { code: 'DEPOSIT_INVALID_FILE', details: perr });
 
   const proofFile = await storage.process(proof.buffer); // re-encodes/validates + stores privately (new file per request)
+
+  // Re-checked right before the insert: a request racing the admin switching it OFF is not created.
+  if (!(await isRechargeEnabled(db).catch(() => false))) {
+    await storage.remove?.(proofFile).catch(() => {});
+    throw rechargeDisabled();
+  }
 
   try {
     const row = await db.affiliateSecurityDeposit.create({

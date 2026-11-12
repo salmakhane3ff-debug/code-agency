@@ -6,7 +6,7 @@
  *
  *   rank (medal 1-3, "#n" after) · small circular photo / product image (green dot when live)
  *   · name (crown on #1) + a details line (brand owner, live, movement)
- *   · demo orders (30 d) and demo earnings (30 d) aligned at the end · chevron.
+ *   · orders (30 d) and earnings (30 d) aligned at the end · chevron.
  *
  * Every row links to the existing detail page (/top-members/[id], /top-brands/[id]) where the full
  * information lives (24 h / 7 d / 30 d / all-time, network, history, recent activity). The full

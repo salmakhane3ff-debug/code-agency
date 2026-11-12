@@ -18,7 +18,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Copy, Trash2, CheckCircle2, AlertTriangle, Loader2, ImageIcon, CalendarDays, ArrowLeft, RotateCcw, Clock, Send } from "lucide-react";
 import {
   inputCls, btnPrimary, btnGhost, btnDanger, api, apiErrorText, uuid, casablancaToday, addDays, dayLabel, fmtMad,
-  errText, fileProblem, ACCEPTED_TYPES, Declarations, scheduleProblem, Modal, FAILURE_TEXT, fmtInstant,
+  errText, fileProblem, ACCEPTED_TYPES, Declarations, scheduleProblem, Modal, FAILURE_TEXT, fmtInstant, durationInForceText,
 } from "./ui";
 
 const newRow = (date) => ({
@@ -90,7 +90,9 @@ function RowEditor({ row, onChange, onRemove, onDuplicate, disabled, showTime = 
   );
 }
 
-export default function ScheduleBuilder({ onShowList }) {
+export default function ScheduleBuilder({ onShowList, displaySettings = null }) {
+  // The display duration is the global setting IN FORCE when each proof is actually published (never hard-coded here).
+  const duration = durationInForceText(displaySettings);
   const [mode, setMode] = useState("schedule"); // schedule | now — the publication mode of this batch
   const [confirmNow, setConfirmNow] = useState(false);
   const [startDate, setStartDate] = useState(() => casablancaToday());
@@ -244,7 +246,7 @@ export default function ScheduleBuilder({ onShowList }) {
                 <Plus className="w-3.5 h-3.5" />Ajouter une preuve
               </button>
             </div>
-            <p className="text-[11px] text-gray-500">Aucune date ni heure : chaque preuve est publiée dès votre confirmation, puis visible 72 h par tous les affiliés actifs.</p>
+            <p className="text-[11px] text-gray-500">Aucune date ni heure : chaque preuve est publiée dès votre confirmation, puis visible par tous les affiliés actifs pendant {duration}.</p>
             {rows.map((r) => (
               <RowEditor key={r.clientRef} row={r} showTime={false} disabled={isDone(r)} onChange={(p) => update(r.clientRef, p)} onRemove={() => remove(r.clientRef)} onDuplicate={() => duplicate(r.clientRef)} />
             ))}
@@ -318,9 +320,10 @@ export default function ScheduleBuilder({ onShowList }) {
         </p>
         <p className="text-xs text-gray-500 break-words">
           {nowMode
-            ? <>{rows.length} preuve{rows.length > 1 ? "s" : ""}. Chaque preuve sera publiée dès votre confirmation (heure réelle du serveur), puis visible 72 h par tous les affiliés actifs.</>
+            ? <>{rows.length} preuve{rows.length > 1 ? "s" : ""}. Chaque preuve sera publiée dès votre confirmation (heure réelle du serveur), puis visible par tous les affiliés actifs pendant {duration}.</>
             : <>{rows.length} preuve{rows.length > 1 ? "s" : ""} sur {days.length} jour{days.length > 1 ? "s" : ""}.
-              Chaque preuve sera publiée à l&apos;heure indiquée (heure du Maroc), puis visible 72 h par tous les affiliés actifs.</>}
+              Chaque preuve sera publiée à l&apos;heure indiquée (heure du Maroc), puis visible par tous les affiliés actifs pendant
+              la durée d&apos;affichage en vigueur au moment de sa publication{displaySettings?.label ? ` (actuellement ${displaySettings.label})` : ""}.</>}
         </p>
         {phase === "review" && (allValid
           ? <p className="text-xs text-emerald-700 inline-flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" />Tout est valide.</p>
@@ -389,7 +392,7 @@ export default function ScheduleBuilder({ onShowList }) {
           <div className="space-y-3 text-sm text-gray-700" data-publish-now-confirm>
             <p className="break-words">
               {rows.length} preuve{rows.length > 1 ? "s" : ""} {rows.length > 1 ? "seront publiées" : "sera publiée"} <strong>immédiatement</strong> :
-              visible{rows.length > 1 ? "s" : ""} par tous les affiliés actifs dans le slider pendant 72 h à partir de la publication effective.
+              visible{rows.length > 1 ? "s" : ""} par tous les affiliés actifs dans le slider pendant {duration}, à partir de la publication effective.
             </p>
             <p className="text-[11px] text-gray-500">Une preuve publiée ne peut plus être modifiée ni annulée (elle reste dans l&apos;historique).</p>
             <div className="flex flex-wrap gap-2 justify-end">

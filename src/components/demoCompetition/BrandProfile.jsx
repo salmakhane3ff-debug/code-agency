@@ -1,12 +1,12 @@
 "use client";
 /**
- * /top-brands/[id] — a demo brand's public profile, polled live. The circular
+ * /top-brands/[id] — a brand's public profile, polled live. The circular
  * product image is the brand's identity; the owner block links to the owner's
  * member profile only when the owner is public (active).
  */
 import Link from "next/link";
 import Avatar from "./Avatar";
-import { LiveBadge, MovementIndicator, RankBadge, SimulationBadge } from "./Badges";
+import { LiveBadge, MovementIndicator, RankBadge } from "./Badges";
 import {
   BackLink, HistoryChart, NotFoundState, PageShell, PeriodTiles, ProfileSkeleton, RecentActivity, Section, StatTile, StatusNotice,
 } from "./ProfileParts";
@@ -53,7 +53,7 @@ export default function BrandProfile({ id }) {
     body = (
       <>
         <StatusNotice error={error} hasData t={t} />
-        <div className={`${flameClass(b.rank) || "rounded-2xl"} ${b.rank <= 3 ? "mt-6" : ""}`}>
+        <div className={`relative isolate rounded-2xl ${flameClass(b.rank)} ${b.rank <= 3 ? "mt-6" : ""}`}>
           <div className="dc-flame-inner rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
             <div className="flex items-center gap-4">
               <Avatar src={b.imageUrl} name={b.name} id={b.id} alt={t("product_alt", { name: b.name })} size={96} ring="ring-4 ring-amber-100" />
@@ -64,9 +64,8 @@ export default function BrandProfile({ id }) {
                   <span>{t("rank_of", { rank: b.rank, total: b.total })}</span>
                   <MovementIndicator rankChange24h={b.rankChange24h} t={t} />
                 </div>
-                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 empty:hidden">
                   <LiveBadge live={b.live} t={t} />
-                  <SimulationBadge t={t} />
                 </div>
               </div>
             </div>

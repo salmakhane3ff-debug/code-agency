@@ -45,8 +45,9 @@ export const DEMO_COMP_SRC_DIRS = Object.freeze([
   // Conflict-safe homepage layout writes (Homepage Builder ↔ Demo Competition homepage settings).
   /^src\/lib\/services\/homepageLayoutService\.js$/,
   /^src\/app\/api\/admin\/homepage-layout\/route\.js$/,
-  // TEMPORARY design-review preview: neutral wording (text only) for the homepage block, the dashboard leaderboard
-  // and the active Brand dashboard — one switch, NEUTRAL_WORDING_PREVIEW. Not for publication.
+  // TEMPORARY design-review preview: neutral wording (text only) for the active Brand dashboard — one switch,
+  // NEUTRAL_WORDING_PREVIEW. (Top Members / Top Brands texts are neutral at the source; their single simulation
+  // disclosure is src/lib/demoCompetition/disclosure.js, already covered by the src/lib/demoCompetition/ entry.)
   /^src\/lib\/neutralWording\.js$/,
 ]);
 /** Existing files the feature edits (menu entry, homepage builder types + conflict-safe save, landing-mode allowlist, sitemap, dashboard leaderboard, reserved homepage_layout setting). */

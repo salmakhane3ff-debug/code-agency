@@ -237,7 +237,9 @@ console.log('\n7. Scheduled publication works exactly as before');
   const row = db._tables.paymentProof[0];
   const ev = events(db, p.id, 'PUBLISH')[0];
   ok('at / after its time the worker publishes it; publishedAt = the actual (late) tick, actor = the worker, details unchanged',
-    t.published === 1 && +row.publishedAt === +late && ev.actor === W.PUBLISHER_ACTOR && JSON.stringify(ev.details) === JSON.stringify({ publishedAt: late.toISOString() }));
+    // 20261114: the PUBLISH event also records the display duration captured at that publication (72 h default).
+    t.published === 1 && +row.publishedAt === +late && ev.actor === W.PUBLISHER_ACTOR
+    && JSON.stringify(ev.details) === JSON.stringify({ publishedAt: late.toISOString(), visibleHours: 72, visibleUntil: new Date(+late + 72 * H).toISOString() }));
   ok('72 h from the actual (late) publication, not from the planned time', (await visibleNames(db, new Date(+late + 72 * H - 1))).length === 1
     && (await visibleNames(db, new Date(+late + 72 * H))).length === 0);
   const { db: d2, storage: s2 } = fresh();
@@ -325,8 +327,9 @@ console.log('\n10. Admin list display of immediate publications');
     list.items.find((x) => x.id === early.id).publishedAt === at(5 * MIN).toISOString() && T.formatCasablanca(+at(5 * MIN)) === '11/11/2026 02:27');
   const resp = await S.createPaymentProof(input(6, { publishMode: 'now' }), fileOf('d6'), { db, storage, now: T0, clock: () => at(7 * MIN), actorId: ADMIN });
   ok('API responses of "Publier maintenant" carry publishedImmediately = true', resp.proof.publishedImmediately === true);
-  ok('…the list makes ONE extra query for the page (PUBLISH events of its published proofs), nothing per row',
-    /const pubs = await db\.paymentProofEvent\.findMany\(\{ where: \{ proofId: \{ in: publishedIds \}, action: 'PUBLISH' \}/.test(read('../src/lib/services/paymentProofService.js')));
+  // 20261114: the same single page query now also returns REMOVE events ("Supprimer") — still one query, nothing per row.
+  ok('…the list makes ONE extra query for the page (PUBLISH + REMOVE events of its proofs), nothing per row',
+    /const evs = await db\.paymentProofEvent\.findMany\(\{\s*where: \{ proofId: \{ in: rows\.map\(\(r\) => r\.id\) \}, action: \{ in: \['PUBLISH', 'REMOVE'\] \} \}/.test(read('../src/lib/services/paymentProofService.js')));
   const pl = read('../src/app/admin/payment-proofs/ProofsList.jsx');
   ok('admin list UI: immediate → only "Publiée : … (heure du Maroc) · publication immédiate"; otherwise "Programmée : …" (+ "Publiée : …" once published)',
     /\{p\.publishedImmediately \? \(\s*\/\/[^\n]*\n\s*<span data-published-immediately>Publiée : <span data-published-at>\{fmtInstant\(p\.publishedAt\)\}<\/span> \(heure du Maroc\) · publication immédiate<\/span>\s*\) : \(/.test(pl)

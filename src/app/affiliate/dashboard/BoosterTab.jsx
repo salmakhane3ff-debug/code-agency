@@ -303,7 +303,8 @@ export default function BoosterTab({ onRecharge }) {
         {topupAvailable > 0 && (
           <p className="text-[11px] text-gray-500">{fillParts(t("bst_topup_part"), { amount: <strong key="amount"><bdi>{fmt(topupAvailable)}</bdi></strong> })}</p>
         )}
-        <button type="button" onClick={onRecharge} className="text-xs font-bold px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-500 text-gray-900">{t("bst_recharge")}</button>
+        {/* onRecharge is null while the admin switch "Recharge de solde des Affiliés" is OFF → no recharge shortcut */}
+        {onRecharge && <button type="button" onClick={onRecharge} className="text-xs font-bold px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-500 text-gray-900">{t("bst_recharge")}</button>}
       </div>
 
       {/* Active boosters — dashboard + timeline (2 columns on desktop) */}
@@ -373,15 +374,15 @@ export default function BoosterTab({ onRecharge }) {
                   <p className="font-bold text-amber-800">{t("bst_insufficient")}</p>
                   <p className="text-amber-700 mt-0.5">{t("bst_missing")} <strong><bdi>{fmt(selected.price - balance)}</bdi></strong></p>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className={`grid ${onRecharge ? "grid-cols-2" : "grid-cols-1"} gap-2`}>
                   <button type="button" onClick={() => buy("CARD")} disabled={busy}
                     className="flex items-center justify-center gap-1.5 py-3.5 rounded-2xl bg-gray-900 hover:bg-black text-white text-xs font-black disabled:opacity-50">
                     {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CreditCard className="w-4 h-4" />} {t("bst_pay_by_card")}
                   </button>
-                  <button type="button" onClick={onRecharge}
+                  {onRecharge && <button type="button" onClick={onRecharge}
                     className="flex items-center justify-center gap-1.5 py-3.5 rounded-2xl bg-amber-400 hover:bg-amber-500 text-gray-900 text-xs font-black">
                     <Wallet className="w-4 h-4" /> {t("bst_recharge_plain")}
-                  </button>
+                  </button>}
                 </div>
               </div>
             )}

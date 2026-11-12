@@ -2,14 +2,16 @@
 
 /**
  * Management list of payment proofs: status filters with counts, paging, receipt
- * preview, edit / cancel before publication, and the audit history of each proof.
+ * preview, edit / cancel before publication, "Supprimer" (hide from the slider at once,
+ * nothing deleted), the display window of each published proof, and the audit history.
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, RefreshCw, Pencil, Ban, History, ChevronLeft, ChevronRight, Send } from "lucide-react";
+import { Loader2, RefreshCw, Pencil, Ban, History, ChevronLeft, ChevronRight, Send, Trash2 } from "lucide-react";
+import { describeDisplayHours } from "@/lib/paymentProofs";
 import {
   inputCls, btnPrimary, btnGhost, btnDanger, api, apiErrorText, errText, fmtInstant, fmtMad, StatusBadge, STATUS_META,
-  FAILURE_TEXT, EVENT_TEXT, Modal, Declarations, dayLabel, scheduleProblem,
+  FAILURE_TEXT, EVENT_TEXT, Modal, Declarations, dayLabel, scheduleProblem, eventSummary, durationInForceText,
 } from "./ui";
 
 const FILTERS = [
@@ -20,6 +22,21 @@ const FILTERS = [
   { id: "FAILED", label: STATUS_META.FAILED.label },
 ];
 const EDITABLE = ["SCHEDULED", "FAILED"];
+const STATUS_IDS = FILTERS.filter((x) => x.id !== "ALL").map((x) => x.id);
+
+/** Display state of a proof for the affiliates: removed > on the slider now > expired (null = never published). */
+const DISPLAY_STATE = {
+  removed: { label: "Supprimée", cls: "bg-red-50 text-red-700 border-red-100" },
+  onSlider: { label: "Sur le slider", cls: "bg-violet-50 text-violet-700 border-violet-100" },
+  expired: { label: "Expirée", cls: "bg-gray-100 text-gray-600 border-gray-200" },
+};
+function displayStateOf(p) {
+  if (p.removed) return "removed";
+  if (p.status !== "PUBLISHED" || !p.visibleUntil) return null;
+  const onSlider = typeof p.onSlider === "boolean" ? p.onSlider : Date.parse(p.visibleUntil) > Date.now();
+  if (onSlider) return "onSlider";
+  return Date.parse(p.visibleUntil) <= Date.now() ? "expired" : null;
+}
 const imageUrl = (id) => `/api/admin/payment-proofs/${encodeURIComponent(id)}/image`;
 
 function EditDialog({ proof, onClose, onSaved }) {
@@ -111,7 +128,7 @@ function CancelDialog({ proof, onClose, onDone }) {
  * "Publier maintenant" for a scheduled proof (before its planned time): explicit confirmation, then the
  * server publishes it through the same pipeline as the worker (publishedAt = the server time then).
  */
-function PublishNowDialog({ proof, onClose, onDone }) {
+function PublishNowDialog({ proof, onClose, onDone, displaySettings }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const [done, setDone] = useState(null);
@@ -128,7 +145,11 @@ function PublishNowDialog({ proof, onClose, onDone }) {
           <p className="text-sm text-emerald-700 font-semibold">
             {done.alreadyPublished ? "Cette preuve était déjà publiée" : "Preuve publiée"} — le {fmtInstant(done.publication?.publishedAt || done.proof?.publishedAt)} (heure du Maroc).
           </p>
-          <p className="text-[11px] text-gray-500">Visible par tous les affiliés actifs pendant 72 h à partir de cette heure.</p>
+          <p className="text-[11px] text-gray-500">
+            {done.proof?.visibleUntil
+              ? <>Visible par tous les affiliés actifs jusqu&apos;au {fmtInstant(done.proof.visibleUntil)} (heure du Maroc) · durée : {describeDisplayHours(done.proof.visibleHours)}.</>
+              : <>Visible par tous les affiliés actifs pendant la durée d&apos;affichage en vigueur à cette heure.</>}
+          </p>
           <div className="flex justify-end"><button type="button" className={btnPrimary} onClick={onDone} autoFocus>Fermer</button></div>
         </div>
       ) : (
@@ -137,7 +158,7 @@ function PublishNowDialog({ proof, onClose, onDone }) {
             Publier « {proof.displayName} » ({fmtMad(proof.amount)}) <strong>maintenant</strong>, avant l&apos;heure prévue
             ({proof.scheduledLocal ? `${dayLabel(proof.scheduledLocal.date)} à ${proof.scheduledLocal.time}` : "—"}, heure du Maroc) ?
           </p>
-          <p className="text-[11px] text-gray-500">Elle sera visible immédiatement par tous les affiliés actifs, pendant 72 h à partir de sa publication effective. La publication programmée ne la publiera pas une seconde fois.</p>
+          <p className="text-[11px] text-gray-500">Elle sera visible immédiatement par tous les affiliés actifs, pendant {durationInForceText(displaySettings)}, à partir de sa publication effective. La publication programmée ne la publiera pas une seconde fois.</p>
           {msg && <p role="alert" className="text-xs text-red-600 break-words" data-publish-now-error>{msg}</p>}
           <div className="flex flex-wrap gap-2 justify-end">
             <button type="button" className={btnGhost} onClick={msg ? onDone : onClose}>{msg ? "Fermer" : "Retour"}</button>
@@ -149,6 +170,45 @@ function PublishNowDialog({ proof, onClose, onDone }) {
           </div>
         </div>
       )}
+    </Modal>
+  );
+}
+
+/**
+ * "Supprimer": hides the proof from every affiliate at once (any status). Nothing is deleted —
+ * the record and its history stay in this list; a scheduled / failed proof is also cancelled.
+ */
+function RemoveDialog({ proof, onClose, onDone }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const unpublished = EDITABLE.includes(proof.status);
+  const go = async () => {
+    setBusy(true); setMsg(null);
+    const res = await api(`/api/admin/payment-proofs/${encodeURIComponent(proof.id)}`, { method: "POST", body: { action: "remove" } });
+    setBusy(false);
+    if (res.ok) onDone(); else setMsg(apiErrorText(res));
+  };
+  return (
+    <Modal title="Supprimer la preuve" onClose={onClose}>
+      <div className="space-y-3" data-remove-dialog>
+        <p className="text-sm text-gray-700 break-words">
+          Supprimer « {proof.displayName} » ({fmtMad(proof.amount)}) ? Elle disparaît <strong>immédiatement</strong> du slider de
+          tous les affiliés, même avant la fin de sa durée d&apos;affichage.
+        </p>
+        {unpublished && (
+          <p className="text-xs text-gray-700 break-words">Elle n&apos;est pas encore publiée : elle sera annulée et ne sera <strong>jamais publiée</strong>.</p>
+        )}
+        <p className="text-[11px] text-gray-500 break-words">
+          Rien n&apos;est effacé : la preuve et son historique restent visibles ici (marquée « Supprimée »). Cette suppression ne peut pas être annulée.
+        </p>
+        {msg && <p role="alert" className="text-xs text-red-600 break-words">{msg}</p>}
+        <div className="flex flex-wrap gap-2 justify-end">
+          <button type="button" className={btnGhost} onClick={onClose}>Retour</button>
+          <button type="button" className={btnDanger} onClick={go} disabled={busy} data-remove-confirm>
+            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}Supprimer
+          </button>
+        </div>
+      </div>
     </Modal>
   );
 }
@@ -172,7 +232,8 @@ function HistoryDialog({ proof, onClose }) {
             <p className="font-semibold text-gray-900">
               {e.details?.mode === "IMMEDIATE" ? `${EVENT_TEXT[e.action] || e.action} — immédiate (Publier maintenant)` : EVENT_TEXT[e.action] || e.action}
             </p>
-            <p className="text-gray-500 break-all">{fmtInstant(e.at)} · {e.actor}</p>
+            <p className="text-gray-500 break-words" data-event-actor>{fmtInstant(e.at)} · {e.actorName || "Administrateur"}</p>
+            {eventSummary(e) && <p className="text-gray-700 break-words">{eventSummary(e)}</p>}
             {e.details && <pre className="mt-1 whitespace-pre-wrap break-all text-[11px] text-gray-600">{JSON.stringify(e.details, null, 1)}</pre>}
           </li>
         ))}
@@ -181,13 +242,13 @@ function HistoryDialog({ proof, onClose }) {
   );
 }
 
-export default function ProofsList() {
+export default function ProofsList({ displaySettings = null }) {
   const [filter, setFilter] = useState("ALL");
   const [page, setPage] = useState(1);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [dialog, setDialog] = useState(null); // { kind: 'preview' | 'edit' | 'cancel' | 'publish' | 'history', proof }
+  const [dialog, setDialog] = useState(null); // { kind: 'preview' | 'edit' | 'cancel' | 'publish' | 'remove' | 'history', proof }
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -198,14 +259,18 @@ export default function ProofsList() {
   useEffect(() => { load(); }, [load]);
 
   const counts = data?.counts || {};
-  const totalAll = Object.values(counts).reduce((a, b) => a + (Number(b) || 0), 0);
+  // counts.REMOVED is NOT a status (a removed proof keeps its status): it is not part of the total.
+  const totalAll = STATUS_IDS.reduce((a, id) => a + (Number(counts[id]) || 0), 0);
+  const removedCount = Number(counts.REMOVED) || 0;
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
   const closeAndReload = () => { setDialog(null); load(); };
 
   return (
     <div className="space-y-3 min-w-0">
       <div className="rounded-2xl border border-gray-200 bg-white p-3 text-[11px] text-gray-500 space-y-0.5 break-words">
-        <p>• Une preuve publiée est visible par <strong>tous les affiliés actifs</strong> (le même slider pour tous) pendant 72 h à partir de sa publication effective, puis elle disparaît du slider (elle reste ici).</p>
+        <p>• Une preuve publiée est visible par <strong>tous les affiliés actifs</strong> (le même slider pour tous) pendant {durationInForceText(displaySettings)} au moment de sa publication effective, puis elle disparaît du slider (elle reste ici).
+          Chaque preuve publiée garde la durée en vigueur à sa publication.</p>
+        <p>• « Supprimer » la retire immédiatement du slider de tous les affiliés (même avant la fin de sa durée) ; rien n&apos;est effacé, elle reste ici avec son historique.</p>
         <p>• Le nom et le montant sont des données d&apos;affichage saisies par l&apos;administrateur : ils ne sont liés à aucun compte ni à aucun paiement.</p>
       </div>
 
@@ -216,6 +281,11 @@ export default function ProofsList() {
             {x.label} ({x.id === "ALL" ? totalAll : counts[x.id] ?? 0})
           </button>
         ))}
+        {removedCount > 0 && (
+          <span className="text-[11px] text-gray-500" data-removed-count>
+            dont {removedCount} supprimée{removedCount > 1 ? "s" : ""} (retirée{removedCount > 1 ? "s" : ""} du slider)
+          </span>
+        )}
         <button type="button" className={`${btnGhost} ml-auto`} onClick={load} disabled={loading} aria-label="Actualiser">
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />Actualiser
         </button>
@@ -237,6 +307,12 @@ export default function ProofsList() {
                 <p className="text-sm font-bold text-gray-900 break-words min-w-0">{p.displayName}</p>
                 <span className="text-sm font-semibold text-gray-700">{fmtMad(p.amount)}</span>
                 <StatusBadge status={p.status} />
+                {displayStateOf(p) && (
+                  <span data-proof-state={displayStateOf(p)}
+                    className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[11px] font-semibold whitespace-nowrap ${DISPLAY_STATE[displayStateOf(p)].cls}`}>
+                    {DISPLAY_STATE[displayStateOf(p)].label}
+                  </span>
+                )}
               </div>
               <p className="text-[11px] text-gray-500 break-words">
                 {p.publishedImmediately ? (
@@ -250,6 +326,17 @@ export default function ProofsList() {
                 )}
                 {p.cancelledAt && <> · Annulée : {fmtInstant(p.cancelledAt)}</>}
               </p>
+              {p.publishedAt && p.visibleUntil && (
+                // Its OWN window, captured at its actual publication (a later change of the setting never alters it).
+                <p className="text-[11px] text-gray-500 break-words" data-visible-until>
+                  {p.removed ? "Fin d'affichage prévue" : "Visible jusqu'au"} {fmtInstant(p.visibleUntil)} (heure du Maroc) · durée : {describeDisplayHours(p.visibleHours)}
+                </p>
+              )}
+              {p.removed && (
+                <p className="text-[11px] text-red-600 break-words" data-removed-at>
+                  Supprimée le {fmtInstant(p.removedAt)} (heure du Maroc) par {p.removedByName || "Administrateur"} — retirée du slider de tous les affiliés.
+                </p>
+              )}
               {p.status === "FAILED" && (
                 <p className="text-[11px] text-red-600 break-words">Échec : {FAILURE_TEXT[p.failureReason] || p.failureReason || "—"} · {fmtInstant(p.failedAt)}</p>
               )}
@@ -260,11 +347,16 @@ export default function ProofsList() {
                     <Send className="w-3.5 h-3.5" />Publier maintenant
                   </button>
                 )}
-                {EDITABLE.includes(p.status) && (
+                {!p.removed && EDITABLE.includes(p.status) && (
                   <>
                     <button type="button" className={btnGhost} onClick={() => setDialog({ kind: "edit", proof: p })}><Pencil className="w-3.5 h-3.5" />Modifier</button>
                     <button type="button" className={btnDanger} onClick={() => setDialog({ kind: "cancel", proof: p })}><Ban className="w-3.5 h-3.5" />Annuler</button>
                   </>
+                )}
+                {!p.removed && (
+                  <button type="button" className={btnDanger} onClick={() => setDialog({ kind: "remove", proof: p })} data-remove={p.id}>
+                    <Trash2 className="w-3.5 h-3.5" />Supprimer
+                  </button>
                 )}
                 <button type="button" className={btnGhost} onClick={() => setDialog({ kind: "history", proof: p })}><History className="w-3.5 h-3.5" />Historique</button>
               </div>
@@ -289,7 +381,8 @@ export default function ProofsList() {
       )}
       {dialog?.kind === "edit" && <EditDialog proof={dialog.proof} onClose={() => setDialog(null)} onSaved={closeAndReload} />}
       {dialog?.kind === "cancel" && <CancelDialog proof={dialog.proof} onClose={() => setDialog(null)} onDone={closeAndReload} />}
-      {dialog?.kind === "publish" && <PublishNowDialog proof={dialog.proof} onClose={() => setDialog(null)} onDone={closeAndReload} />}
+      {dialog?.kind === "publish" && <PublishNowDialog proof={dialog.proof} displaySettings={displaySettings} onClose={() => setDialog(null)} onDone={closeAndReload} />}
+      {dialog?.kind === "remove" && <RemoveDialog proof={dialog.proof} onClose={() => setDialog(null)} onDone={closeAndReload} />}
       {dialog?.kind === "history" && <HistoryDialog proof={dialog.proof} onClose={() => setDialog(null)} />}
     </div>
   );

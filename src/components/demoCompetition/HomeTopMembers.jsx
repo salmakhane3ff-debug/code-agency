@@ -1,14 +1,14 @@
 "use client";
 /**
  * Homepage builder section "top_members": a COMPACT preview panel — trophy + title + live dot +
- * "Démo / Simulation" badge + small "Voir tout" → /top-members (when showViewAll), then the
- * previewCount short rows (CompactLeaderboard), polled live ONLY while the section is in view.
- * Each row opens the member's detail page. The simulation disclaimer is in the block banner.
+ * small "Voir tout" → /top-members (when showViewAll), then the previewCount short rows
+ * (CompactLeaderboard), polled live ONLY while the section is in view. Each row opens the
+ * member's detail page. The simulation footnote is shown once, under the DemoCompetitionBlock.
  * An empty competition hides the section (reported to the DemoCompetitionBlock, with the total).
  */
 import { Trophy } from "lucide-react";
 import { MAX_MEMBERS } from "@/lib/demoCompetition/engine";
-import { useDemoText, useNeutralDemoText, useLivePolling } from "./useLivePolling";
+import { useDemoText, useLivePolling } from "./useLivePolling";
 import CompactLeaderboard from "./CompactLeaderboard";
 import HomeSectionFrame from "./HomeSectionFrame";
 import { useDemoBlockReport } from "./DemoCompetitionBlock";
@@ -24,7 +24,7 @@ export function previewCountOf(value, max) {
 
 /** `lang` (optional): the page's own language (the Affiliate Dashboard passes its market language); default: the site language. */
 export default function HomeTopMembers({ data = {}, sectionId = "top_members", lang: langOverride }) {
-  const { t, lang, dir } = useNeutralDemoText(useDemoText(langOverride));
+  const { t, lang, dir } = useDemoText(langOverride);
   const count = previewCountOf(data.previewCount, MAX_MEMBERS);
   const { data: res, error, ref } = useLivePolling(`/api/demo-competition/members?limit=${count}`);
   const members = res?.members;

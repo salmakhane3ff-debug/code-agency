@@ -94,16 +94,20 @@ console.log('\n1. Affiliate dashboard leaderboard → Demo Competition members')
     && !/MembersLeaderboard|SimulationDisclosure/.test(code));
   const row = read('src/components/demoCompetition/CompactLeaderboard.jsx');
   ok('a row opens /top-members/[id] or /top-brands/[id]', /const href = `\/\$\{isBrand \? "top-brands" : "top-members"\}\/\$\{encodeURIComponent\(item\.id\)\}`;/.test(row));
-  ok('the simulation disclaimer (block banner) + badge (each section) are shown on the dashboard',
-    /t\("sim_banner"\)/.test(read('src/components/demoCompetition/DemoCompetitionBlock.jsx')) && /<SimulationBadge t=\{t\} iconOnlyOnPhone \/>/.test(read('src/components/demoCompetition/HomeSectionFrame.jsx')));
+  // Changed requirement: no "Démo / Simulation" badge per section any more (and no longer a hidden banner): the block
+  // shows the ONE discreet central disclosure (<SimulationNote>, src/lib/demoCompetition/disclosure.js) under the sections.
+  ok('the simulation disclosure is shown once on the dashboard (central SimulationNote under the block), no per-section badge',
+    /\{children\}\s*<\/div>\s*<SimulationNote lang=\{lang\} className="[^"]*" \/>/.test(read('src/components/demoCompetition/DemoCompetitionBlock.jsx'))
+    && !/SimulationBadge|sim_badge/.test(read('src/components/demoCompetition/HomeSectionFrame.jsx')));
   ok('the old modal / avatar helpers of the dashboard are gone (no dead code left)', !/DemoAffiliateModal|function DemoAvatar|GROWTH_BADGE|REFRESH_SEC/.test(code));
   ok('the dashboard still renders the leaderboard on the overview, under Live Activity', /<LiveActivity windowSize=\{4\} showViewAll \/>[\s\S]{0,400}<CompetitionTab lang=\{lang\} \/>/.test(page));
   // Approved decision (dashboard language): the leaderboard follows the Affiliate Dashboard language (French on this
   // branch), never a storefront language chosen elsewhere.
   // Since the merge with Task 7 (market localization) the dashboard is AR/FR: the leaderboard receives the dashboard's
   // market language (useMarketLocale) instead of the former fixed "fr" — still never the storefront language.
+  // (The components call useDemoText(langOverride) directly: the neutral-wording wrapper was removed, texts are neutral at the source.)
   ok('the dashboard leaderboard uses the dashboard language (market AR/FR), not the storefront language',
-    /const \{ lang, t, intlLocale \} = useMarketLocale\(AFFILIATE_DASHBOARD_TEXT\);/.test(page) && !/useLanguage\(/.test(page) && !/DASHBOARD_LANG/.test(page) && ['DemoCompetitionBlock', 'HomeTopMembers', 'HomeTopBrands'].every((c) => /useNeutralDemoText\(useDemoText\(langOverride\)\)/.test(read(`src/components/demoCompetition/${c}.jsx`))) && /export function useDemoText\(langOverride\)[\s\S]{0,200}demoLang\(langOverride \|\| lang\)/.test(read('src/components/demoCompetition/useLivePolling.js')));
+    /const \{ lang, t, intlLocale \} = useMarketLocale\(AFFILIATE_DASHBOARD_TEXT\);/.test(page) && !/useLanguage\(/.test(page) && !/DASHBOARD_LANG/.test(page) && ['DemoCompetitionBlock', 'HomeTopMembers', 'HomeTopBrands'].every((c) => /= useDemoText\(langOverride\);/.test(read(`src/components/demoCompetition/${c}.jsx`))) && /export function useDemoText\(langOverride\)[\s\S]{0,200}demoLang\(langOverride \|\| lang\)/.test(read('src/components/demoCompetition/useLivePolling.js')));
   ok('the dashboard has no Demo Competition write and imports no service (client only)',
     !/demoCompetitionService|method:\s*["'](POST|PATCH|PUT|DELETE)["'][^)]*demo-competition/.test(code));
 }

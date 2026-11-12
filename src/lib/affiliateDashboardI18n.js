@@ -204,6 +204,8 @@ const fr = {
   deposit_title: "💰 Dépôt de solde",
   deposit_pending: "En attente de validation : {amount}",
   deposit_hint: "Rechargez votre solde disponible · crédité après validation",
+  deposit_disabled_title: "Recharge de solde",
+  deposit_disabled_body: "La recharge de solde n'est pas disponible pour le moment. Votre solde et l'historique de vos recharges ne changent pas.",
   ugc_heading: "UGC (vidéos)",
 
   // ── Orders tables ──
@@ -507,6 +509,8 @@ const ar = {
   deposit_title: "💰 شحن الرصيد",
   deposit_pending: "في انتظار التحقق: {amount}",
   deposit_hint: "اشحن رصيدك المتاح · يُضاف بعد التحقق",
+  deposit_disabled_title: "شحن الرصيد",
+  deposit_disabled_body: "شحن الرصيد غير متاح حالياً. رصيدك وسجل عمليات الشحن السابقة لا يتغيران.",
   ugc_heading: "UGC (الفيديوهات)",
 
   // ── Orders tables ──

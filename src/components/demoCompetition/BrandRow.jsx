@@ -1,9 +1,9 @@
 "use client";
 /**
- * BrandRow — the approved leaderboard card for a demo brand (see LeaderCard): rank, CIRCULAR
+ * BrandRow — the approved leaderboard card for a brand (see LeaderCard): rank, CIRCULAR
  * product image (the brand's identity; initials fallback, never a generic logo; crown on #1),
- * brand name, owner line (small owner photo + "par <owner>"), live + SIMULATION badges,
- * movement, demo earnings (30 d, count-up, orange) and demo orders (30 d).
+ * brand name, owner line (small owner photo + "par <owner>"), live badge,
+ * movement, earnings (30 d, count-up, orange) and orders (30 d).
  * Top-3 glow from the CURRENT rank. BrandsLeaderboard — the animated list with live diffs.
  */
 import Avatar from "./Avatar";
