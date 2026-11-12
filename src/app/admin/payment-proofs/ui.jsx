@@ -26,6 +26,7 @@ export const ERROR_TEXT = {
   NONEXISTENT_LOCAL_TIME: "Heure inexistante (changement d'heure) — choisissez une autre heure",
   SCHEDULE_IN_PAST: "L'heure de publication doit être dans le futur",
   SCHEDULE_TOO_FAR: "Date trop lointaine (366 jours maximum)",
+  INVALID_PUBLISH_MODE: "Mode de publication invalide",
   INVALID_CLIENT_REF: "Référence interne invalide — supprimez et recréez la ligne",
   INVALID_BATCH: "Lot invalide",
   PRIVACY_CONFIRMATION_REQUIRED: "Confirmez que les données sensibles sont masquées",
@@ -43,6 +44,7 @@ export const errText = (code) => (code ? ERROR_TEXT[code] || code : null);
 export const API_ERROR_TEXT = {
   NOT_EDITABLE: "Cette preuve ne peut plus être modifiée (déjà publiée ou annulée).",
   NOT_CANCELLABLE: "Une preuve publiée ne peut pas être annulée.",
+  NOT_PUBLISHABLE: "Seule une preuve programmée peut être publiée maintenant (elle est annulée ou en échec).",
   RECEIPT_MISSING: "Le fichier du reçu est introuvable : annulez cette preuve et créez-en une nouvelle.",
   DUPLICATE_RECEIPT: "Ce reçu est déjà programmé ou publié.",
   CLIENT_REF_CONFLICT: "Conflit de référence : cette ligne correspond à une autre preuve.",
@@ -56,6 +58,7 @@ export const API_ERROR_TEXT = {
 export function apiErrorText(res) {
   const d = res?.data || {};
   if (res?.status === 401 || res?.status === 403) return API_ERROR_TEXT.UNAUTHORIZED;
+  if (d.code === "PUBLISH_FAILED") return `Échec de publication : ${FAILURE_TEXT[d.reason] || d.reason || "—"}. La preuve est marquée « Échec » (non visible).`;
   if (d.code && API_ERROR_TEXT[d.code]) return API_ERROR_TEXT[d.code];
   if (d.errors && typeof d.errors === "object") {
     const parts = Object.values(d.errors).map((c) => errText(String(c))).filter(Boolean);

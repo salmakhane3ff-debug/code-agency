@@ -1,24 +1,31 @@
 /**
  * src/lib/services/paymentProofPublisher.js
  * ─────────────────────────────────────────────────────────────────────────────
- * Payment Proofs publication tick — run ONLY by the dedicated PM2 worker
- * scripts/payment-proofs-publisher.mjs (never by a web request).
+ * Payment Proofs publication — the ONE publication pipeline:
+ *   • the tick, run ONLY by the dedicated PM2 worker scripts/payment-proofs-publisher.mjs, publishes
+ *     every due proof (scheduledAt <= now);
+ *   • an admin "Publier maintenant" (paymentProofService.publishPaymentProofNow) publishes ONE
+ *     scheduled proof before its time through the SAME function (publishOnePaymentProof with
+ *     `immediate: true`): same checks, same conditional UPDATE, same FAILED handling — only the
+ *     "is it due?" condition is dropped.
  *
  * Three independent layers prevent a duplicate publication:
  *   1. A session advisory lock (PAYMENT_PROOF_PUBLISHER_LOCK_KEY, distinct from
  *      every other engine): only one worker ticks at a time; no lock → no work.
  *   2. Per proof, ONE transaction: re-read, verify, then a conditional
- *      UPDATE … WHERE id AND status = 'SCHEDULED' AND scheduledAt <= now. A second
- *      worker, a retry or an admin edit racing it updates 0 rows and writes no event.
+ *      UPDATE … WHERE id AND status = 'SCHEDULED' (AND scheduledAt <= now for the worker).
+ *      A second worker, a retry, an admin "Publier maintenant", an edit or a cancel racing
+ *      it updates 0 rows and writes no event: a proof is published exactly once.
  *   3. Database guards: status/state CHECKs and the payment_proofs_guard trigger
  *      (a PUBLISHED proof can never change again).
  *
  * Verification before publication (internal to this feature only — no financial
  * system is consulted): both admin declarations present, display data still valid,
  * receipt file present. Otherwise the proof becomes FAILED (never visible) with a
- * reason; the admin may edit and reschedule it. publishedAt = the actual instant.
- * A restart or a late tick only delays publication; the 72 h window always starts
- * at the real publishedAt.
+ * reason; the admin may edit and reschedule it. publishedAt = the actual instant of
+ * the successful publication (server clock), never the planned time: a restart, a late
+ * tick or an early admin publication only moves it; the 72 h window always starts at
+ * the real publishedAt.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -40,21 +47,33 @@ async function failureReason(row, storage) {
   return exists ? null : 'RECEIPT_MISSING';
 }
 
-/** Publish (or fail) ONE due proof atomically. → 'published' | 'failed' | 'skipped' */
-export async function publishOnePaymentProof(id, { db = prisma, storage = defaultPaymentProofStorage, now = new Date() } = {}) {
+/**
+ * Publish (or fail) ONE proof atomically. → 'published' | 'failed' | 'skipped'
+ *   • worker (default): only a DUE proof (scheduledAt <= now);
+ *   • `immediate: true` (admin "Publier maintenant", `actor` = the admin): a SCHEDULED proof
+ *     before its time. `now` is the server clock read right before the call.
+ * 'skipped' = nothing written (not SCHEDULED any more, not due, or another request won the
+ * conditional UPDATE first).
+ */
+export async function publishOnePaymentProof(id, {
+  db = prisma, storage = defaultPaymentProofStorage, now = new Date(), immediate = false, actor = PUBLISHER_ACTOR,
+} = {}) {
   return db.$transaction(async (tx) => {
     const row = await tx.paymentProof.findUnique({ where: { id } });
-    if (!row || row.status !== PROOF_STATUS.SCHEDULED || new Date(row.scheduledAt).getTime() > now.getTime()) return 'skipped';
+    if (!row || row.status !== PROOF_STATUS.SCHEDULED) return 'skipped';
+    if (!immediate && new Date(row.scheduledAt).getTime() > now.getTime()) return 'skipped';
     const reason = await failureReason(row, storage);
+    const where = immediate ? { id, status: PROOF_STATUS.SCHEDULED } : { id, status: PROOF_STATUS.SCHEDULED, scheduledAt: { lte: now } };
     const res = await tx.paymentProof.updateMany({
-      where: { id, status: PROOF_STATUS.SCHEDULED, scheduledAt: { lte: now } },
+      where,
       data: reason
-        ? { status: PROOF_STATUS.FAILED, failedAt: now, failureReason: reason, publishAttempts: { increment: 1 }, updatedBy: PUBLISHER_ACTOR }
-        : { status: PROOF_STATUS.PUBLISHED, publishedAt: now, publishAttempts: { increment: 1 }, updatedBy: PUBLISHER_ACTOR },
+        ? { status: PROOF_STATUS.FAILED, failedAt: now, failureReason: reason, publishAttempts: { increment: 1 }, updatedBy: actor }
+        : { status: PROOF_STATUS.PUBLISHED, publishedAt: now, publishAttempts: { increment: 1 }, updatedBy: actor },
     });
     if (res.count !== 1) return 'skipped';
+    const mode = immediate ? { mode: 'IMMEDIATE', plannedAt: new Date(row.scheduledAt).toISOString() } : {};
     await tx.paymentProofEvent.create({
-      data: { proofId: id, action: reason ? 'FAIL' : 'PUBLISH', actor: PUBLISHER_ACTOR, at: now, details: reason ? { reason } : { publishedAt: now.toISOString() } },
+      data: { proofId: id, action: reason ? 'FAIL' : 'PUBLISH', actor, at: now, details: reason ? { reason, ...mode } : { publishedAt: now.toISOString(), ...mode } },
     });
     return reason ? 'failed' : 'published';
   });

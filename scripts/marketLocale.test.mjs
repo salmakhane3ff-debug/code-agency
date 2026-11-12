@@ -182,7 +182,14 @@ const PAYMENT_PROOF_SCHEDULE_FIX = [
 // Merge with the Demo Competition (approved feature branch): its own files and the shared files it edits are allowed
 // through its exact, documented allowance (scripts/lib/demoCompetitionAllowance.mjs: listed paths + SHA-256-pinned
 // schema blocks / migration, asserted by the recruiter suites).
-const isBrandFinal = (f) => BRAND_FINAL_DESIGN.includes(f) || PAYMENT_PROOF_SCHEDULE_FIX.includes(f) || isDemoCompSrc(f);
+// Payment proofs "Publier maintenant" (approved feature): the admin publishes a proof at once (at creation or before its
+// scheduled time) through the SAME publication pipeline as the worker — the publisher, the proof service, the admin
+// route handlers and the [id] route (action publish_now). Display-only proofs: no financial file, no schema / migration.
+const PAYMENT_PROOF_PUBLISH_NOW = [
+  "src/lib/services/paymentProofPublisher.js", "src/lib/services/paymentProofService.js", "src/lib/paymentProofRouteHandlers.js",
+  "src/app/api/admin/payment-proofs/[id]/route.js",
+];
+const isBrandFinal = (f) => BRAND_FINAL_DESIGN.includes(f) || PAYMENT_PROOF_SCHEDULE_FIX.includes(f) || PAYMENT_PROOF_PUBLISH_NOW.includes(f) || isDemoCompSrc(f);
 const outside = [...changed, ...untracked].filter((f) => !ALLOWED.some((re) => re.test(f)) && !isBrandFinal(f));
 ok("src changes stay inside the four areas + the shared language plumbing", outside.length === 0, outside);
 ok("no admin file changed (except the approved brand package-management files)", ![...changed, ...untracked].some((f) => !isBrandFinal(f) && (/^src\/(app|components)\/admin\//.test(f) || /^src\/app\/api\/admin\//.test(f))));

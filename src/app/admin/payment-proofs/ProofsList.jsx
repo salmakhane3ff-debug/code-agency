@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, RefreshCw, Pencil, Ban, History, ChevronLeft, ChevronRight } from "lucide-react";
+import { Loader2, RefreshCw, Pencil, Ban, History, ChevronLeft, ChevronRight, Send } from "lucide-react";
 import {
   inputCls, btnPrimary, btnGhost, btnDanger, api, apiErrorText, errText, fmtInstant, fmtMad, StatusBadge, STATUS_META,
   FAILURE_TEXT, EVENT_TEXT, Modal, Declarations, dayLabel, scheduleProblem,
@@ -107,6 +107,52 @@ function CancelDialog({ proof, onClose, onDone }) {
   );
 }
 
+/**
+ * "Publier maintenant" for a scheduled proof (before its planned time): explicit confirmation, then the
+ * server publishes it through the same pipeline as the worker (publishedAt = the server time then).
+ */
+function PublishNowDialog({ proof, onClose, onDone }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [done, setDone] = useState(null);
+  const go = async () => {
+    setBusy(true); setMsg(null);
+    const res = await api(`/api/admin/payment-proofs/${encodeURIComponent(proof.id)}`, { method: "POST", body: { action: "publish_now" } });
+    setBusy(false);
+    if (res.ok) setDone(res.data); else setMsg(apiErrorText(res));
+  };
+  return (
+    <Modal title="Publier maintenant" onClose={done || msg ? onDone : onClose}>
+      {done ? (
+        <div className="space-y-3" data-publish-now-result="published">
+          <p className="text-sm text-emerald-700 font-semibold">
+            {done.alreadyPublished ? "Cette preuve était déjà publiée" : "Preuve publiée"} — le {fmtInstant(done.publication?.publishedAt || done.proof?.publishedAt)} (heure du Maroc).
+          </p>
+          <p className="text-[11px] text-gray-500">Visible par tous les affiliés actifs pendant 72 h à partir de cette heure.</p>
+          <div className="flex justify-end"><button type="button" className={btnPrimary} onClick={onDone} autoFocus>Fermer</button></div>
+        </div>
+      ) : (
+        <div className="space-y-3" data-publish-now-dialog>
+          <p className="text-sm text-gray-700 break-words">
+            Publier « {proof.displayName} » ({fmtMad(proof.amount)}) <strong>maintenant</strong>, avant l&apos;heure prévue
+            ({proof.scheduledLocal ? `${dayLabel(proof.scheduledLocal.date)} à ${proof.scheduledLocal.time}` : "—"}, heure du Maroc) ?
+          </p>
+          <p className="text-[11px] text-gray-500">Elle sera visible immédiatement par tous les affiliés actifs, pendant 72 h à partir de sa publication effective. La publication programmée ne la publiera pas une seconde fois.</p>
+          {msg && <p role="alert" className="text-xs text-red-600 break-words" data-publish-now-error>{msg}</p>}
+          <div className="flex flex-wrap gap-2 justify-end">
+            <button type="button" className={btnGhost} onClick={msg ? onDone : onClose}>{msg ? "Fermer" : "Retour"}</button>
+            {!msg && (
+              <button type="button" className={btnPrimary} onClick={go} disabled={busy} data-publish-now-confirm>
+                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}Publier maintenant
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function HistoryDialog({ proof, onClose }) {
   const [state, setState] = useState({ loading: true, events: [], error: null });
   useEffect(() => {
@@ -123,7 +169,9 @@ function HistoryDialog({ proof, onClose }) {
       <ol className="space-y-2">
         {state.events.map((e, i) => (
           <li key={`${e.at}-${i}`} className="rounded-xl border border-gray-100 bg-gray-50 p-2.5 text-xs text-gray-700 min-w-0">
-            <p className="font-semibold text-gray-900">{EVENT_TEXT[e.action] || e.action}</p>
+            <p className="font-semibold text-gray-900">
+              {e.details?.mode === "IMMEDIATE" ? `${EVENT_TEXT[e.action] || e.action} — immédiate (Publier maintenant)` : EVENT_TEXT[e.action] || e.action}
+            </p>
             <p className="text-gray-500 break-all">{fmtInstant(e.at)} · {e.actor}</p>
             {e.details && <pre className="mt-1 whitespace-pre-wrap break-all text-[11px] text-gray-600">{JSON.stringify(e.details, null, 1)}</pre>}
           </li>
@@ -139,7 +187,7 @@ export default function ProofsList() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [dialog, setDialog] = useState(null); // { kind: 'preview' | 'edit' | 'cancel' | 'history', proof }
+  const [dialog, setDialog] = useState(null); // { kind: 'preview' | 'edit' | 'cancel' | 'publish' | 'history', proof }
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -191,8 +239,15 @@ export default function ProofsList() {
                 <StatusBadge status={p.status} />
               </div>
               <p className="text-[11px] text-gray-500 break-words">
-                Programmée : <span className="capitalize">{p.scheduledLocal ? `${dayLabel(p.scheduledLocal.date)} à ${p.scheduledLocal.time}` : "—"}</span> (heure du Maroc)
-                {p.publishedAt && <> · Publiée : {fmtInstant(p.publishedAt)}</>}
+                {p.publishedImmediately ? (
+                  // "Publier maintenant": only the actual publication time is relevant (no planned time).
+                  <span data-published-immediately>Publiée : <span data-published-at>{fmtInstant(p.publishedAt)}</span> (heure du Maroc) · publication immédiate</span>
+                ) : (
+                  <>
+                    <span data-scheduled-at>Programmée : <span className="capitalize">{p.scheduledLocal ? `${dayLabel(p.scheduledLocal.date)} à ${p.scheduledLocal.time}` : "—"}</span> (heure du Maroc)</span>
+                    {p.publishedAt && <> · Publiée : <span data-published-at>{fmtInstant(p.publishedAt)}</span> (heure du Maroc)</>}
+                  </>
+                )}
                 {p.cancelledAt && <> · Annulée : {fmtInstant(p.cancelledAt)}</>}
               </p>
               {p.status === "FAILED" && (
@@ -200,6 +255,11 @@ export default function ProofsList() {
               )}
               <p className="text-[11px] text-gray-400">Tentatives de publication : {p.publishAttempts ?? 0}</p>
               <div className="flex flex-wrap gap-1.5 pt-1">
+                {p.status === "SCHEDULED" && (
+                  <button type="button" className={btnPrimary} onClick={() => setDialog({ kind: "publish", proof: p })} data-publish-now={p.id}>
+                    <Send className="w-3.5 h-3.5" />Publier maintenant
+                  </button>
+                )}
                 {EDITABLE.includes(p.status) && (
                   <>
                     <button type="button" className={btnGhost} onClick={() => setDialog({ kind: "edit", proof: p })}><Pencil className="w-3.5 h-3.5" />Modifier</button>
@@ -229,6 +289,7 @@ export default function ProofsList() {
       )}
       {dialog?.kind === "edit" && <EditDialog proof={dialog.proof} onClose={() => setDialog(null)} onSaved={closeAndReload} />}
       {dialog?.kind === "cancel" && <CancelDialog proof={dialog.proof} onClose={() => setDialog(null)} onDone={closeAndReload} />}
+      {dialog?.kind === "publish" && <PublishNowDialog proof={dialog.proof} onClose={() => setDialog(null)} onDone={closeAndReload} />}
       {dialog?.kind === "history" && <HistoryDialog proof={dialog.proof} onClose={() => setDialog(null)} />}
     </div>
   );

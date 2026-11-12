@@ -121,7 +121,10 @@ export function casablancaToUtc(date, time) {
  * Validate one proof's fields. `nowMs` = server clock. Display name and amount are
  * presentation data typed by the admin; both declarations (privacy masked,
  * authenticity) are mandatory.
- * Returns { value: { displayName, amountCents, scheduledAt, clientRef, batchId }, errors: {field: code} }.
+ * `publishMode`: absent / 'schedule' → the Casablanca `date` + `time` (the existing scheduling rule);
+ * 'now' → "Publier maintenant": no date / time needed, scheduledAt = the server time `nowMs`
+ * (the proof is published right after its creation — publishedAt is set at that moment).
+ * Returns { value: { displayName, amountCents, scheduledAt, clientRef, batchId, publishMode: 'SCHEDULE'|'NOW' }, errors: {field: code} }.
  */
 export function validateProofInput(input, { nowMs }) {
   const src = input && typeof input === 'object' ? input : {};
@@ -131,9 +134,15 @@ export function validateProofInput(input, { nowMs }) {
   const amountCents = parseAmountCents(src.amount);
   if (Number.isNaN(amountCents)) errors.amount = 'INVALID_AMOUNT';
   let scheduledAt = null;
-  const sched = checkProofSchedule(src.date, src.time, nowMs); // same rule as the admin browser
-  if (sched.error) errors.scheduledAt = sched.error;
-  else scheduledAt = new Date(sched.ms);
+  const mode = src.publishMode === undefined || src.publishMode === null || src.publishMode === '' || src.publishMode === 'schedule'
+    ? 'SCHEDULE' : src.publishMode === 'now' ? 'NOW' : null;
+  if (!mode) errors.publishMode = 'INVALID_PUBLISH_MODE';
+  else if (mode === 'NOW') scheduledAt = new Date(nowMs);
+  else {
+    const sched = checkProofSchedule(src.date, src.time, nowMs); // same rule as the admin browser
+    if (sched.error) errors.scheduledAt = sched.error;
+    else scheduledAt = new Date(sched.ms);
+  }
   const clientRef = isValidClientRef(src.clientRef) ? src.clientRef : null;
   if (!clientRef) errors.clientRef = 'INVALID_CLIENT_REF';
   let batchId = null;
@@ -142,7 +151,7 @@ export function validateProofInput(input, { nowMs }) {
   }
   if (!isConfirmed(src.privacyConfirmed)) errors.privacyConfirmed = 'PRIVACY_CONFIRMATION_REQUIRED';
   if (!isConfirmed(src.authenticityConfirmed)) errors.authenticityConfirmed = 'AUTHENTICITY_CONFIRMATION_REQUIRED';
-  return { value: { displayName, amountCents, scheduledAt, clientRef, batchId }, errors };
+  return { value: { displayName, amountCents, scheduledAt, clientRef, batchId, publishMode: mode || 'SCHEDULE' }, errors };
 }
 
 // ── Shapes ────────────────────────────────────────────────────────────────────
@@ -176,7 +185,11 @@ export function decodeFeedCursor(raw) {
 
 /** Admin shape (no storage key, no fingerprint). */
 export const PROOF_EVENT_ACTIONS = Object.freeze(['CREATE', 'CONFIRM_PRIVACY', 'CONFIRM_AUTHENTICITY', 'EDIT', 'CANCEL', 'PUBLISH', 'FAIL']);
-export function adminProof(row) {
+/**
+ * `publishedImmediately`: the proof was published by "Publier maintenant" (its PUBLISH event has
+ * mode IMMEDIATE) — the admin list then shows only the actual publication time, not the planned one.
+ */
+export function adminProof(row, { publishedImmediately = false } = {}) {
   const iso = (d) => (d ? new Date(d).toISOString() : null);
   return {
     id: row.id,
@@ -186,6 +199,7 @@ export function adminProof(row) {
     scheduledAt: iso(row.scheduledAt),
     scheduledLocal: row.scheduledAt ? casablancaLocal(new Date(row.scheduledAt).getTime()) : null,
     publishedAt: iso(row.publishedAt),
+    publishedImmediately: row.status === 'PUBLISHED' && publishedImmediately === true,
     cancelledAt: iso(row.cancelledAt),
     failedAt: iso(row.failedAt),
     failureReason: row.failureReason || null,

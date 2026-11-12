@@ -11,14 +11,16 @@
  * Every admin change and its audit event are written in ONE transaction, and every
  * status transition is a conditional UPDATE … WHERE status IN (…), so a retry, a
  * double click or a race with the publisher worker can never apply it twice.
- * Publication is done ONLY by the dedicated worker (paymentProofPublisher.js);
- * web requests never publish.
+ * Publication goes through ONE pipeline (paymentProofPublisher.publishOnePaymentProof):
+ * the dedicated worker publishes due proofs; an admin "Publier maintenant" publishes one
+ * scheduled proof early through the same function (publishPaymentProofNow below).
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
 import { randomBytes } from 'crypto';
 import prisma from '../prisma.js';
 import { defaultPaymentProofStorage } from '../paymentProofStorage.js';
+import { publishOnePaymentProof } from './paymentProofPublisher.js';
 import {
   PROOF_STATUS, PROOF_LIMITS, VISIBILITY_MS, proofError as err, validateProofInput, isVisibleAt, isValidId,
   isValidPublicToken, publicProof, adminProof, casablancaLocal, encodeFeedCursor, decodeFeedCursor,
@@ -34,8 +36,24 @@ const actorOrThrow = (actorId) => {
 const event = (tx, proofId, action, actor, at, details = null) =>
   tx.paymentProofEvent.create({ data: { proofId, action, actor, at, details } });
 
+// "Publier maintenant": the retried request has a new server time, so only name + amount must match.
 const sameRequest = (row, v) => row.displayName === v.displayName && row.displayAmountCents === v.amountCents
-  && ms(row.scheduledAt) === v.scheduledAt.getTime();
+  && (v.publishMode === 'NOW' || ms(row.scheduledAt) === v.scheduledAt.getTime());
+
+/**
+ * Publish ONE scheduled proof now through the publication pipeline (`immediate`), with the
+ * server clock read at that moment. → { status: 'PUBLISHED' | 'FAILED' | 'SKIPPED', row }.
+ */
+async function publishNowInternal(id, { db, storage, clock, actor }) {
+  const r = await publishOnePaymentProof(id, { db, storage, now: clock(), immediate: true, actor });
+  const row = await db.paymentProof.findUnique({ where: { id } });
+  return { status: r === 'published' ? 'PUBLISHED' : r === 'failed' ? 'FAILED' : 'SKIPPED', row };
+}
+/** Admin shape of a proof just published by "Publier maintenant" (this request won the publication). */
+const immediateProof = (out) => adminProof(out.row, { publishedImmediately: out.status === 'PUBLISHED' });
+const publicationOf = (row) => (row.status === PROOF_STATUS.PUBLISHED
+  ? { status: 'PUBLISHED', publishedAt: new Date(row.publishedAt).toISOString() }
+  : row.status === PROOF_STATUS.FAILED ? { status: 'FAILED', reason: row.failureReason } : { status: row.status });
 
 /**
  * Create ONE scheduled proof with its receipt. Idempotent per `clientRef`: a retry
@@ -43,16 +61,27 @@ const sameRequest = (row, v) => row.displayName === v.displayName && row.display
  * nothing; the same ref with different content → CLIENT_REF_CONFLICT.
  * Both declarations (privacy masked, authenticity) are mandatory and recorded
  * with the confirming admin and the confirmation time.
+ * `publishMode: 'now'` ("Publier maintenant"): the proof is created, then published at once
+ * through the publication pipeline; publishedAt = the server time of that publication
+ * (`clock()`), and `publication` reports the outcome (PUBLISHED, or FAILED with its reason —
+ * a failed proof is never shown as published). If the process stops in between, the proof
+ * is already due and the worker publishes it at its next tick.
  */
-export async function createPaymentProof(input, file, { db = prisma, storage = defaultPaymentProofStorage, now = new Date(), actorId = null } = {}) {
+export async function createPaymentProof(input, file, {
+  db = prisma, storage = defaultPaymentProofStorage, now = new Date(), clock = () => new Date(), actorId = null,
+} = {}) {
   const actor = actorOrThrow(actorId);
   const { value: v, errors } = validateProofInput(input, { nowMs: ms(now) });
   if (Object.keys(errors).length) throw err('INVALID_INPUT', 'Données invalides.', { errors });
 
+  const nowMode = v.publishMode === 'NOW';
   const prior = await db.paymentProof.findUnique({ where: { clientRef: v.clientRef } });
   if (prior) {
     if (!sameRequest(prior, v)) throw err('CLIENT_REF_CONFLICT', 'Cette référence correspond à une autre preuve.');
-    return { proof: adminProof(prior), existing: true };
+    if (!nowMode) return { proof: adminProof(prior), existing: true };
+    // Retry of a "Publier maintenant": publish it if the first request stopped before (idempotent).
+    const out = prior.status === PROOF_STATUS.SCHEDULED ? await publishNowInternal(prior.id, { db, storage, clock, actor }) : { row: prior };
+    return { proof: immediateProof(out), existing: true, publication: publicationOf(out.row) };
   }
   if (!file || !file.buffer) throw err('INVALID_FILE', 'Le reçu est requis.', { errors: { file: 'REQUIRED' } });
   const problems = storage.validate({ mime: file.mime, size: file.size ?? file.buffer.length });
@@ -76,12 +105,15 @@ export async function createPaymentProof(input, file, { db = prisma, storage = d
       });
       await event(tx, created.id, 'CREATE', actor, now, {
         displayName: v.displayName, amountCents: v.amountCents, scheduledAt: v.scheduledAt.toISOString(), batchId: v.batchId,
+        ...(nowMode ? { publishMode: 'NOW' } : {}),
       });
       await event(tx, created.id, 'CONFIRM_PRIVACY', actor, now);
       await event(tx, created.id, 'CONFIRM_AUTHENTICITY', actor, now);
       return created;
     });
-    return { proof: adminProof(row), existing: false };
+    if (!nowMode) return { proof: adminProof(row), existing: false };
+    const out = await publishNowInternal(row.id, { db, storage, clock, actor });
+    return { proof: immediateProof(out), existing: false, publication: publicationOf(out.row) };
   } catch (e) {
     await storage.remove(stored.key).catch(() => {}); // never leave an orphan receipt behind
     if (isUnique(e, 'clientRef')) {
@@ -122,7 +154,7 @@ export async function validatePaymentProofBatch(items, { db = prisma, now = new 
       else seenSlot.set(slot, i);
     }
     return {
-      index: i, ok: Object.keys(e).length === 0, errors: e,
+      index: i, ok: Object.keys(e).length === 0, errors: e, publishNow: v.publishMode === 'NOW',
       displayName: v.displayName, amount: Number.isNaN(v.amountCents) ? null : v.amountCents / 100,
       scheduledAt: v.scheduledAt ? v.scheduledAt.toISOString() : null,
       scheduledLocal: v.scheduledAt ? casablancaLocal(v.scheduledAt.getTime()) : null,
@@ -175,6 +207,28 @@ export async function updatePaymentProofSchedule(id, input, { db = prisma, stora
 }
 
 /** Cancel before publication (idempotent: cancelling a cancelled proof is a no-op). The record is kept. */
+/**
+ * "Publier maintenant" for a SCHEDULED proof (before its planned time), through the publication
+ * pipeline — same checks, same conditional UPDATE as the worker; publishedAt = the server time of
+ * the publication (`clock()`), so its 72 h window starts then. Exactly once: a second request,
+ * the worker or an edit / cancel racing it finds the proof no longer SCHEDULED and changes nothing.
+ *   → { proof, publication: { status: 'PUBLISHED', publishedAt } } (alreadyPublished: true when another
+ *     request published it first — nothing is published twice);
+ * @throws NOT_FOUND | NOT_PUBLISHABLE (cancelled / failed) | PUBLISH_FAILED (now FAILED, with its reason)
+ */
+export async function publishPaymentProofNow(id, { db = prisma, storage = defaultPaymentProofStorage, clock = () => new Date(), actorId = null } = {}) {
+  const actor = actorOrThrow(actorId);
+  if (!isValidId(id)) throw err('NOT_FOUND', 'Preuve introuvable.');
+  const out = await publishNowInternal(id, { db, storage, clock, actor });
+  if (!out.row) throw err('NOT_FOUND', 'Preuve introuvable.');
+  if (out.status === 'PUBLISHED') return { proof: immediateProof(out), publication: publicationOf(out.row) };
+  if (out.status === 'FAILED') {
+    throw err('PUBLISH_FAILED', 'La publication a échoué : la preuve est marquée en échec.', { reason: out.row.failureReason, proof: adminProof(out.row) });
+  }
+  if (out.row.status === PROOF_STATUS.PUBLISHED) return { proof: adminProof(out.row), publication: publicationOf(out.row), alreadyPublished: true };
+  throw err('NOT_PUBLISHABLE', 'Seule une preuve programmée peut être publiée maintenant.', { status: out.row.status });
+}
+
 export async function cancelPaymentProof(id, { db = prisma, now = new Date(), actorId = null } = {}) {
   const actor = actorOrThrow(actorId);
   if (!isValidId(id)) throw err('NOT_FOUND', 'Preuve introuvable.');
@@ -256,7 +310,14 @@ export async function listPaymentProofsAdmin({ status = 'ALL', batchId = null, p
   ]);
   const counts = Object.fromEntries(Object.values(PROOF_STATUS).map((s) => [s, 0]));
   for (const g of groups) counts[g.status] = g._count._all;
-  return { items: rows.map(adminProof), total, page: pageNo, pageSize: size, counts };
+  // Published by "Publier maintenant"? (its PUBLISH event says mode IMMEDIATE) — one query for the page.
+  const publishedIds = rows.filter((r) => r.status === PROOF_STATUS.PUBLISHED).map((r) => r.id);
+  const immediate = new Set();
+  if (publishedIds.length) {
+    const pubs = await db.paymentProofEvent.findMany({ where: { proofId: { in: publishedIds }, action: 'PUBLISH' }, select: { proofId: true, details: true } });
+    for (const e of pubs) if (e.details && e.details.mode === 'IMMEDIATE') immediate.add(e.proofId);
+  }
+  return { items: rows.map((r) => adminProof(r, { publishedImmediately: immediate.has(r.id) })), total, page: pageNo, pageSize: size, counts };
 }
 
 /** Audit history of one proof, in insertion order (`seq`; events of one transaction share `at`). */
