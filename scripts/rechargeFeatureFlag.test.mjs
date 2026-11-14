@@ -462,8 +462,10 @@ console.log('9) Affiliate dashboard / BoosterTab gating (static):');
   ok('goToDeposit = rechargeEnabled ? … : null', /const goToDeposit = rechargeEnabled \? \(\) => setActiveTab\("deposit"\) : null;/.test(page));
   ok('overview widget wrapped in `rechargeEnabled &&`', /\{rechargeEnabled && <button onClick=\{goToDeposit\}/.test(page));
   ok('desktop tabs filtered (deposit hidden when OFF)', /tabs\.filter\(\(tb\) => tb\.id !== "deposit" \|\| rechargeEnabled\)\.map/.test(page));
-  ok('mobile More-sheet filtered', /moreItems\.filter\(\(m\) => m\.tab !== "deposit" \|\| rechargeEnabled\)\.map/.test(page)
-    && /function MobileBottomNav\([^)]*rechargeEnabled = true/.test(page) && /rechargeEnabled=\{rechargeEnabled\}/.test(page));
+  // Phase 1: the nav moved unchanged into src/components/affiliate/MobileBottomNav.jsx; the page still passes the flag.
+  const nav = read('src/components/affiliate/MobileBottomNav.jsx');
+  ok('mobile More-sheet filtered', /moreItems\.filter\(\(m\) => m\.tab !== "deposit" \|\| rechargeEnabled\)\.map/.test(nav)
+    && /function MobileBottomNav\([^)]*rechargeEnabled = true/.test(nav) && /rechargeEnabled=\{rechargeEnabled\}/.test(page));
   const depTab = page.slice(page.indexOf('activeTab === "deposit" && ('), page.indexOf('activeTab === "deposit" && (') + 700);
   ok('deposit tab: DepositTab only when ON, else the notice', /activeTab === "deposit" && \(rechargeEnabled \? \(\s*<DepositTab/.test(depTab)
     && /data-recharge-disabled/.test(depTab) && /t\("deposit_disabled_title"\)/.test(depTab) && /t\("deposit_disabled_body"\)/.test(depTab));

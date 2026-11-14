@@ -65,7 +65,7 @@ const INVENTORY = {
     "Votre identité doit être vérifiée avant de pouvoir effectuer un retrait.", "Montant supérieur aux gains disponibles",
     "Affilié introuvable", "Bonus déjà réclamé",
   ],
-  "src/app/api/affiliate/me/route.js": ["Affilié introuvable", "Trop de tentatives. Réessayez plus tard.", "Mot de passe actuel requis", "Mot de passe actuel incorrect", "Erreur serveur"],
+  "src/app/api/affiliate/me/route.js": ["Affilié introuvable", "Trop de tentatives. Réessayez plus tard.", "Mot de passe actuel requis", "Mot de passe actuel incorrect", "Coordonnées bancaires invalides", "Erreur serveur"],
   "src/app/api/affiliate/avatar/route.js": ["Aucun fichier fourni", "Seules les images sont acceptées", "Image trop lourde (max 2 Mo)", "Erreur serveur"],
   "src/app/api/affiliate/identity/route.js": ["Les deux faces de la CIN sont requises.", "Chaque image doit faire au maximum 5 Mo.", "Erreur serveur"],
   "src/lib/services/identityService.js": ["Les deux faces de la CIN sont requises.", "Votre identité est déjà vérifiée.", "Une vérification est déjà en cours.", "Fichier invalide (type JPG/PNG/WEBP, max 5 Mo)."],

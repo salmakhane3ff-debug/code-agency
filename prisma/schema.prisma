@@ -336,11 +336,15 @@ model Affiliate {
   recruiterRewards     RecruiterRewardLedger[]
   activationCodes      AffiliateActivationCode[]
   activationRecoveries AffiliateActivationRecovery[]
+  // Bank chosen from the admin catalogue (Phase 4 — bank logo picker); bankName keeps a copy of its name.
+  bankId               String?
+  bank                 PayoutBank?             @relation(fields: [bankId], references: [id], onDelete: Restrict)
 
   @@index([username])
   @@index([isActive])
   @@index([parentId])
   @@index([referralStatus])
+  @@index([bankId])
   @@map("affiliates")
 }
 
@@ -2088,6 +2092,27 @@ model DemoCompEngine {
   @@map("demo_comp_engine")
 }
 
+// ── Payout banks (Phase 4 — bank logo picker) ──────────────────────────────────
+// Admin-managed catalogue of the banks an affiliate / recruiter picks for withdrawals.
+// Never deleted (a bank already chosen by a user is only deactivated): both FKs are
+// ON DELETE RESTRICT. ribRequired = false → the withdrawal uses the account holder's full
+// name only (no RIB). Logos are public images stored through saveMedia.
+model PayoutBank {
+  id          String      @id @default(uuid())
+  name        String
+  logoUrl     String?
+  isActive    Boolean     @default(true)
+  ribRequired Boolean     @default(true)
+  sortOrder   Int         @default(0)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  affiliates  Affiliate[]
+  recruiters  Recruiter[]
+
+  @@index([isActive, sortOrder])
+  @@map("payout_banks")
+}
+
 // ── Affiliate Recruiter System ─────────────────────────────────────────────────
 // Recruiters are a SEPARATE principal (own table, own login, JWT type "recruiter"),
 // never a User role and never an Affiliate. A recruiter CREATES affiliate accounts
@@ -2124,8 +2149,12 @@ model Recruiter {
   payouts             AffiliatePayout[]
   // Identity verification (Phase 6 part 3c) — separate from the affiliate IdentityVerification.
   identityVerification RecruiterIdentityVerification?
+  // Bank chosen from the admin catalogue (Phase 4 — bank logo picker); bankName keeps a copy of its name.
+  bankId              String?
+  bank                PayoutBank?                @relation(fields: [bankId], references: [id], onDelete: Restrict)
 
   @@index([isActive])
+  @@index([bankId])
   @@map("recruiters")
 }
 

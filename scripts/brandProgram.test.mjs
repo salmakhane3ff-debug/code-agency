@@ -398,7 +398,8 @@ console.log("\n8. Routes and admin wiring");
 // ── 9. Navigation: Booster → Create Your Own Brand ────────────────────────────
 console.log("\n9. Navigation swap");
 {
-  const page = read("../src/app/affiliate/dashboard/page.jsx");
+  // Phase 1: the More sheet (moreItems) moved unchanged into the shared nav component — read both files.
+  const page = read("../src/app/affiliate/dashboard/page.jsx") + "\n" + read("../src/components/affiliate/MobileBottomNav.jsx");
   const block = (name) => (page.match(new RegExp(`const ${name} = \\[([\\s\\S]*?)\\n  \\];`)) || [])[1] || "";
   const moreTabs = [...block("moreItems").matchAll(/tab: "([a-z]+)"/g)].map((m) => m[1]);
   const desktopTabs = [...block("tabs").matchAll(/id: "([a-z]+)"/g)].map((m) => m[1]);

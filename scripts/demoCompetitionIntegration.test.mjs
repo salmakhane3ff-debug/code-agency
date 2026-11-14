@@ -12,6 +12,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { navHomepageLinePinHolds } from './lib/navHomepageAllowance.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BASE = 'cefc644';
@@ -127,7 +128,10 @@ for (const f of ['src/app/tsajlim3ana/RecruitmentLanding.jsx', 'src/components/L
   // recruiter branch, merged with this one); the Demo Competition itself never touches them.
   const ref = LOCALIZED_BY_TASK7.includes(f) ? TASK7 : BASE;
   const base = atRef(ref, f);
-  ok(`${f} is byte-identical to ${ref}`, base !== null && existsSync(`${ROOT}${f}`) && base === read(f));
+  // Phase 1 (approved): LiveActivity.jsx's "voir tout" sheet moved above the affiliate bottom nav (z-[65]) and padded for
+  // the home indicator — exactly those two class lines, SHA-256 pinned in scripts/lib/navHomepageAllowance.mjs.
+  const pinned = navHomepageLinePinHolds(f);
+  ok(`${f} is byte-identical to ${ref}${pinned ? ' (except the pinned Phase 1 class lines)' : ''}`, base !== null && existsSync(`${ROOT}${f}`) && (base === read(f) || pinned));
 }
 ok('/tsajlim3ana still reads /api/demo/leaderboard', /\/api\/demo\/leaderboard/.test(read('src/app/tsajlim3ana/RecruitmentLanding.jsx')));
 ok('Live Activity still uses the old demo identity pool', /getDemoIdentityPool/.test(read('src/lib/services/liveActivityEngine.js')));

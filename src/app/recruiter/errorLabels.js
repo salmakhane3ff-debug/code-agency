@@ -70,6 +70,8 @@ const FIELD_LABELS = {
   bankName: { INVALID_BANK_NAME: "اسم البنك مطلوب (80 حرفاً على الأكثر، بدون < و >)." },
   rib: { INVALID_RIB: "رقم RIB يجب أن يكون بين 10 و34 حرفاً/رقماً" },
   accountName: { INVALID_ACCOUNT_NAME: "اسم صاحب الحساب مطلوب (80 حرفاً على الأكثر، بدون < و >)." },
+  // Phase 4 (bank logo picker): the bank chosen from the admin catalogue
+  bankId: { BANK_REQUIRED: "اختر بنكك من القائمة.", BANK_UNAVAILABLE: "هذا البنك لم يعد متاحاً، اختر بنكاً آخر من القائمة." },
   // Phase 6 part 2: password change
   newPassword: { INVALID_PASSWORD: "كلمة السر يجب أن تكون بين 8 و128 حرفاً" },
   newPasswordConfirm: { PASSWORD_MISMATCH: "كلمتا السر غير متطابقتين" },
@@ -91,6 +93,7 @@ const FIELD_LABELS_FR = {
   bankName: { INVALID_BANK_NAME: "Le nom de la banque est obligatoire (80 caractères maximum, sans < et >)." },
   rib: { INVALID_RIB: "Le RIB doit contenir entre 10 et 34 lettres/chiffres" },
   accountName: { INVALID_ACCOUNT_NAME: "Le nom du titulaire du compte est obligatoire (80 caractères maximum, sans < et >)." },
+  bankId: { BANK_REQUIRED: "Choisissez votre banque dans la liste.", BANK_UNAVAILABLE: "Cette banque n'est plus disponible, choisissez-en une autre dans la liste." },
   newPassword: { INVALID_PASSWORD: "Le mot de passe doit contenir entre 8 et 128 caractères" },
   newPasswordConfirm: { PASSWORD_MISMATCH: "Les deux mots de passe ne correspondent pas" },
   front: { FILE_REQUIRED: "La photo du recto de la carte est obligatoire.", FILE_TOO_LARGE: "L'image dépasse 5 Mo.", INVALID_FILE: "Le fichier n'est pas une image valide (JPG, PNG ou WEBP)." },

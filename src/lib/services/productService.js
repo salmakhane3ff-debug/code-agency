@@ -232,19 +232,27 @@ const FEED_WHERE = `
             WHERE concat_ws(' ', title, "shortDescription", description)
                   NOT ILIKE ('%' || tok || '%')))`;
 
+// Order: AVAILABLE products first, then LOCKED ones (Product Lock — global admin flag, the same
+// for every visitor, so the order is the same for everyone and the public cache stays valid);
+// newest first inside each group. Keyset after the cursor row (L, T, I) = every row with
+//   "isLocked" > L                                        (the next group)
+//   OR ("isLocked" = L AND ("createdAt", id) < (T, I))     (older rows of the same group)
+// — exactly the rows that come after it in ORDER BY, so no page skips or repeats a product.
+// $6 = the cursor row's isLocked (false for an old cursor without it, see productFeed.js).
 const FEED_SQL = `
   SELECT ${FEED_COLUMNS}
     FROM products
   ${FEED_WHERE}
      AND ($3::timestamp(3) IS NULL
-          OR ("createdAt", id) < ($3::timestamp(3), $4::text))
-   ORDER BY "createdAt" DESC, id DESC
+          OR "isLocked" > $6::boolean
+          OR ("isLocked" = $6::boolean AND ("createdAt", id) < ($3::timestamp(3), $4::text)))
+   ORDER BY "isLocked" ASC, "createdAt" DESC, id DESC
    LIMIT $5::int`;
 
 const FEED_COUNT_SQL = `SELECT count(*)::int AS total FROM products ${FEED_WHERE}`;
 
 /**
- * One page of the Active product feed, newest first.
+ * One page of the Active product feed: available products first, then locked ones; newest first in each group.
  *
  * @param {object}  opts
  * @param {string?} opts.cursor     opaque cursor from the previous page (null → first page)
@@ -273,6 +281,7 @@ export async function getProductsPage({ cursor = null, limit, collection = null,
       key ? new Date(key.createdAt) : null,
       key ? key.id : null,
       size + 1,
+      key ? key.locked : false,
     ),
     getStoreSettings(),
     key

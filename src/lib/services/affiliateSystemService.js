@@ -14,6 +14,8 @@ import {
 } from '../balance/providerRegistry.js';
 import { serializeAmount, toDecimal } from '../balance/composeBalance.js';
 import { deleteAffiliateSafely } from '../affiliateDeletion.js';
+import { bankPublicView } from '../payoutBanks.js';
+import { saveAffiliateBankSelection } from './payoutBankService.js';
 // Rewards points (separate currency) — post-commit hooks only; they never throw.
 import { onAffiliateOrderStatusCommitted, onAffiliateActivationCommitted } from '../rewardsHooks.js';
 // ── TEMPORARY WIRING (refinement #1) ──────────────────────────────────────────
@@ -129,6 +131,8 @@ function mapAffiliate(a) {
     bankName:            a.bankName,
     rib:                 a.rib,
     accountName:         a.accountName,
+    bankId:              a.bankId ?? null,
+    bank:                bankPublicView(a.bank),
     parentId:            a.parentId,
     totalClicks:         a.totalClicks,
     totalOrders:         a.totalOrders,
@@ -246,16 +250,18 @@ export async function loginAffiliate(username, password, { throttle = affiliateL
 // ── Profile ───────────────────────────────────────────────────────────────────
 
 export async function getAffiliateById(id) {
-  const a = await prisma.affiliate.findUnique({ where: { id } });
+  const a = await prisma.affiliate.findUnique({ where: { id }, include: { bank: true } });
   return mapAffiliate(a);
 }
 
-export async function updateAffiliateBank(id, { bankName, rib, accountName }) {
-  const a = await prisma.affiliate.update({
-    where: { id },
-    data:  { bankName, rib, accountName },
-  });
-  return mapAffiliate(a);
+/**
+ * The affiliate's OWN bank details { bankId, accountName, rib? } — a bank from the admin
+ * catalogue (Phase 4), validated server-side (throws INVALID_INPUT { fields }); bankName is
+ * the chosen bank's name, never typed.
+ */
+export async function updateAffiliateBank(id, input) {
+  await saveAffiliateBankSelection(id, input);
+  return getAffiliateById(id);
 }
 
 export async function updateAffiliateProfile(id, data) {
@@ -665,13 +671,16 @@ export async function getAffiliatePayouts(affiliateId) {
 
 /**
  * Bank details must be complete before ANY withdrawal (server-side gate — never
- * rely on the frontend). Trims all fields; RIB length must be 10–34.
+ * rely on the frontend). Trims all fields; RIB length must be 10–34 — unless the bank
+ * chosen from the catalogue says "RIB not required" (ribRequired === false, Phase 4):
+ * then the account holder's full name is enough.
  * @returns {string[]} list of problems (empty = complete)
  */
-export function validateBankInfo({ bankName, accountName, rib } = {}) {
+export function validateBankInfo({ bankName, accountName, rib, ribRequired } = {}) {
   const errors = [];
   if (!String(bankName ?? '').trim())    errors.push('bankName');
   if (!String(accountName ?? '').trim()) errors.push('accountName');
+  if (ribRequired === false) return errors;
   const ribTrim = String(rib ?? '').trim();
   if (!ribTrim) errors.push('rib');
   else if (ribTrim.length < 10 || ribTrim.length > 34) errors.push('ribLength');
@@ -689,9 +698,9 @@ export async function requestPayout(affiliateId, amount, db = prisma) {
   // here (server-side), never relying on the frontend, and BEFORE the balance tx.
   const affiliate = await db.affiliate.findUnique({
     where: { id: affiliateId },
-    select: { bankName: true, accountName: true, rib: true },
+    select: { bankName: true, accountName: true, rib: true, bank: { select: { ribRequired: true } } },
   });
-  if (validateBankInfo(affiliate || {}).length > 0) {
+  if (validateBankInfo({ ...affiliate, ribRequired: affiliate?.bank?.ribRequired }).length > 0) {
     throw Object.assign(
       new Error('Veuillez ajouter vos coordonnées bancaires avant de demander un retrait.'),
       { code: 'INCOMPLETE_BANK_INFO' },
@@ -760,6 +769,14 @@ export function invalidateTeamCache(parentId) {
   if (parentId) _teamCache.delete(parentId);
 }
 
+const TEAM_HIDDEN_KEYS = ['bankId', 'bank', 'bankName', 'rib', 'accountName'];
+/** A team member as another affiliate may see it: every bank detail removed. */
+export function withoutBankDetails(member) {
+  const out = { ...member };
+  for (const k of TEAM_HIDDEN_KEYS) delete out[k];
+  return out;
+}
+
 export async function getAffiliateTeam(parentId) {
   const cached = _teamCache.get(parentId);
   if (cached && Date.now() - cached.ts < TEAM_CACHE_TTL) return cached.data;
@@ -791,8 +808,10 @@ export async function getAffiliateTeam(parentId) {
     if (row.referralStatus === 'pending') subMap[row.parentId].pending = row._count._all;
   }
 
+  // Never another member's bank details (bank, RIB, account holder) — only the owner reads
+  // their own (GET /api/affiliate/me → affiliate).
   const data = members.map((m) => ({
-    ...mapAffiliate(m),
+    ...withoutBankDetails(mapAffiliate(m)),
     subReferrals: subMap[m.id] ?? { active: 0, pending: 0 },
   }));
 

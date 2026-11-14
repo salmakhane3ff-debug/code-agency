@@ -34,6 +34,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { makeRecruiterFakeDb } from './lib/recruiterFakeDb.mjs';
+import { pbIdenticalExceptPinned } from './lib/payoutBanksAllowance.mjs';
 
 const KS = await import('../src/lib/services/recruiterIdentityService.js');
 const RS = await import('../src/lib/services/recruiterRewardService.js');
@@ -641,7 +642,8 @@ console.log('\n4. Compatibility: affiliate KYC / payouts unchanged, rewards accr
   ok('no file added under src/app/api/admin/identity (the affiliate admin identity routes)', eq(listDir(adminIdDir), git(['ls-tree', '-r', '--name-only', PART3C_BASE, 'src/app/api/admin/identity']).trim().split('\n').map((p) => p.replace('src/app/api/admin/identity/', '')).concat(['[id]', '[id]/[side]']).sort()));
   ok('affiliate payout code byte-identical (affiliateSystemService.js, /api/affiliate/payout, /api/admin/affiliate-payouts route + page)',
     ['src/lib/services/affiliateSystemService.js', 'src/app/api/affiliate/payout/route.js', 'src/app/api/admin/affiliate-payouts/route.js', 'src/app/admin/affiliate-payouts/page.jsx']
-      .every((f) => git(['show', `${PART3C_BASE}:${f}`]) === read(f)));
+      // Phase 4 (bank logo picker): affiliateSystemService.js may differ ONLY by its exact pinned Phase 4 lines (scripts/lib/payoutBanksAllowance.mjs).
+      .every((f) => pbIdenticalExceptPinned(PART3C_BASE, f)));
   ok('prisma: the affiliate IdentityVerification model block is unchanged', (() => {
     const blk = (s) => s.slice(s.indexOf('model IdentityVerification {'), s.indexOf('}', s.indexOf('model IdentityVerification {')) + 1);
     return blk(read('prisma/schema.prisma')) === blk(git(['show', `${PART3C_BASE}:prisma/schema.prisma`]));

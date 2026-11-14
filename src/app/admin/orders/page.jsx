@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { SITE_ORIGIN } from "@/lib/siteUrl";
+import { ORDER_PAGE_SIZES, DEFAULT_ORDER_PAGE_SIZE, adminOrdersQueryString } from "@/lib/adminOrdersQuery";
 import {
   ShoppingBag, Eye, RefreshCw, Search, ChevronDown,
-  ArrowUpDown, CheckCircle, XCircle, Loader2, Copy, Link2,
+  ArrowUpDown, CheckCircle, XCircle, Loader2, Copy, Link2, ChevronLeft, ChevronRight,
 } from "lucide-react";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -151,64 +152,67 @@ function CopyLink({ orderId }) {
 export default function OrdersPage() {
   const router = useRouter();
 
-  const [orders,      setOrders]      = useState([]);
-  const [loading,     setLoading]     = useState(true);
+  // Server-side pagination (GET /api/admin/orders): only the requested page is fetched; search,
+  // status and source filters and the sort are applied on the server, exactly as this page used
+  // to apply them in the browser over the whole list.
+  const [orders,      setOrders]      = useState([]);   // the current page only
+  const [meta,        setMeta]        = useState({ total: 0, overall: 0, page: 1, pages: 1 });
+  const [loading,     setLoading]     = useState(true);  // first load (full-page spinner)
+  const [fetching,    setFetching]    = useState(false); // later page / filter loads
+  const [loadError,   setLoadError]   = useState(false);
   const [search,      setSearch]      = useState("");
+  const [query,       setQuery]       = useState("");    // debounced search sent to the server
   const [statusFilter,setStatusFilter]= useState("ALL");
   const [sourceFilter,setSourceFilter]= useState("ALL"); // ALL | REAL | FAKE
   const [sortDesc,    setSortDesc]    = useState(true); // newest first
+  const [page,        setPage]        = useState(1);
+  const [pageSize,    setPageSize]    = useState(DEFAULT_ORDER_PAGE_SIZE);
+  const [reloadKey,   setReloadKey]   = useState(0);
+  const requestRef = useRef(0);
 
-  // ── Fetch ─────────────────────────────────────────────────────────────────
+  // Search: debounced; any filter / size / sort change goes back to page 1.
   useEffect(() => {
-    fetch("/api/order")
-      .then((r) => r.json())
-      .then((data) => setOrders(Array.isArray(data) ? data : []))
-      .catch(() => setOrders([]))
-      .finally(() => setLoading(false));
-  }, []);
+    const t = setTimeout(() => { setQuery(search.trim()); setPage(1); }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
+  const changeStatus   = (v) => { setStatusFilter(v); setPage(1); };
+  const changeSource   = (v) => { setSourceFilter(v); setPage(1); };
+  const changePageSize = (v) => { setPageSize(Number(v)); setPage(1); };
+  const toggleSort     = () => { setSortDesc((d) => !d); setPage(1); };
 
-  // ── Inline status update (optimistic) ────────────────────────────────────
+  // ── Fetch one page ────────────────────────────────────────────────────────
+  useEffect(() => {
+    const id = ++requestRef.current; // only the latest request may update the list
+    const controller = new AbortController();
+    setFetching(true);
+    const qs = adminOrdersQueryString({ page, pageSize, q: query, status: statusFilter, source: sourceFilter, sort: sortDesc ? "desc" : "asc" });
+    fetch(`/api/admin/orders?${qs}`, { cache: "no-store", signal: controller.signal })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((data) => {
+        if (id !== requestRef.current) return;
+        setOrders(Array.isArray(data?.items) ? data.items : []);
+        setMeta({ total: data.total ?? 0, overall: data.overall ?? 0, page: data.page ?? 1, pages: data.pages ?? 1 });
+        if (data.page && data.page !== page) setPage(data.page); // past the end → the server served the last page
+        setLoadError(false);
+      })
+      .catch((e) => { if (e?.name !== "AbortError" && id === requestRef.current) setLoadError(true); })
+      .finally(() => { if (id === requestRef.current) { setLoading(false); setFetching(false); } });
+    return () => controller.abort();
+  }, [page, pageSize, query, statusFilter, sourceFilter, sortDesc, reloadKey]);
+
+  // ── Inline status update (optimistic, then refresh this page) ──────────────
+  // The row shows its new status at once; the page is then re-fetched so the filters and the
+  // counters stay exact (an order that no longer matches the status filter leaves the list).
   const handleStatusUpdated = (id, newStatus) => {
     setOrders((prev) =>
       prev.map((o) => (o._id === id ? { ...o, status: newStatus } : o))
     );
+    setReloadKey((k) => k + 1);
   };
 
-  // ── Filtered + sorted list ────────────────────────────────────────────────
-  const displayed = useMemo(() => {
-    let list = [...orders];
-
-    // Hide draft orders created by abandoned-cart system
-    list = list.filter((o) => !o.paymentDetails?.isDraft);
-
-    // Search by phone, name, or short order ID
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      list = list.filter(
-        (o) =>
-          o.phone?.includes(q) ||
-          o.name?.toLowerCase().includes(q) ||
-          o._id?.toLowerCase().includes(q)
-      );
-    }
-
-    // Status filter
-    if (statusFilter !== "ALL") {
-      list = list.filter((o) => normaliseStatus(o.status) === statusFilter);
-    }
-
-    // Source filter (Real / Fake) — fake orders are internal/admin-only.
-    if (sourceFilter === "REAL") list = list.filter((o) => !o.isFake);
-    else if (sourceFilter === "FAKE") list = list.filter((o) => o.isFake);
-
-    // Sort
-    list.sort((a, b) => {
-      const diff = new Date(b.createdAt) - new Date(a.createdAt);
-      return sortDesc ? diff : -diff;
-    });
-
-    return list;
-  }, [orders, search, statusFilter, sourceFilter, sortDesc]);
+  const displayed = orders;
+  const firstRow = meta.total === 0 ? 0 : (meta.page - 1) * pageSize + 1;
+  const lastRow  = Math.min(meta.page * pageSize, meta.total);
 
   // ── Loading ───────────────────────────────────────────────────────────────
   if (loading) {
@@ -220,20 +224,23 @@ export default function OrdersPage() {
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
+  // min-w-0 + inline-size containment (same as the other admin pages): the wide 11-column table scrolls inside
+  // its own overflow-x-auto box instead of stretching the page, so the header, filters and the pagination bar
+  // (Next / Previous) stay on screen at every width.
   return (
-    <div className="py-6 space-y-5 max-w-7xl">
+    <div className="py-6 space-y-5 max-w-7xl min-w-0 [contain:inline-size]">
 
       {/* Header */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">الطلبات</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {displayed.length} من {orders.length} طلب
+          <p className="text-sm text-gray-500 mt-0.5" data-orders-count>
+            {meta.total} من {meta.overall} طلب
           </p>
         </div>
         <div className="flex items-center gap-2 bg-blue-50 px-3 py-2 rounded-xl text-sm">
           <ShoppingBag className="w-4 h-4 text-blue-500" />
-          <span className="font-semibold text-blue-700">{orders.length} إجمالي</span>
+          <span className="font-semibold text-blue-700">{meta.overall} إجمالي</span>
         </div>
       </div>
 
@@ -254,7 +261,7 @@ export default function OrdersPage() {
         {/* Status filter */}
         <select
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
+          onChange={(e) => changeStatus(e.target.value)}
           className="text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:outline-none focus:border-gray-400"
         >
           <option value="ALL">كل الحالات</option>
@@ -266,7 +273,7 @@ export default function OrdersPage() {
         {/* Source filter — All / Real / Fake (🎭) */}
         <select
           value={sourceFilter}
-          onChange={(e) => setSourceFilter(e.target.value)}
+          onChange={(e) => changeSource(e.target.value)}
           className="text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:outline-none focus:border-gray-400"
         >
           <option value="ALL">الكل (Real + Fake)</option>
@@ -276,7 +283,7 @@ export default function OrdersPage() {
 
         {/* Sort toggle */}
         <button
-          onClick={() => setSortDesc((d) => !d)}
+          onClick={toggleSort}
           className="flex items-center gap-1.5 text-sm px-3 py-2 border border-gray-200 rounded-xl bg-gray-50 hover:border-gray-400 transition-colors"
         >
           <ArrowUpDown className="w-3.5 h-3.5 text-gray-500" />
@@ -284,8 +291,12 @@ export default function OrdersPage() {
         </button>
       </div>
 
+      {loadError && (
+        <p role="alert" className="text-sm text-red-600">تعذّر تحميل الطلبات. حاول مرة أخرى.</p>
+      )}
+
       {/* Table */}
-      <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+      <div className={`bg-white rounded-2xl border border-gray-100 overflow-hidden transition-opacity ${fetching ? "opacity-60" : ""}`} aria-busy={fetching}>
         {displayed.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <ShoppingBag className="w-10 h-10 text-gray-200 mb-3" />
@@ -418,6 +429,47 @@ export default function OrdersPage() {
             </table>
           </div>
         )}
+      </div>
+
+      {/* Pagination — server-side: only this page was fetched */}
+      <div className="bg-white rounded-2xl border border-gray-100 p-3 flex flex-wrap items-center justify-between gap-3 text-sm" data-orders-pagination>
+        <div className="flex items-center gap-2 text-gray-600">
+          <label htmlFor="orders-page-size" className="text-xs text-gray-500">عدد الطلبات في الصفحة</label>
+          <select
+            id="orders-page-size"
+            value={pageSize}
+            onChange={(e) => changePageSize(e.target.value)}
+            className="text-sm border border-gray-200 rounded-xl px-2 py-1.5 bg-gray-50 focus:outline-none focus:border-gray-400"
+          >
+            {ORDER_PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+          <span className="text-xs text-gray-400" data-orders-range>
+            {firstRow}–{lastRow} من {meta.total} طلب مطابق
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={meta.page <= 1 || fetching}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-xl border border-gray-200 bg-gray-50 hover:border-gray-400 disabled:opacity-40 disabled:cursor-not-allowed"
+            data-orders-prev
+          >
+            <ChevronRight className="w-4 h-4" /> السابق
+          </button>
+          <span className="text-xs font-semibold text-gray-700 whitespace-nowrap" data-orders-page>
+            الصفحة {meta.page} من {meta.pages}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPage((p) => Math.min(meta.pages, p + 1))}
+            disabled={meta.page >= meta.pages || fetching}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-xl border border-gray-200 bg-gray-50 hover:border-gray-400 disabled:opacity-40 disabled:cursor-not-allowed"
+            data-orders-next
+          >
+            التالي <ChevronLeft className="w-4 h-4" />
+          </button>
+        </div>
       </div>
     </div>
   );

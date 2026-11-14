@@ -9,7 +9,7 @@ import {
   XCircle, CheckCircle, Building2, CreditCard,
   Target, Star, UserPlus, Eye, AlertTriangle, Settings, Video, Wallet,
   ShieldCheck, ShieldAlert, MessageCircle, Upload, Trash2,
-  Home, Plus, MoreHorizontal, X, Store, Gift,
+  X,
 } from "lucide-react";
 import UgcTab from "./UgcTab";
 import DepositTab from "./DepositTab";
@@ -17,6 +17,8 @@ import BoosterTab from "./BoosterTab";
 import BrandTab from "./BrandTab";
 import RewardsTab from "./RewardsTab";
 import PaymentProofsSlider from "@/components/affiliate/PaymentProofsSlider";
+import MobileBottomNav from "@/components/affiliate/MobileBottomNav";
+import { parseDashboardTab, dashboardTabHref, NAV_SNAPSHOT_KEY, serializeNavSnapshot } from "@/lib/affiliateNav";
 import LiveActivity from "@/components/LiveActivity";
 import { diffNewItems, shouldPlaySaleSound } from "@/lib/liveFeed";
 import { createSaleSound } from "./saleSound";
@@ -31,6 +33,8 @@ import { dashboardSectionData } from "@/lib/demoCompetition/homepageSections";
 import { orderStatusErrorMessage, shouldRefreshOrdersAfter, orderMessageDir } from "@/lib/affiliateOrderMessages";
 import { localizeServerError, localizeNotification } from "@/lib/serverText/affiliateServerText";
 import { fieldDir } from "@/lib/marketLocale";
+import BankPicker from "@/components/payout/BankPicker";
+import { selectableBanks, isValidRib, isValidHolder, cleanRib, bankDetailsComplete, PAYOUT_BANK_LIMITS } from "@/lib/payoutBanks";
 
 // Live feed: the gap BETWEEN background polls (measured after the previous poll
 // finishes, so requests can never stack up). ~3s gives near-instant sale
@@ -73,6 +77,24 @@ function fmtDate(iso, lang) {
     hour: "2-digit", minute: "2-digit",
   });
 }
+
+// Bank form (Phase 4): server field codes (PUT /api/affiliate/me → 400 { fields }) → dictionary keys,
+// shown under each field. Client-side checks use the same keys.
+const BANK_FIELD_ERROR_KEY = {
+  BANK_REQUIRED:        "bank_err_required",
+  BANK_UNAVAILABLE:     "bank_err_unavailable",
+  INVALID_ACCOUNT_NAME: "bank_err_holder",
+  INVALID_RIB:          "bank_err_rib",
+};
+const BANK_ERROR_VARS = {
+  rib:         { min: PAYOUT_BANK_LIMITS.RIB_MIN, max: PAYOUT_BANK_LIMITS.RIB_MAX },
+  accountName: { max: PAYOUT_BANK_LIMITS.HOLDER_MAX },
+};
+const bankServerFieldErrors = (fields) => Object.fromEntries(
+  ["bankId", "accountName", "rib"]
+    .filter((f) => fields && BANK_FIELD_ERROR_KEY[fields[f]])
+    .map((f) => [f, BANK_FIELD_ERROR_KEY[fields[f]]]),
+);
 
 function authHeaders() {
   const token = localStorage.getItem("affiliateToken") || "";
@@ -231,123 +253,6 @@ function ReferralCta({ link, ratePct }) {
   );
 }
 
-// ── Mobile bottom navigation (mobile/tablet only, ≤768px) ──────────────────────
-// Additive: the existing desktop header + tab bar are untouched. Reuses the same
-// tabs/actions and the SAME referral link (center button copies it, no new URL).
-function MobileBottomNav({ activeTab, setActiveTab, refLink, onLogout, unread = 0, onOpenNotifications, rechargeEnabled = true }) {
-  const router = useRouter();
-  const { t } = useMarketLocale(AFFILIATE_DASHBOARD_TEXT);
-  const [toast, setToast] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
-
-  const go = (tab) => {
-    setActiveTab(tab);
-    if (tab === "notifications") onOpenNotifications?.(); // same mark-read as the header bell
-    setMoreOpen(false);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-  const share = () => {
-    if (!refLink) return;
-    navigator.clipboard.writeText(refLink).then(() => {
-      setToast(true); setTimeout(() => setToast(false), 2000);
-    }).catch(() => {});
-  };
-
-  const moreItems = [
-    { icon: Package,     label: t("more_orders"),        tab: "orders" },
-    { icon: Store,       label: t("more_brand"),         tab: "brand" },
-    { icon: Gift,        label: t("more_rewards"),       tab: "rewards" },
-    { icon: Video,       label: t("more_ugc"),           tab: "ugc" },
-    { icon: Users,       label: t("more_team"),          tab: "team" },
-    { icon: Wallet,      label: t("more_payout"),        tab: "payout" },
-    { icon: Wallet,      label: t("more_deposit"),       tab: "deposit" },
-    { icon: Building2,   label: t("more_bank"),          tab: "bank" },
-    { icon: Bell,        label: t("more_notifications"), tab: "notifications", badge: unread },
-    { icon: Settings,    label: t("more_settings"),      tab: "settings" },
-  ];
-
-  const NavItem = ({ icon: Icon, label, active, onClick, dot }) => (
-    <button type="button" onClick={onClick} className="relative flex-1 flex flex-col items-center gap-1 py-1.5 focus:outline-none">
-      <span className={`relative flex items-center justify-center w-11 h-8 rounded-2xl transition-all ${active ? "bg-violet-100 text-violet-600" : "text-gray-400"}`}>
-        <Icon className="w-[22px] h-[22px]" strokeWidth={active ? 2.5 : 2} />
-        {dot > 0 && <span className="absolute -top-0.5 end-1.5 min-w-[15px] h-[15px] px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">{dot > 9 ? "9+" : dot}</span>}
-      </span>
-      <span className={`text-[10px] font-bold ${active ? "text-violet-600" : "text-gray-400"}`}>{label}</span>
-    </button>
-  );
-
-  return (
-    <>
-      {/* Success toast */}
-      {toast && (
-        <div className="md:hidden fixed left-1/2 -translate-x-1/2 z-[70] bg-gray-900 text-white text-xs font-bold px-4 py-2.5 rounded-full shadow-xl animate-[bnToast_0.25s_ease]"
-          style={{ bottom: "calc(104px + env(safe-area-inset-bottom))" }}>
-          {t("nav_link_copied")}
-        </div>
-      )}
-
-      {/* "More" bottom sheet */}
-      {moreOpen && (
-        <div className="md:hidden fixed inset-0 z-[70]" onClick={() => setMoreOpen(false)}>
-          <div className="absolute inset-0 bg-black/40" />
-          <div onClick={(e) => e.stopPropagation()}
-            className="absolute bottom-0 inset-x-0 bg-white rounded-t-[28px] shadow-2xl px-5 pt-4 animate-[bnUp_0.3s_ease]"
-            style={{ paddingBottom: "calc(20px + env(safe-area-inset-bottom))" }}>
-            <div className="w-10 h-1 rounded-full bg-gray-200 mx-auto mb-4" />
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-black text-gray-900">{t("more_title")}</h3>
-              <button type="button" onClick={() => setMoreOpen(false)} aria-label={t("close")} title={t("close")} className="text-gray-400 hover:text-gray-700"><X className="w-5 h-5" /></button>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              {/* "Recharge de solde" entry only while the admin switch is ON */}
-              {moreItems.filter((m) => m.tab !== "deposit" || rechargeEnabled).map(({ icon: Icon, label, tab, badge }) => (
-                <button key={tab} type="button" onClick={() => go(tab)}
-                  className={`relative flex flex-col items-center justify-center gap-2 rounded-2xl py-4 px-2 transition-colors ${activeTab === tab ? "bg-violet-50 text-violet-600" : "bg-gray-50 text-gray-600 hover:bg-gray-100"}`}>
-                  <Icon className="w-6 h-6" />
-                  <span className="text-[11px] font-semibold text-center leading-tight">{label}</span>
-                  {badge > 0 && <span className="absolute top-2 end-2 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">{badge > 9 ? "9+" : badge}</span>}
-                </button>
-              ))}
-              <button type="button" onClick={() => { setMoreOpen(false); onLogout(); }}
-                className="flex flex-col items-center justify-center gap-2 rounded-2xl py-4 px-2 bg-red-50 text-red-600 hover:bg-red-100 transition-colors">
-                <LogOut className="w-6 h-6" />
-                <span className="text-[11px] font-semibold">{t("logout")}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Bottom nav bar */}
-      <nav
-        className="md:hidden fixed bottom-0 inset-x-0 z-[60] bg-white border-t border-gray-100 rounded-t-[28px] shadow-[0_-6px_24px_rgba(0,0,0,0.08)]"
-        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-        <div className="flex items-end justify-around px-1.5 pt-2 pb-1">
-          <NavItem icon={Home}       label={t("nav_home")}     active={activeTab === "overview"} onClick={() => go("overview")} />
-          <NavItem icon={TrendingUp} label={t("nav_earnings")} active={activeTab === "payout"}   onClick={() => go("payout")} />
-
-          {/* Center floating action — copies the referral link */}
-          <div className="flex-1 flex flex-col items-center">
-            <button type="button" onClick={share} aria-label={t("nav_share_aria")}
-              className="-mt-7 w-14 h-14 rounded-full bg-violet-600 hover:bg-violet-700 active:scale-90 text-white shadow-lg shadow-violet-300 flex items-center justify-center transition-all">
-              <Plus className="w-7 h-7" strokeWidth={2.5} />
-            </button>
-            <span className="text-[10px] font-bold text-violet-600 mt-1">{t("nav_share")}</span>
-          </div>
-
-          <NavItem icon={ShoppingBag}    label={t("nav_products")} active={false}    onClick={() => router.push("/products")} />
-          <NavItem icon={MoreHorizontal} label={t("nav_more")}     active={moreOpen} onClick={() => setMoreOpen(true)} dot={unread} />
-        </div>
-      </nav>
-
-      <style>{`
-        @keyframes bnUp{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
-        @keyframes bnToast{from{opacity:0;transform:translate(-50%,8px)}to{opacity:1;transform:translate(-50%,0)}}
-      `}</style>
-    </>
-  );
-}
-
 // ── Product preview (Part 7 — multi-item inline summary) ──────────────────────
 
 function productPreview(order, t) {
@@ -390,7 +295,7 @@ function OrderDetailsModal({ order, onClose, onStatusChange, updatingOrder }) {
 
   return (
     <div
-      className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 bg-black/50 z-[65] flex items-center justify-center p-4"
       onClick={onClose}
     >
       <div
@@ -860,12 +765,18 @@ export default function AffiliateDashboard() {
   const flashTimerRef = useRef(null);
 
   const [activeTab,  setActiveTab]  = useState("overview");
+  const markReadOnLoadRef = useRef(false); // opened with ?tab=notifications → mark read once loaded
 
-  // Bank form state
-  const [bankForm,      setBankForm]      = useState({ bankName: "", rib: "", accountName: "" });
+  // Bank form state — a bank of the admin catalogue (logo picker) + holder name + RIB (when the bank requires one)
+  const [bankForm,      setBankForm]      = useState({ bankId: "", rib: "", accountName: "" });
   const [bankSaving,    setBankSaving]    = useState(false);
   const [bankSuccess,   setBankSuccess]   = useState(false);
   const [bankError,     setBankError]     = useState(null);
+  const [bankFieldErrors, setBankFieldErrors] = useState({}); // field → dictionary key
+  // Active bank catalogue (GET /api/payout-banks), loaded once when the bank tab is first opened.
+  const [payoutBanks,      setPayoutBanks]      = useState(null); // null = not loaded yet
+  const [payoutBanksError, setPayoutBanksError] = useState(false);
+  const payoutBanksRequestedRef = useRef(false);
 
   // Payout state
   const [payoutAmount,  setPayoutAmount]  = useState("");
@@ -923,7 +834,21 @@ export default function AffiliateDashboard() {
     }
     setToken(tok);
     setAffiliateId(id);
+    // ?tab=<id> (the bottom nav on the Top Members / Top Brands pages links here): open that tab.
+    const requested = parseDashboardTab(window.location.search);
+    if (requested) {
+      setActiveTab(requested);
+      if (requested === "notifications") markReadOnLoadRef.current = true; // same mark-read as the in-page nav
+    }
   }, [router]);
+
+  // Keep the URL on the open tab (replaceState: no navigation, no new history entry), so the
+  // browser Back button from a Top Members / Top Brands page returns to the same tab.
+  useEffect(() => {
+    if (!affiliateId) return;
+    const href = dashboardTabHref(activeTab);
+    if (window.location.pathname + window.location.search !== href) window.history.replaceState(window.history.state, "", href);
+  }, [activeTab, affiliateId]);
 
   // ── Fetch all data ────────────────────────────────────────────────────────
   // fetchAll(tok, { silent }) — `silent` is a BACKGROUND poll: no spinner, no
@@ -987,7 +912,7 @@ export default function AffiliateDashboard() {
       // affiliate is currently typing during a silent background poll.
       if (!silent && meData?.affiliate) {
         setBankForm({
-          bankName:    meData.affiliate.bankName    || "",
+          bankId:      meData.affiliate.bankId      || "",
           rib:         meData.affiliate.rib         || "",
           accountName: meData.affiliate.accountName || "",
         });
@@ -1149,24 +1074,72 @@ export default function AffiliateDashboard() {
     }
   }, [memberOrdersCache, subTeamCache]);
 
+  // ── Bank catalogue (logo picker) ─────────────────────────────────────────
+  // A failure only affects the picker (error + retry); the rest of the dashboard is untouched.
+  const loadPayoutBanks = useCallback(async () => {
+    try {
+      const res = await fetch("/api/payout-banks", { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const d = await res.json();
+      setPayoutBanks(Array.isArray(d?.banks) ? d.banks : []);
+      setPayoutBanksError(false);
+    } catch {
+      setPayoutBanksError(true);
+    }
+  }, []);
+  useEffect(() => {
+    if (activeTab !== "bank" || payoutBanksRequestedRef.current) return;
+    payoutBanksRequestedRef.current = true;
+    loadPayoutBanks();
+  }, [activeTab, loadPayoutBanks]);
+  const retryPayoutBanks = () => { setPayoutBanksError(false); setPayoutBanks(null); loadPayoutBanks(); };
+
+  const updateBankField = (field, value) => {
+    setBankForm((f) => ({ ...f, [field]: value }));
+    setBankFieldErrors((errs) => (errs[field] ? { ...errs, [field]: undefined } : errs));
+  };
+
   // ── Bank save ────────────────────────────────────────────────────────────
   const handleBankSave = async (e) => {
     e.preventDefault();
-    setBankSaving(true);
     setBankError(null);
     setBankSuccess(false);
+    // Client-side checks (hints only — the server decides): bank chosen among the selectable ones,
+    // holder name always, RIB only when the chosen bank requires it.
+    const chosen = selectableBanks(payoutBanks, data?.affiliate?.bank ?? null).find((b) => b.id === bankForm.bankId) || null;
+    const ribNeeded = Boolean(chosen) && chosen.ribRequired !== false;
+    const errs = {};
+    if (!bankForm.bankId) errs.bankId = "bank_err_required";
+    else if (!chosen) errs.bankId = "bank_err_unavailable";
+    if (!isValidHolder(bankForm.accountName)) errs.accountName = "bank_err_holder";
+    if (ribNeeded && !isValidRib(bankForm.rib)) errs.rib = "bank_err_rib";
+    setBankFieldErrors(errs);
+    if (Object.keys(errs).length) return;
+
+    setBankSaving(true);
     try {
       const res = await fetch("/api/affiliate/me", {
         method:  "PUT",
         headers: authHeaders(),
-        body:    JSON.stringify(bankForm),
+        body:    JSON.stringify({ bankId: chosen.id, accountName: bankForm.accountName, rib: ribNeeded ? cleanRib(bankForm.rib) : "" }),
       });
       const d = await res.json();
       if (res.ok) {
+        if (d?.affiliate) {
+          // Same shape as GET /me's affiliate: bankComplete / payout gating update at once.
+          setData((prev) => (prev ? { ...prev, affiliate: { ...prev.affiliate, ...d.affiliate } } : prev));
+          setBankForm({ bankId: d.affiliate.bankId || "", rib: d.affiliate.rib || "", accountName: d.affiliate.accountName || "" });
+        }
         setBankSuccess(true);
         setTimeout(() => setBankSuccess(false), 3000);
       } else {
-        setBankError(d.error ? { text: d.error, code: d.code } : { key: "error" });
+        const fieldErrs = res.status === 400 ? bankServerFieldErrors(d?.fields) : {};
+        if (Object.keys(fieldErrs).length) {
+          setBankFieldErrors(fieldErrs);
+          if (fieldErrs.bankId === "bank_err_unavailable") loadPayoutBanks(); // deactivated meanwhile → refresh the list
+        } else {
+          setBankError(d.error ? { text: d.error, code: d.code } : { key: "error" });
+        }
       }
     } catch {
       setBankError({ key: "network_error" });
@@ -1236,11 +1209,38 @@ export default function AffiliateDashboard() {
     } catch {}
   };
 
+  // ── Bottom-nav state for the Top Members / Top Brands pages (AffiliateNavGate) ──
+  // Only what the nav displays (no token): username for the referral link, unread badge, recharge entry.
+  const navUnread = notifs.filter((n) => !n.read).length;
+  const navUsername = data?.affiliate?.username || null;
+  const navRechargeEnabled = data?.deposit?.rechargeEnabled !== false;
+  useEffect(() => {
+    if (!data) return;
+    try { sessionStorage.setItem(NAV_SNAPSHOT_KEY, serializeNavSnapshot({ unread: navUnread, rechargeEnabled: navRechargeEnabled, username: navUsername })); } catch {}
+  }, [data, navUnread, navRechargeEnabled, navUsername]);
+  useEffect(() => {
+    if (data && markReadOnLoadRef.current) { markReadOnLoadRef.current = false; markNotifsRead(); }
+  }); // no dependency list: runs after each render until the pending mark-read is done (cheap ref check)
+
+  // The bottom nav stays available while the page loads or shows an error (signed-in affiliate only).
+  const guardNav = affiliateId ? (
+    <MobileBottomNav
+      activeTab={activeTab}
+      setActiveTab={setActiveTab}
+      refLink={typeof window !== "undefined" && navUsername ? `${window.location.origin}?ref=${navUsername}` : ""}
+      onLogout={handleLogout}
+      unread={navUnread}
+      onOpenNotifications={markNotifsRead}
+      rechargeEnabled={navRechargeEnabled}
+    />
+  ) : null;
+
   // ── Guard ────────────────────────────────────────────────────────────────
   if (!affiliateId || loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+        {guardNav}
       </div>
     );
   }
@@ -1255,6 +1255,7 @@ export default function AffiliateDashboard() {
             {t("retry")}
           </button>
         </div>
+        {guardNav}
       </div>
     );
   }
@@ -1280,13 +1281,14 @@ export default function AffiliateDashboard() {
   // `withdrawable` — shown for transparency, never subtracted twice).
   const pendingPayouts = stats?.pendingPayouts ?? 0;
   // Bank details must be complete before a withdrawal (mirrors the server rule:
-  // non-empty bankName/accountName + RIB length 10–34). Server also re-validates.
-  const _rib = String(affiliate?.rib ?? "").trim();
-  const bankComplete = Boolean(
-    String(affiliate?.bankName ?? "").trim() &&
-    String(affiliate?.accountName ?? "").trim() &&
-    _rib.length >= 10 && _rib.length <= 34
-  );
+  // non-empty bankName/accountName + RIB length 10–34, the RIB being skipped only when
+  // the chosen bank says ribRequired = false). Server also re-validates.
+  const bankComplete = bankDetailsComplete(affiliate ?? {});
+  // Bank tab: the active catalogue + the affiliate's own bank if it was deactivated since.
+  const bankChoices   = selectableBanks(payoutBanks, affiliate?.bank ?? null);
+  const selectedBank  = bankChoices.find((b) => b.id === bankForm.bankId) || null;
+  const bankRibShown  = !selectedBank || selectedBank.ribRequired !== false;
+  const bankErrText   = (field) => (bankFieldErrors[field] ? t(bankFieldErrors[field], BANK_ERROR_VARS[field]) : null);
 
   // Identity verification status (from /me — refreshed by the live poll, so the
   // progression + payout gate update automatically after submit/admin decision).
@@ -1798,7 +1800,7 @@ export default function AffiliateDashboard() {
         {/* ══ BANK ══════════════════════════════════════════════════════════ */}
         {activeTab === "bank" && (
           <Section title={t("bank_title")} icon={Building2}>
-            <form onSubmit={handleBankSave} className="space-y-4 max-w-sm">
+            <form onSubmit={handleBankSave} noValidate className="space-y-4 max-w-md">
 
               {bankSuccess && (
                 <div className="flex items-center gap-2 bg-green-50 border border-green-100 rounded-xl px-4 py-3 text-sm text-green-700">
@@ -1813,24 +1815,85 @@ export default function AffiliateDashboard() {
                 </div>
               )}
 
-              {[
-                { key: "bankName",    label: t("bank_name"),      placeholder: "\u2066CIH, Attijariwafa, BMCE...\u2069" }, // isolated: keeps its LTR order in an RTL field
-                { key: "rib",         label: t("rib"),            placeholder: "XXXXXXXXXXXXXXXXXXXXXXXXXX" },
-                { key: "accountName", label: t("account_holder"), placeholder: t("account_holder_ph") },
-              ].map(({ key, label, placeholder }) => (
-                <div key={key}>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1.5">{label}</label>
-                  <input
-                    type="text"
-                    value={bankForm[key]}
-                    onChange={(e) => setBankForm((f) => ({ ...f, [key]: e.target.value }))}
-                    placeholder={placeholder}
-                    className="w-full px-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:border-gray-400"
-                    dir={fieldDir(bankForm[key])}
-                    data-bank-input={key}
+              {/* Bank: logo picker (active catalogue + the affiliate's own bank if deactivated since) */}
+              <div>
+                <p className="block text-xs font-semibold text-gray-600 mb-1.5">{t("bank_choose")}</p>
+                {payoutBanksError && (
+                  <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800" role="alert" data-bank-list-error>
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{t("bank_list_error")}</span>
+                    <button type="button" onClick={retryPayoutBanks} className="font-semibold underline">{t("retry")}</button>
+                  </div>
+                )}
+                {(!payoutBanksError || bankChoices.length > 0) && (
+                  <BankPicker
+                    banks={bankChoices}
+                    value={bankForm.bankId || null}
+                    onChange={(b) => updateBankField("bankId", b.id)}
+                    labels={{ group: t("bank_name"), inactive: t("bank_inactive_badge"), empty: t("bank_picker_empty"), loading: t("bank_picker_loading") }}
+                    loading={payoutBanks === null && !payoutBanksError}
+                    invalid={Boolean(bankFieldErrors.bankId)}
+                    describedBy={bankFieldErrors.bankId ? "bank-err-bankId" : selectedBank?.isActive === false ? "bank-inactive-note" : undefined}
+                    disabled={bankSaving}
                   />
+                )}
+                {selectedBank?.isActive === false && (
+                  <p id="bank-inactive-note" className="mt-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800" data-bank-inactive-note>
+                    {t("bank_inactive_note")}
+                  </p>
+                )}
+                {bankFieldErrors.bankId && (
+                  <p id="bank-err-bankId" className="mt-1.5 text-xs text-red-600" data-bank-error="bankId">{bankErrText("bankId")}</p>
+                )}
+              </div>
+
+              {/* RIB: only when the chosen bank requires one (shown until a bank is chosen) */}
+              {bankRibShown && (
+                <div>
+                  <label htmlFor="bank-rib" className="block text-xs font-semibold text-gray-600 mb-1.5">{t("rib")}</label>
+                  <input
+                    id="bank-rib"
+                    type="text"
+                    value={bankForm.rib}
+                    onChange={(e) => updateBankField("rib", e.target.value)}
+                    placeholder="XXXXXXXXXXXXXXXXXXXXXXXXXX"
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-invalid={bankFieldErrors.rib ? true : undefined}
+                    aria-describedby={bankFieldErrors.rib ? "bank-err-rib" : undefined}
+                    className={`w-full px-4 py-2.5 text-sm border rounded-xl bg-gray-50 font-mono focus:outline-none focus:border-gray-400 ${bankFieldErrors.rib ? "border-red-300" : "border-gray-200"}`}
+                    dir="ltr"
+                    data-bank-input="rib"
+                  />
+                  {bankFieldErrors.rib && (
+                    <p id="bank-err-rib" className="mt-1.5 text-xs text-red-600" data-bank-error="rib">{bankErrText("rib")}</p>
+                  )}
                 </div>
-              ))}
+              )}
+
+              {/* Account holder's full name: always required */}
+              <div>
+                <label htmlFor="bank-holder" className="block text-xs font-semibold text-gray-600 mb-1.5">{t("account_holder_full")}</label>
+                <input
+                  id="bank-holder"
+                  type="text"
+                  value={bankForm.accountName}
+                  onChange={(e) => updateBankField("accountName", e.target.value)}
+                  placeholder={t("account_holder_ph")}
+                  autoComplete="name"
+                  aria-invalid={bankFieldErrors.accountName ? true : undefined}
+                  aria-describedby={[bankFieldErrors.accountName && "bank-err-accountName", !bankRibShown && "bank-holder-hint"].filter(Boolean).join(" ") || undefined}
+                  className={`w-full px-4 py-2.5 text-sm border rounded-xl bg-gray-50 focus:outline-none focus:border-gray-400 ${bankFieldErrors.accountName ? "border-red-300" : "border-gray-200"}`}
+                  dir={fieldDir(bankForm.accountName)}
+                  data-bank-input="accountName"
+                />
+                {!bankRibShown && (
+                  <p id="bank-holder-hint" className="mt-1.5 text-xs text-gray-500" data-bank-holder-hint>{t("holder_only_hint")}</p>
+                )}
+                {bankFieldErrors.accountName && (
+                  <p id="bank-err-accountName" className="mt-1.5 text-xs text-red-600" data-bank-error="accountName">{bankErrText("accountName")}</p>
+                )}
+              </div>
 
               <button
                 type="submit"

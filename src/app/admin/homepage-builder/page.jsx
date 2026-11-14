@@ -9,6 +9,7 @@ import {
 import SingleImageSelect from "@/components/block/ImageSelector";
 import { STORE_MAP_DEFAULTS, linkCoordStatus, extractLatLng } from "@/lib/storeMap";
 import StoreMapSection from "@/components/HomeBuilder/StoreMapSection";
+import { PRODUCT_COUNT_OPTIONS, DEFAULT_PRODUCT_COUNT, normalizeProductCount } from "@/lib/homepageProducts";
 
 // ── Section type definitions ──────────────────────────────────────────────────
 const SECTION_TYPES = [
@@ -41,7 +42,7 @@ const DEFAULTS = {
   hero:               { title: "Welcome to our store", subtitle: "Discover amazing products at great prices", buttonText: "Shop Now", buttonUrl: "/products", image: "", overlayOpacity: 40 },
   slider:             {},
   collection_slider:  {},
-  products:           { title: "Featured Products", limit: 8, collectionFilter: "" },
+  products:           { title: "Featured Products", productCount: DEFAULT_PRODUCT_COUNT, collectionFilter: "" },
   collection_section: { collectionTitle: "", collectionId: "", productLimit: 8, customTitle: "", showViewMore: true, mode: "auto", selectedProducts: [] },
   image:              { url: "", link: "", alt: "" },
   video:              { url: "", autoplay: false, muted: true },
@@ -87,7 +88,14 @@ function EditProducts({ data, onChange }) {
   return (
     <div className="space-y-3">
       <Field label="Section Title"><input className="field" value={data.title || ""} onChange={e => onChange({ ...data, title: e.target.value })} /></Field>
-      <Field label="Max Products"><input type="number" min={1} max={50} className="field w-24" value={data.limit || 8} onChange={e => onChange({ ...data, limit: Number(e.target.value) })} /></Field>
+      {/* data.productCount (4 / 6 / 8 / 10, default 4) is what the homepage renders. The old data.limit key is left
+          untouched in saved layouts but no longer edited: it was never read by the storefront. */}
+      <Field label="Products to display">
+        <select className="field w-28" data-product-count value={normalizeProductCount(data.productCount)}
+          onChange={e => onChange({ ...data, productCount: normalizeProductCount(e.target.value) })}>
+          {PRODUCT_COUNT_OPTIONS.map((n) => <option key={n} value={n}>{n} products</option>)}
+        </select>
+      </Field>
       <Field label="Filter by Collection (title, optional)"><input className="field" placeholder="e.g. Summer Sale" value={data.collectionFilter || ""} onChange={e => onChange({ ...data, collectionFilter: e.target.value })} /></Field>
     </div>
   );

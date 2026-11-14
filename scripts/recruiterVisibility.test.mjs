@@ -377,8 +377,11 @@ console.log('\n7b. Phase 3 — allowlisted field errors and the network affiliat
 {
   const E = V.toRecruiterError;
   const F = V.RECRUITER_FIELD_ERROR_CODES;
-  ok('field-code allowlist: exactly 15 fields with their codes (Phase 5 adds amountMad, bankName, rib, accountName; Phase 6 part 2 adds newPassword, newPasswordConfirm; Phase 6 part 3c adds front, back and body TOO_LARGE), deeply frozen',
-    eq(Object.keys(F).sort(), ['accountName', 'amountMad', 'back', 'bankName', 'body', 'front', 'name', 'newPassword', 'newPasswordConfirm', 'parentId', 'password', 'phone', 'requestId', 'rib', 'username'])
+  // Phase 4 (bank logo picker): + bankId (BANK_REQUIRED / BANK_UNAVAILABLE) — the recruiter bank save now
+  // takes a bank of the admin catalogue, so its field errors must pass the allowlist (16 fields, was 15).
+  ok('field-code allowlist: exactly 16 fields with their codes (Phase 5 adds amountMad, bankName, rib, accountName; Phase 6 part 2 adds newPassword, newPasswordConfirm; Phase 6 part 3c adds front, back and body TOO_LARGE; Phase 4 bank picker adds bankId), deeply frozen',
+    eq(Object.keys(F).sort(), ['accountName', 'amountMad', 'back', 'bankId', 'bankName', 'body', 'front', 'name', 'newPassword', 'newPasswordConfirm', 'parentId', 'password', 'phone', 'requestId', 'rib', 'username'])
+    && eq(F.bankId, ['BANK_REQUIRED', 'BANK_UNAVAILABLE'])
     && eq(F.front, ['FILE_REQUIRED', 'FILE_TOO_LARGE', 'INVALID_FILE']) && eq(F.back, ['FILE_REQUIRED', 'FILE_TOO_LARGE', 'INVALID_FILE'])
     && eq(F.newPassword, ['INVALID_PASSWORD']) && eq(F.newPasswordConfirm, ['PASSWORD_MISMATCH'])
     && eq(F.amountMad, ['INVALID_AMOUNT']) && eq(F.bankName, ['INVALID_BANK_NAME']) && eq(F.rib, ['INVALID_RIB']) && eq(F.accountName, ['INVALID_ACCOUNT_NAME'])
@@ -469,8 +472,13 @@ console.log('\n7d. Phase 5 wallet projections');
     && [0, -1, 1.5, '2', null, undefined].every((c) => V.toRecruiterRewardHistoryView({ type: 'REVERSAL', amountCents: -1, cycle: c }).cycle === null)
     && V.toRecruiterRewardHistoryView({ type: 'RECRUIT_REWARD', amountCents: 1, cycle: 1 }).cycle === 1
     && eq([V.toRecruiterRewardHistoryView({ type: 'ADMIN_ADJUSTMENT', amountCents: -3, cycle: 4, requiredDeliveredOrders: 2 })].map((x) => [x.cycle, x.reason, x.requiredDeliveredOrders, x.amountCents])[0], [null, null, null, -3]), JSON.stringify(rv));
-  const bv = V.toRecruiterBankView({ bankName: 'CIH', rib: '0117', accountName: 'A', complete: 'yes', password: 'x' });
-  ok('bank view: exactly bankName / rib / accountName / complete (strict boolean)', eq(keys(bv), ['accountName', 'bankName', 'complete', 'rib']) && bv.complete === false && V.toRecruiterBankView({ complete: true }).complete === true);
+  // Phase 4 (bank logo picker): the view also carries bankId and bank (the chosen catalogue bank's
+  // PUBLIC fields only — id / name / logoUrl / isActive / ribRequired; null when none or legacy).
+  const bv = V.toRecruiterBankView({ bankName: 'CIH', rib: '0117', accountName: 'A', complete: 'yes', password: 'x', bankId: 'b1', bank: { id: 'b1', name: 'CIH', logoUrl: '/l.webp', isActive: true, ribRequired: false, sortOrder: 4, createdAt: 'x', secret: 'y' } });
+  ok('bank view: exactly bankName / rib / accountName / complete (strict boolean) / bankId / bank (public catalogue fields only)',
+    eq(keys(bv), ['accountName', 'bank', 'bankId', 'bankName', 'complete', 'rib']) && bv.complete === false && V.toRecruiterBankView({ complete: true }).complete === true
+    && bv.bankId === 'b1' && eq(bv.bank, { id: 'b1', name: 'CIH', logoUrl: '/l.webp', isActive: true, ribRequired: false })
+    && V.toRecruiterBankView({}).bankId === null && V.toRecruiterBankView({}).bank === null);
   const w = V.toRecruiterWalletView({
     settings: { version: 2, enabled: true, rewardAmountCents: 15000, minDeliveredSales: 7 },
     totals: { earnedCents: 30000, availableCents: -100, pendingCents: -5, paidCents: 1.5, reservedCents: 9, balance: 1 },
@@ -479,7 +487,7 @@ console.log('\n7d. Phase 5 wallet projections');
   ok('wallet view: exact keys; totals exactly earned / available / pending / paid / currency (negative available kept, invalid pending / paid → 0); settings via toRecruiterSettingsView',
     eq(keys(w), ['bank', 'rewards', 'settings', 'totals', 'withdrawals']) && eq(w.totals, { earnedCents: 30000, availableCents: -100, pendingCents: 0, paidCents: 0, currency: 'MAD' })
     && eq(w.settings, { rewardsEnabled: true, rewardAmountCents: 15000, currency: 'MAD', requiredDeliveredOrders: 7 }) && eq(w.rewards, []) && eq(keys(w.withdrawals[0]), ['amountCents', 'createdAt', 'currency', 'id', 'status'])
-    && eq(w.bank, { bankName: null, rib: null, accountName: null, complete: false }) && !/commission|balance|reservedCents|recruiterId/.test(JSON.stringify(w)));
+    && eq(w.bank, { bankName: null, rib: null, accountName: null, complete: false, bankId: null, bank: null }) && !/commission|balance|reservedCents|recruiterId/.test(JSON.stringify(w)));
   ok('no global prototype pollution after the wallet projections', !('polluted' in {}) && !('x' in {}));
 }
 
@@ -537,8 +545,11 @@ console.log('\n8. Static checks of recruiterVisibility.js');
 {
   const code = stripJs(read('src/lib/recruiterVisibility.js'));
   ok('never references evaluateRecruitQualification or its unmet / reason fields in code', !/evaluateRecruitQualification|\bunmet\b|\.reason\b/.test(code));
-  ok('imports only normalizeRecruiterSettings and REWARD_TYPES from recruiterSettings.js',
-    eq([...code.matchAll(/^import\s*\{([^}]*)\}\s*from\s*'([^']+)'/gm)].map((m) => [m[1].split(',').map((x) => x.trim()).sort(), m[2]]), [[['REWARD_TYPES', 'normalizeRecruiterSettings'], './recruiterSettings.js']]));
+  // Phase 4 (bank logo picker): + bankPublicView from the PURE payoutBanks.js (no import of its own) for the bank view.
+  ok('imports only normalizeRecruiterSettings and REWARD_TYPES from recruiterSettings.js (+ Phase 4: bankPublicView from the pure payoutBanks.js)',
+    eq([...code.matchAll(/^import\s*\{([^}]*)\}\s*from\s*'([^']+)'/gm)].map((m) => [m[1].split(',').map((x) => x.trim()).sort(), m[2]]),
+      [[['REWARD_TYPES', 'normalizeRecruiterSettings'], './recruiterSettings.js'], [['bankPublicView'], './payoutBanks.js']])
+    && !/^\s*import\b/m.test(read('src/lib/payoutBanks.js')));
   ok('no spread / Object.assign / Object.entries / JSON passthrough of an input object in code', !/\.\.\.|Object\.assign|Object\.entries|Object\.fromEntries|JSON\.parse|structuredClone/.test(code));
   ok('every exported projection returns an object literal or null (no returned input variable)',
     !/return\s+(row|entry|settings|err|s|reward|reversal|rows)\s*;/.test(code) && (code.match(/return\s*\{/g) || []).length >= 6);

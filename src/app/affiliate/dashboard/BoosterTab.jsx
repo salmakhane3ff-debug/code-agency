@@ -339,7 +339,7 @@ export default function BoosterTab({ onRecharge }) {
       {selected && (
         <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center" onClick={() => !busy && setSelected(null)}>
           <div className="absolute inset-0 bg-black/50" />
-          <div dir={dir} className="relative w-full sm:max-w-sm bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl p-6 animate-[bstUp_0.25s_ease] max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+          <div dir={dir} className="relative w-full sm:max-w-sm bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:pb-6 animate-[bstUp_0.25s_ease] max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <p className="text-base font-black text-gray-900">{selected.emoji || "🚀"} <bdi>{selected.name}</bdi></p>
               <button type="button" onClick={() => setSelected(null)} aria-label={t("bst_close")} className="text-gray-400 hover:text-gray-700"><X className="w-5 h-5" /></button>

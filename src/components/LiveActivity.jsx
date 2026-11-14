@@ -196,9 +196,9 @@ export default function LiveActivity({ pollMs = 4000, windowSize = 3, showViewAl
 
       {/* "عرض الكل" bottom sheet / modal */}
       {open && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" onClick={() => setOpen(false)}>
+        <div className="fixed inset-0 z-[65] flex items-end sm:items-center justify-center" onClick={() => setOpen(false)}>
           <div className="absolute inset-0 bg-black/40" />
-          <div dir={dir} className="relative w-full sm:max-w-md max-h-[80vh] bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col animate-[laUp_0.3s_ease]" onClick={(e) => e.stopPropagation()}>
+          <div dir={dir} className="relative w-full sm:max-w-md max-h-[80vh] bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col pb-[env(safe-area-inset-bottom)] sm:pb-0 animate-[laUp_0.3s_ease]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
               <h3 className="text-sm font-black text-gray-900">{t("all_title")}</h3>
               <button type="button" onClick={() => setOpen(false)} aria-label={t("close")} className="text-gray-400 hover:text-gray-700 text-lg leading-none">✕</button>

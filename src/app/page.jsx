@@ -10,6 +10,7 @@ import { PurchasePopupStandalone } from "@/components/ConversionBadges";
 import Slider           from "@/components/Slider/Slider";
 import SliderCollection from "@/components/Colleaction/SliderCollection";
 import ProductGrid      from "@/components/Product/ProductGrid";
+import { DEFAULT_PRODUCT_COUNT } from "@/lib/homepageProducts";
 import Container        from "@/components/Container";
 
 // PERF: Below-fold components — loaded with next/dynamic so their JS is only
@@ -48,7 +49,7 @@ function DefaultHome({ topOfferBanner }) {
       )}
       <Container><Slider /></Container>
       <Container><SliderCollection /></Container>
-      <Container><ProductGrid /></Container>
+      <Container><ProductGrid limit={DEFAULT_PRODUCT_COUNT} /></Container>
       {/* PERF: dynamic imports below — JS for these sections loads after LCP */}
       <HomeCollectionSections />
       <VideoReels />

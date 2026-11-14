@@ -87,5 +87,34 @@ console.log("3) requestPayout rejects incomplete bank info BEFORE touching balan
   ok("complete bank info passes the bank gate (reaches balance tx)", complete._s.txEntered === true || okCode === "INSUFFICIENT_BALANCE");
 }
 
+console.log("4) Phase 4 (bank logo picker) — a catalogue bank with ribRequired = false needs no RIB:");
+{
+  const { requestPayout } = await import("../src/lib/services/affiliateSystemService.js");
+  ok("ribRequired false → holder + bank name enough (no RIB)", validateBankInfo({ bankName: "Cash Plus", accountName: "A", rib: null, ribRequired: false }).length === 0);
+  ok("ribRequired false → holder still required", validateBankInfo({ bankName: "Cash Plus", accountName: " ", ribRequired: false }).includes("accountName"));
+  ok("ribRequired false → bank name still required", validateBankInfo({ bankName: "", accountName: "A", ribRequired: false }).includes("bankName"));
+  ok("ribRequired true / undefined → the original RIB rule", validateBankInfo({ bankName: "CIH", accountName: "A", rib: "", ribRequired: true }).includes("rib")
+    && validateBankInfo({ bankName: "CIH", accountName: "A", rib: "123" }).includes("ribLength"));
+
+  const makeDb = (row) => {
+    const s = { txEntered: false, idvRead: false, select: null };
+    const db = {
+      _s: s,
+      affiliate: { findUnique: async (args) => { if (!s.select) s.select = args.select; return row; } },
+      identityVerification: { findUnique: async () => { s.idvRead = true; return { status: "PENDING" }; } },
+      $transaction: async () => { s.txEntered = true; throw new Error("not reached"); },
+    };
+    return db;
+  };
+  const codeOf = async (fn) => { try { await fn(); return null; } catch (e) { return e.code; } };
+  const ribless = makeDb({ bankName: "Cash Plus", accountName: "Ahmed", rib: null, bank: { ribRequired: false } });
+  ok("rib null + bank { ribRequired:false } passes the bank gate (next gate: identity)", (await codeOf(() => requestPayout("aff1", 10, ribless))) === "IDENTITY_NOT_VERIFIED" && ribless._s.idvRead === true);
+  ok("requestPayout reads bank.ribRequired", ribless._s.select?.bank?.select?.ribRequired === true);
+  const req = makeDb({ bankName: "CIH Bank", accountName: "Ahmed", rib: null, bank: { ribRequired: true } });
+  ok("rib null + bank { ribRequired:true } → INCOMPLETE_BANK_INFO (identity never read)", (await codeOf(() => requestPayout("aff1", 10, req))) === "INCOMPLETE_BANK_INFO" && req._s.idvRead === false);
+  const none = makeDb({ bankName: "CIH", accountName: "Ahmed", rib: null, bank: null });
+  ok("rib null + no catalogue bank → INCOMPLETE_BANK_INFO", (await codeOf(() => requestPayout("aff1", 10, none))) === "INCOMPLETE_BANK_INFO" && none._s.txEntered === false);
+}
+
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

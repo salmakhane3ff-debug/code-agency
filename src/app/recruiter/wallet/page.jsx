@@ -8,7 +8,9 @@
  *
  *   • GET  /api/recruiter/wallet               → reward rule, totals (MAD cents), reward history,
  *                                                withdrawals, bank details (the recruiter's OWN only)
- *   • PUT  /api/recruiter/wallet/bank          → { bankName, rib, accountName }
+ *   • GET  /api/payout-banks                   → the ACTIVE bank catalogue (Phase 4 — bank logo picker)
+ *   • PUT  /api/recruiter/wallet/bank          → { bankId, accountName, rib } (the bank is picked from the
+ *                                                catalogue, never typed; the RIB only when that bank needs it)
  *   • POST /api/recruiter/wallet/withdrawals   → { amountMad, requestId }
  *   • GET  /api/recruiter/identity             → the recruiter's KYC status (Phase 6 part 3c): a
  *                                                withdrawal needs it APPROVED (banner + link)
@@ -33,8 +35,10 @@ import { authAction, fmtMadCents, rewardAmountsDisplay } from "../recruiterUiSta
 import { groupRowDetail, rewardRowTitle, walletGrossNet } from "./walletUi";
 import { RECRUITER_WALLET_TEXT } from "./walletI18n";
 import { Badge, CenteredNotice, LoadingBlock, PageHeader, Section, StatCard, ui } from "../_components/ui";
+import BankPicker from "@/components/payout/BankPicker";
+import { bankPublicView, cleanBankText, cleanRib, isValidHolder, isValidRib, selectableBanks } from "@/lib/payoutBanks";
 
-const EMPTY_BANK = { bankName: "", rib: "", accountName: "" };
+const EMPTY_BANK = { bankId: "", rib: "", accountName: "" };
 
 const newRequestId = () => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -50,15 +54,19 @@ function fmtDate(iso, locale) {
   return Number.isFinite(d.getTime()) ? d.toLocaleDateString(locale, { year: "numeric", month: "long", day: "numeric" }) : "—";
 }
 
-/** Client-side hints (same rules as the server: validateBankInfo + caps; the server decides). */
-function localBankErrors(b) {
+/** RIB asked only when the chosen bank requires it (no bank chosen yet → not asked). */
+const ribNeeded = (selected) => !!selected && selected.ribRequired !== false;
+
+/**
+ * Client-side hints (same rules as the server: checkBankSelection in src/lib/payoutBanks.js; the server decides).
+ * `selected` = the chosen bank among the selectable ones (null when none / no longer offered).
+ */
+function localBankErrors(b, selected) {
   const out = {};
-  const bankName = b.bankName.replace(/\s+/g, " ").trim();
-  const accountName = b.accountName.replace(/\s+/g, " ").trim();
-  const rib = b.rib.replace(/\s/g, "");
-  if (!bankName || bankName.length > 80 || /[<>]/.test(bankName)) out.bankName = "INVALID_BANK_NAME";
-  if (!accountName || accountName.length > 80 || /[<>]/.test(accountName)) out.accountName = "INVALID_ACCOUNT_NAME";
-  if (rib.length < 10 || rib.length > 34 || !/^[A-Za-z0-9]+$/.test(rib)) out.rib = "INVALID_RIB";
+  if (!b.bankId) out.bankId = "BANK_REQUIRED";
+  else if (!selected) out.bankId = "BANK_UNAVAILABLE";
+  if (!isValidHolder(b.accountName)) out.accountName = "INVALID_ACCOUNT_NAME";
+  if (ribNeeded(selected) && !isValidRib(b.rib)) out.rib = "INVALID_RIB";
   return out;
 }
 /** "150" / "150.5" / "150,50" → cents, or NaN (mirrors parseMadToCents). */
@@ -122,6 +130,8 @@ export default function RecruiterWalletPage() {
   const [bankErrors, setBankErrors] = useState({});
   const [bankBusy, setBankBusy] = useState(false);
   const [bankMsg, setBankMsg] = useState(null); // { ok: true } | { ok: false, code }
+  // Phase 4: the ACTIVE bank catalogue (public, no auth); its failure never hides the wallet.
+  const [catalog, setCatalog] = useState({ banks: [], loading: true, error: false });
 
   const [amount, setAmount] = useState("");
   const [amountError, setAmountError] = useState(null); // { field: "amountMad", code } | { code }
@@ -201,7 +211,7 @@ export default function RecruiterWalletPage() {
       // KYC and reward aggregates load alongside; their failure never hides the wallet.
       loadIdentity();
       loadAmounts();
-      if (!keepBank) setBank({ bankName: w.bank.bankName ?? "", rib: w.bank.rib ?? "", accountName: w.bank.accountName ?? "" });
+      if (!keepBank) setBank({ bankId: w.bank.bankId ?? "", rib: w.bank.rib ?? "", accountName: w.bank.accountName ?? "" });
     } catch {
       if (aliveRef.current) setLoadError("SERVER_ERROR");
     } finally {
@@ -209,16 +219,36 @@ export default function RecruiterWalletPage() {
     }
   }, [authGate, loadIdentity, loadAmounts]);
 
+  /** The active bank catalogue for the picker (names + public logos only). */
+  const loadCatalog = useCallback(async () => {
+    setCatalog((c) => ({ ...c, loading: true, error: false }));
+    try {
+      const res = await fetch("/api/payout-banks", { cache: "no-store" });
+      const body = await res.json().catch(() => null);
+      if (!aliveRef.current) return;
+      if (!res.ok || !Array.isArray(body?.banks)) { setCatalog({ banks: [], loading: false, error: true }); return; }
+      setCatalog({ banks: body.banks.map(bankPublicView).filter((b) => b && b.id && b.isActive), loading: false, error: false });
+    } catch {
+      if (aliveRef.current) setCatalog({ banks: [], loading: false, error: true });
+    }
+  }, []);
+
   useEffect(() => {
     aliveRef.current = true;
     load();
+    loadCatalog();
     return () => { aliveRef.current = false; };
-  }, [load]);
+  }, [load, loadCatalog]);
 
   // ── Bank details ──────────────────────────────────────────────────────────
-  const editBank = (patch) => {
+  // Every active bank + the recruiter's saved bank when it has been deactivated since (kept, still selected).
+  const savedBank = wallet?.bank.bank ?? null;
+  const banks = selectableBanks(catalog.banks, savedBank);
+  const selectedBank = banks.find((b) => b.id === bank.bankId) ?? null;
+  const ribRequired = ribNeeded(selectedBank);
+  const editBank = (patch, alsoClear = []) => {
     setBank((b) => ({ ...b, ...patch }));
-    const keys = Object.keys(patch);
+    const keys = [...Object.keys(patch), ...alsoClear];
     setBankErrors((fe) => { const n = { ...fe }; for (const k of keys) delete n[k]; return n; });
     setBankMsg(null);
   };
@@ -226,7 +256,7 @@ export default function RecruiterWalletPage() {
     e.preventDefault();
     if (bankBusy) return;
     setBankMsg(null);
-    const local = localBankErrors(bank);
+    const local = localBankErrors(bank, selectedBank);
     if (Object.keys(local).length) { setBankErrors(local); return; }
     setBankErrors({});
     setBankBusy(true);
@@ -234,10 +264,11 @@ export default function RecruiterWalletPage() {
       const res = await fetch("/api/recruiter/wallet/bank", {
         method: "PUT", credentials: "include", cache: "no-store",
         headers: { "Content-Type": "application/json" },
+        // Exactly { bankId, accountName, rib } (any other key is refused); the RIB only when the bank needs it.
         body: JSON.stringify({
-          bankName: bank.bankName.replace(/\s+/g, " ").trim(),
-          rib: bank.rib.replace(/\s/g, ""),
-          accountName: bank.accountName.replace(/\s+/g, " ").trim(),
+          bankId: bank.bankId,
+          accountName: cleanBankText(bank.accountName),
+          rib: ribRequired ? cleanRib(bank.rib) : "",
         }),
       });
       const body = await res.json().catch(() => null);
@@ -416,17 +447,51 @@ export default function RecruiterWalletPage() {
             {/* 3. Bank details */}
             <Section Icon={Landmark} title={tx("w_bank_title")} aria-label={tx("w_bank_title")}>
               <form onSubmit={saveBank} noValidate className="space-y-3" data-bank-form>
-                <Field id="b-name" label={tx("w_bank_name")} error={bankErrors.bankName ? recruiterFieldErrorLabel("bankName", bankErrors.bankName, lang) : ""} field="bankName">
-                  <input id="b-name" value={bank.bankName} onChange={(e) => editBank({ bankName: e.target.value })} maxLength={80}
-                    placeholder={"\u2066CIH, Attijariwafa, BMCE...\u2069"} autoComplete="off" className={inputCls(!!bankErrors.bankName)} data-bank-input="bankName" />
-                </Field>
-                <Field id="b-rib" label={tx("w_rib")} hint={tx("w_rib_hint")} error={bankErrors.rib ? recruiterFieldErrorLabel("rib", bankErrors.rib, lang) : ""} field="rib">
-                  <input id="b-rib" value={bank.rib} onChange={(e) => editBank({ rib: e.target.value })} maxLength={48} dir="ltr"
-                    placeholder="XXXXXXXXXXXXXXXXXXXXXXXX" autoComplete="off" inputMode="text" className={`${inputCls(!!bankErrors.rib)} font-mono`} data-bank-input="rib" />
-                </Field>
-                <Field id="b-holder" label={tx("w_account_holder")} error={bankErrors.accountName ? recruiterFieldErrorLabel("accountName", bankErrors.accountName, lang) : ""} field="accountName">
+                <div className="min-w-0 space-y-2" data-bank-choice>
+                  <p id="b-bank-label" className={ui.label}>{tx("w_bank_name")}</p>
+                  {catalog.error && (
+                    <div className={`${banner} border-red-100 bg-red-50 text-red-700 flex flex-wrap items-center justify-between gap-2`} role="alert" data-bank-catalog-error>
+                      <span className="min-w-0">{tx("w_bank_list_error")}</span>
+                      <button type="button" onClick={loadCatalog} data-bank-catalog-retry
+                        className="shrink-0 inline-flex items-center gap-1.5 min-h-10 rounded-xl border border-red-300 bg-white px-3 py-1.5 font-semibold hover:bg-red-100">
+                        <RefreshCw className="w-4 h-4" aria-hidden="true" /> {tx("common_retry")}
+                      </button>
+                    </div>
+                  )}
+                  {!bank.bankId && wallet.bank.bankName && (
+                    <p className={ui.hint} data-bank-legacy>{tx("w_bank_legacy")} <bdi>{wallet.bank.bankName}</bdi></p>
+                  )}
+                  <BankPicker
+                    banks={banks}
+                    value={bank.bankId || null}
+                    onChange={(b) => editBank({ bankId: b.id }, ["rib"])}
+                    labels={{ group: tx("w_bank_name"), inactive: tx("w_bank_inactive"), empty: tx("w_bank_list_empty"), loading: tx("w_bank_list_loading") }}
+                    loading={catalog.loading}
+                    invalid={!!bankErrors.bankId}
+                    describedBy={bankErrors.bankId ? "b-bank-error" : undefined}
+                    disabled={bankBusy}
+                  />
+                  {bankErrors.bankId && (
+                    <p id="b-bank-error" className="text-xs text-red-700" role="alert" data-bank-error="bankId">
+                      {recruiterFieldErrorLabel("bankId", bankErrors.bankId, lang)}
+                    </p>
+                  )}
+                  {selectedBank?.isActive === false && (
+                    <p className={`${banner} border-amber-100 bg-amber-50 text-amber-900`} data-bank-inactive-note>{tx("w_bank_inactive_note")}</p>
+                  )}
+                </div>
+                {ribRequired && (
+                  <Field id="b-rib" label={tx("w_rib")} hint={tx("w_rib_hint")} error={bankErrors.rib ? recruiterFieldErrorLabel("rib", bankErrors.rib, lang) : ""} field="rib">
+                    <input id="b-rib" value={bank.rib} onChange={(e) => editBank({ rib: e.target.value })} maxLength={48} dir="ltr"
+                      placeholder="XXXXXXXXXXXXXXXXXXXXXXXX" autoComplete="off" inputMode="text" aria-invalid={!!bankErrors.rib}
+                      className={`${inputCls(!!bankErrors.rib)} font-mono`} data-bank-input="rib" />
+                  </Field>
+                )}
+                <Field id="b-holder" label={tx("w_account_holder")} hint={selectedBank && !ribRequired ? tx("w_holder_only_hint") : ""}
+                  error={bankErrors.accountName ? recruiterFieldErrorLabel("accountName", bankErrors.accountName, lang) : ""} field="accountName">
                   <input id="b-holder" value={bank.accountName} onChange={(e) => editBank({ accountName: e.target.value })} maxLength={80}
-                    placeholder={tx("w_full_name_placeholder")} autoComplete="off" className={inputCls(!!bankErrors.accountName)} data-bank-input="accountName" />
+                    placeholder={tx("w_full_name_placeholder")} autoComplete="name" aria-invalid={!!bankErrors.accountName}
+                    className={inputCls(!!bankErrors.accountName)} data-bank-input="accountName" />
                 </Field>
                 {bankMsg && (
                   <p role={bankMsg.ok ? "status" : "alert"} data-bank-msg={bankMsg.ok ? "ok" : "error"}

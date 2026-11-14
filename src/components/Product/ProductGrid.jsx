@@ -13,12 +13,15 @@ import { LockableLink, LockedOverlay } from "./ProductLock";
 import { useDiscountRules } from "@/hooks/useDiscountRules";
 import { fetchCached } from "@/lib/dataCache";
 
-// WHY: Static array prevents Array(10) allocation on every loading render cycle.
+// WHY: Static array prevents Array(10) allocation on every loading render cycle. The loading
+// placeholders show exactly `limit` cards (the homepage's admin-selected count), never more.
 const SKELETON_ITEMS = Array.from({ length: 10 }, (_, i) => i);
 
 // WHY: memo() prevents ProductGrid from re-rendering when a parent component
 // re-renders with the same props (e.g. homepage re-renders due to unrelated state).
-function StyleOne() {
+// `limit`: how many products to show — the homepage passes its admin-controlled count (4 / 6 / 8 / 10,
+// src/lib/homepageProducts.js); other callers (product page) keep the historical 10.
+function StyleOne({ limit = 10 }) {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -168,7 +171,7 @@ function StyleOne() {
     return (
       <div className="container mx-auto md:px-20 px-4">
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
-          {SKELETON_ITEMS.map((i) => (
+          {SKELETON_ITEMS.slice(0, limit).map((i) => (
             <div key={i} className="bg-white rounded-3xl border border-purple-50 p-2">
               <Skeleton className="w-full rounded-2xl" style={{ height: 220 }} />
               <div className="px-2 mt-4 space-y-2">
@@ -186,8 +189,8 @@ function StyleOne() {
 
   if (products.length === 0) return null;
 
-  const displayProducts = products.slice(0, 10);
-  const hasMoreProducts = products.length > 10;
+  const displayProducts = products.slice(0, limit);
+  const hasMoreProducts = products.length > limit;
 
   return (
     <div className="container mx-auto md:px-20">

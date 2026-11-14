@@ -78,7 +78,10 @@ console.log("\n1. Sidebar");
     headHrefs = [...head.matchAll(/^\s*\{ href: "([^"]+)",/gm)].map((m) => m[1]);
   } catch { /* no git: skip */ }
   const notDemo = (l) => l.filter((h) => !h.startsWith("/admin/demo-competition"));
-  if (headHrefs) ok(`every other sidebar entry unchanged and in the same order (${notDemo(hrefs).length})`, eq(notDemo(headHrefs), notDemo(hrefs)));
+  // Phase 4 (bank logo picker): + exactly ONE new entry, /admin/payout-banks, right after /admin/shipping-companies.
+  const PB = "/admin/payout-banks";
+  const pbOk = !headHrefs || headHrefs.includes(PB) || (hrefs.filter((h) => h === PB).length === 1 && hrefs[hrefs.indexOf(PB) - 1] === "/admin/shipping-companies");
+  if (headHrefs) ok(`every other sidebar entry unchanged and in the same order (${notDemo(hrefs).length})`, pbOk && eq(notDemo(headHrefs), notDemo(hrefs).filter((h) => headHrefs.includes(PB) || h !== PB)));
   else ok("git unavailable — sidebar order check skipped", true);
 }
 

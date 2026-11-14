@@ -26,7 +26,10 @@ const ok = (n, c, extra = "") => { if (c) { pass++; console.log("  PASS ", n); }
 const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
 
 const PAGE_PATH = "../src/app/affiliate/dashboard/page.jsx";
-const page = read(PAGE_PATH);
+// Phase 1: the mobile bottom nav (+ More sheet) moved unchanged from the page into its own component, also shown on the
+// Top Members / Top Brands pages. It is part of the dashboard code for every check below (keys, hook, menus).
+const NAV_PATH = "../src/components/affiliate/MobileBottomNav.jsx";
+const page = read(PAGE_PATH) + "\n" + read(NAV_PATH);
 const { ar, fr } = AFFILIATE_DASHBOARD_TEXT;
 
 // Strip comments (block, JSX {/* */} and line comments) — the scan only looks at code.
@@ -118,7 +121,7 @@ console.log("\n4. Direction");
 {
   ok("no forced dir=\"rtl\" island left", !/dir=["']rtl["']/.test(page) && !/dir=\{?["']rtl/.test(page));
   // The element carrying each dir="ltr": inputs (amount / username), the referral link box, the
-  // handle chip, RIB / SWIFT values and the ▲/▼ rank-delta badge. Phone + bank inputs are dir="auto" (below).
+  // handle chip, RIB / SWIFT values and the ▲/▼ rank-delta badge. Phone + holder-name inputs are dir="auto" (below).
   const ltrTags = [...page.matchAll(/dir=(?:"ltr"|\{mono \? "ltr" : undefined\})/g)].map((m) => {
     const open = page.lastIndexOf("<", m.index);
     return page.slice(open, m.index).match(/^<(\w+)/)?.[1];
@@ -127,10 +130,15 @@ console.log("\n4. Direction");
   // shared Demo Competition components, which handle their own direction) → 5 islands remain.
   ok(`dir="ltr" only on codes / numbers / inputs (${ltrTags.length} islands)`,
     ltrTags.length >= 5 && ltrTags.every((tag) => ["input", "span", "div"].includes(tag)), ltrTags.join());
-  // Phone + bank inputs: dir="auto" — an empty input aligns its (market-language) placeholder with the
-  // market, typed digits / RIB stay LTR. Value handling unchanged.
-  ok("bank inputs (bank name / RIB / holder): empty → market direction (placeholder), filled → dir=auto (fieldDir), same value handling",
-    /dir=\{fieldDir\(bankForm\[key\]\)\}\s+data-bank-input=\{key\}/.test(page) && /value=\{bankForm\[key\]\}/.test(page) && /setBankForm\(\(f\) => \(\{ \.\.\.f, \[key\]: e\.target\.value \}\)\)/.test(page));
+  // Phone + holder-name inputs: dir="auto" — an empty input aligns its (market-language) placeholder with the
+  // market, a typed name follows its own script. Phase 4 (bank logo picker): the typed bank name became the
+  // BankPicker (logos + names, no text input any more) and the RIB input is a dir="ltr" code field (counted above).
+  ok("bank form: bank chosen with the BankPicker (no typed bank name); holder: empty → market direction (placeholder), filled → dir=auto (fieldDir); RIB dir=\"ltr\"",
+    /import BankPicker from "@\/components\/payout\/BankPicker";/.test(page) && /<BankPicker\b/.test(page)
+    && !/data-bank-input=\{?["']?bankName/.test(page) && !/bankForm\.bankName|bankForm\[key\]/.test(page)
+    && /value=\{bankForm\.accountName\}/.test(page) && /dir=\{fieldDir\(bankForm\.accountName\)\}\s+data-bank-input="accountName"/.test(page)
+    && /value=\{bankForm\.rib\}/.test(page) && /dir="ltr"\s+data-bank-input="rib"/.test(page)
+    && /setBankForm\(\(f\) => \(\{ \.\.\.f, \[field\]: value \}\)\)/.test(page));
   ok("profile phone inputs (locked + editable) are dir=\"auto\"",
     /<input value=\{affiliate\.phone \?\? ""\} disabled dir="auto"/.test(page) && /placeholder="0612345678" dir="auto" \/>/.test(page) && /<input name="phone" type="tel"/.test(page));
   const physical = code.match(/(?<![\w-])(text-left|text-right|sm:text-right|ml-\d|mr-\d|pl-\d|pr-\d|-?right-\d|-?left-2|right-1\.5|left-2)(?![\w.])/g) || [];

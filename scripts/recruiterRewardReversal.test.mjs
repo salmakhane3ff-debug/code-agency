@@ -33,6 +33,8 @@ import { randomUUID } from 'node:crypto';
 import { makeRecruiterFakeDb } from './lib/recruiterFakeDb.mjs';
 import { dropDemoCompSrc } from './lib/demoCompetitionAllowance.mjs';
 import { dropDacSrc } from './lib/dashboardAdminControlsAllowance.mjs';
+import { dropNavHomepageSrc } from './lib/navHomepageAllowance.mjs';
+import { dropPayoutBankSrc, pbIdenticalExceptPinned } from './lib/payoutBanksAllowance.mjs';
 
 const RS = await import('../src/lib/services/recruiterRewardService.js');
 const WS = await import('../src/lib/services/recruiterWalletService.js');
@@ -526,7 +528,8 @@ console.log('\n11. Affiliate commissions, points, balances and payouts untouched
   const hk = stripJs(read('src/lib/recruiterRewardHooks.js'));
   const rs = stripJs(read('src/lib/services/recruiterRewardService.js'));
   ok('the reward service and hooks never read commission, points, balance or payout code', !/commission|rewardPoint|balance|payout|affiliateSystemService|rewardsService/i.test(rs + hk));
-  ok('src/lib/services/affiliateSystemService.js is byte-identical to the part 3 base commit', git(['show', `${PART3_BASE}:src/lib/services/affiliateSystemService.js`]) === read('src/lib/services/affiliateSystemService.js'));
+  // Phase 4 (bank logo picker): or differs ONLY by its exact pinned Phase 4 lines (scripts/lib/payoutBanksAllowance.mjs).
+  ok('src/lib/services/affiliateSystemService.js is byte-identical to the part 3 base commit', pbIdenticalExceptPinned(PART3_BASE, 'src/lib/services/affiliateSystemService.js'));
   const changed = git(['diff', '--name-only', PART3_BASE, '--', 'src']).split('\n').filter(Boolean).sort();
   const untracked = git(['ls-files', '--others', '--exclude-standard', '--', 'src']).split('\n').filter(Boolean);
   // Exact allowlist: the Part 3a files, plus exactly the two files only Part 3b (withdrawal protection) adds,
@@ -546,7 +549,11 @@ console.log('\n11. Affiliate commissions, points, balances and payouts untouched
   const allSrc = dropDemoCompSrc([...new Set([...changed, ...untracked])], ['src/components/admin/SideBar.jsx', 'src/lib/landingMode.js', ...RECRUITER_SIDE_SHARED]).sort();
   // Affiliate Dashboard & Admin Controls (approved, isolated): its exact src files are dropped unless the list below already
   // names them (scripts/lib/dashboardAdminControlsAllowance.mjs — exact list + SHA-256-pinned migration / deposits-route lines).
-  ok('src/ changed versus the part 3 base commit ONLY in the Part 3a files + the Part 3b files errorLabels.js / recruiterRewardAdminHandlers.js + the exact Part 3c recruiter KYC files + the exact Part 4 permission files (no commission / points / balance / payout / affiliate KYC file)', ((exp) => eq(dropDacSrc(allSrc, exp), exp))([
+  // Phase 1 (affiliate nav, UGC button, homepage product count — approved, isolated): its exact src files are dropped unless
+  // the list below already names them (scripts/lib/navHomepageAllowance.mjs).
+  // Phase 4 (bank logo picker — approved, isolated): its exact src files are dropped unless the list below already names them
+  // (scripts/lib/payoutBanksAllowance.mjs); the financial files it edits are line-pinned there and checked by the byte-identity pins.
+  ok('src/ changed versus the part 3 base commit ONLY in the Part 3a files + the Part 3b files errorLabels.js / recruiterRewardAdminHandlers.js + the exact Part 3c recruiter KYC files + the exact Part 4 permission files (no commission / points / balance / payout / affiliate KYC file)', ((exp) => eq(dropPayoutBankSrc(dropNavHomepageSrc(dropDacSrc(allSrc, exp), exp), exp), exp))([
     'src/app/admin/recruiter-identity/page.jsx', 'src/app/admin/recruiter-rewards/page.jsx', 'src/app/api/admin/affiliate-orders/route.js',
     'src/app/api/admin/recruiter-identity/[id]/[side]/route.js', 'src/app/api/admin/recruiter-identity/route.js', 'src/app/api/recruiter/identity/route.js',
     'src/app/recruiter/errorLabels.js', 'src/app/recruiter/page.jsx', 'src/app/recruiter/verification/page.jsx', 'src/app/recruiter/wallet/page.jsx',

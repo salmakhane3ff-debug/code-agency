@@ -39,6 +39,8 @@ import { randomUUID } from 'node:crypto';
 import { makeRecruiterFakeDb } from './lib/recruiterFakeDb.mjs';
 import { dropDemoCompSrc, isDemoCompPrisma, demoCompPinsHold } from './lib/demoCompetitionAllowance.mjs';
 import { dropDacSrc, isDacPrisma, dacMigrationPinHolds, dacRoutePinHolds } from './lib/dashboardAdminControlsAllowance.mjs';
+import { dropNavHomepageSrc } from './lib/navHomepageAllowance.mjs';
+import { isPayoutBankPrisma, dropPayoutBankSrc, pbIdenticalExceptPinned, pbLinePinHolds, pbMigrationPinHolds, pbSchemaPinHolds, PB_BASE } from './lib/payoutBanksAllowance.mjs';
 
 const { adminRecruiterHandlers, recruiterHandlers } = await import('../src/lib/recruiterRouteHandlers.js');
 const { recruiterNetworkHandlers } = await import('../src/lib/recruiterNetworkRouteHandlers.js');
@@ -744,8 +746,10 @@ console.log('\n4. Regression and scope');
   // Demo Competition (simulation only, separate feature): its migration 20261113 is dropped here; its schema blocks and
   // migration are SHA-256 pinned in scripts/lib/demoCompetitionAllowance.mjs (asserted just below).
   // Affiliate Dashboard & Admin Controls: its ONE additive migration 20261114 is dropped here (SHA-256 pinned, asserted below).
-  const prismaAll = [...new Set([...prismaChanged, ...prismaNew])].filter((f) => !isDemoCompPrisma(f) && !isDacPrisma(f)).sort();
+  // Phase 4 (bank logo picker): its ONE additive migration 20261115 is dropped here (SHA-256 pinned with its schema lines, asserted below).
+  const prismaAll = [...new Set([...prismaChanged, ...prismaNew])].filter((f) => !isDemoCompPrisma(f) && !isDacPrisma(f) && !isPayoutBankPrisma(f)).sort();
   ok('Dashboard & Admin Controls allowance: its migration is exactly the pinned one', dacMigrationPinHolds());
+  ok('Phase 4 payout-bank allowance: its schema lines and migration are exactly the pinned ones', pbSchemaPinHolds() && pbMigrationPinHolds());
   { const pins = demoCompPinsHold(); ok('Demo Competition allowance: its schema blocks and migration are exactly the pinned ones', pins.schema && pins.migration, pins); }
   ok('no schema or migration change in Part 4 (the permission columns already exist); since then only the Phase 7 schema fields + migration 20261112',
     eq(prismaAll, ['prisma/migrations/20261112_recruiter_group_rewards/migration.sql', 'prisma/schema.prisma']), big({ prismaChanged, prismaNew }));
@@ -760,7 +764,11 @@ console.log('\n4. Regression and scope');
   const allSrc = dropDemoCompSrc([...new Set([...changed, ...untracked])], ['src/lib/landingMode.js', ...RECRUITER_SIDE_SHARED]).sort();
   // Affiliate Dashboard & Admin Controls (approved, isolated): its exact src files are dropped unless the list below already
   // names them (scripts/lib/dashboardAdminControlsAllowance.mjs — exact list + SHA-256-pinned migration / deposits-route lines).
-  ok('src/ changed versus the Part 4 base ONLY in the exact Part 4 files', ((exp) => eq(dropDacSrc(allSrc, exp), exp))([
+  // Phase 1 (affiliate nav, UGC button, homepage product count — approved, isolated): its exact src files are dropped unless
+  // the list below already names them (scripts/lib/navHomepageAllowance.mjs).
+  // Phase 4 (bank logo picker — approved, isolated): its exact src files are dropped unless the list below already names them
+  // (scripts/lib/payoutBanksAllowance.mjs); the financial files it edits are line-pinned there and checked by the byte-identity pins.
+  ok('src/ changed versus the Part 4 base ONLY in the exact Part 4 files', ((exp) => eq(dropPayoutBankSrc(dropNavHomepageSrc(dropDacSrc(allSrc, exp), exp), exp), exp))([
     'src/app/admin/recruiters/page.jsx', 'src/app/api/admin/recruiters/[id]/permissions/route.js',
     'src/app/recruiter/affiliates/activation/page.jsx', 'src/app/recruiter/affiliates/new/page.jsx',
     'src/app/recruiter/network/networkUi.jsx', 'src/app/recruiter/network/page.jsx', 'src/app/recruiter/network/stats/page.jsx', 'src/app/recruiter/page.jsx',
@@ -854,7 +862,8 @@ console.log('\n4. Regression and scope');
     'src/lib/services/affiliateActivationRecoveryService.js', 'src/lib/middleware/withAdminAuth.js', 'src/lib/middleware/withRecruiterAuth.js',
     'src/app/api/affiliate/payout/route.js', 'src/app/api/admin/affiliate-payouts/route.js', 'src/app/api/admin/recruiters/[id]/route.js', 'src/app/api/admin/recruiters/route.js',
   ];
-  const diffs = untouched.filter((f) => git(['show', `${PART4_BASE}:${f}`]) !== read(f));
+  // Phase 4 (bank logo picker): affiliateSystemService.js may differ ONLY by its exact pinned Phase 4 lines (scripts/lib/payoutBanksAllowance.mjs).
+  const diffs = untouched.filter((f) => !pbIdenticalExceptPinned(PART4_BASE, f));
   ok('affiliate, KYC, order, reward, wallet, recovery, auth and existing admin-route files are byte-identical to the Part 4 base', diffs.length === 0, diffs.join(','));
   // Phase 7: the hooks differ ONLY by the group sync after each individual sync (import, 3 doc lines, the syncGroupOf helper,
   // the `group` option of the 3 hooks, the individual result kept and returned unchanged).
@@ -874,7 +883,9 @@ console.log('\n4. Regression and scope');
     const IMP_OLD = "import { parseMadToCents, normalizeRecruiterSettings } from '../recruiterSettings.js';";
     const IMP_NEW = "import { parseMadToCents, normalizeRecruiterSettings, normalizeRecruiterGroupSettings, REWARD_TYPES } from '../recruiterSettings.js';";
     const base = git(['show', `${PART4_BASE}:${f}`]).replace(IMP_OLD, IMP_NEW);
-    const cur = read(f);
+    // Phase 4 (bank logo picker): when the file differs from PB_BASE by exactly its pinned Phase 4 lines (catalogue bank
+    // selection, conditional-RIB gate — scripts/lib/payoutBanksAllowance.mjs), this Phase 7 rule judges its PB_BASE version.
+    const cur = pbLinePinHolds(f) ? git(['show', `${PB_BASE}:${f}`]) : read(f);
     const a = 'export async function getRecruiterWallet(', z = '\n/** Recruiter: save their bank details';
     const [ba, bz, ca, cz] = [base.indexOf(a), base.indexOf(z), cur.indexOf(a), cur.indexOf(z)];
     return ba > 0 && ca > 0 && bz > ba && cz > ca && base.slice(0, ba) === cur.slice(0, ca) && base.slice(bz) === cur.slice(cz)
@@ -1020,7 +1031,10 @@ console.log('\n4. Regression and scope');
   const dirs = [...new Set([
     ...git(['diff', '--name-only', PART4_BASE, '--', ...guardedDirs]).split('\n').filter(Boolean),
     ...git(['ls-files', '--others', '--exclude-standard', '--', ...guardedDirs]).split('\n').filter(Boolean),
-  ])].sort().filter((f) => !dacRoutePinHolds(f)); // Dashboard & Admin Controls: the deposits route differs by exactly its pinned lines (DEPOSIT_DISABLED → 403)
+  ])].sort().filter((f) => !dacRoutePinHolds(f)) // Dashboard & Admin Controls: the deposits route differs by exactly its pinned lines (DEPOSIT_DISABLED → 403)
+    // Phase 4 (bank logo picker): the affiliate /me and recruiter wallet/bank routes differ from PB_BASE by exactly their pinned
+    // lines (validated bank save) and were otherwise unchanged versus the Part 4 base (scripts/lib/payoutBanksAllowance.mjs).
+    .filter((f) => !(pbLinePinHolds(f) && git(['diff', '--name-only', PART4_BASE, PB_BASE, '--', f]).trim() === ''));
   ok('no file changed under the affiliate API, the admin identity API, the recruiter API or the middleware (only the new Phase 7 route src/app/api/recruiter/progress/route.js)',
     eq(dirs, ['src/app/api/recruiter/progress/route.js']), dirs.join(','));
   ok('the creation permission check stays in the service under the row lock, before the replay lookup (unchanged order)', (() => {

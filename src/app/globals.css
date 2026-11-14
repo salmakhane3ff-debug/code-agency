@@ -104,6 +104,20 @@ body {
   background-color: #f9fafb;
 }
 
+/* Safe areas: iOS reports these insets only where a route sets viewport-fit=cover — the affiliate area and the
+   Top Members / Top Brands pages (their layouts). Everywhere else they are 0, so this changes nothing there. */
+body {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+/* Affiliate mobile bottom nav shown on the Top Members / Top Brands pages (AffiliateNavGate sets the attribute for a
+   signed-in affiliate only): keep the page end — content and footer — above the ~76 px bar + home indicator. */
+@media (width < 48rem) {
+  html[data-affiliate-nav] body {
+    padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
 @keyframes marquee-infinite {
   0% {
     transform: translateX(0%);

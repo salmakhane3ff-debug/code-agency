@@ -576,34 +576,58 @@ console.log('\n6. Withdrawals: never above available, bank gate, replay, concurr
 }
 
 // ── 7. bank details ───────────────────────────────────────────────────────────
-console.log('\n7. Bank details: same rules as the affiliate ones, strict body, audited');
+// Phase 4 (bank logo picker) contract: PUT { bankId, accountName, rib? } — the bank is chosen from the
+// admin catalogue (payout_banks), bankName is a copy of its name (never typed), the RIB is required
+// only when that bank says so. Expectation changes versus the Phase 5 version of this section:
+//   • the body carries bankId instead of a typed bankName (a typed bankName is now an UNKNOWN_FIELD);
+//   • the response bank view also carries bankId + bank (public catalogue fields);
+//   • the bankName rules (empty / > 80 → INVALID_BANK_NAME) became bankId rules (missing →
+//     BANK_REQUIRED, unknown / inactive-not-yours → BANK_UNAVAILABLE);
+//   • the save validates through checkBankSelection (shared with the affiliate save); validateBankInfo
+//     stays the withdrawal gate (no longer called on the save path).
+console.log('\n7. Bank details: a catalogue bank (Phase 4), same rules as the affiliate ones, strict body, audited');
 {
   const E = setup();
+  const CIH = E.db._seed.payoutBank({ name: 'CIH Bank', ribRequired: true, sortOrder: 1 });
+  const CASH = E.db._seed.payoutBank({ name: 'Cash Plus', ribRequired: false, sortOrder: 2 });
+  const OLD = E.db._seed.payoutBank({ name: 'Old Bank', isActive: false, sortOrder: 3 });
+  const pub = (b) => ({ id: b.id, name: b.name, logoUrl: null, isActive: b.isActive, ribRequired: b.ribRequired });
   const h = recruiterWalletHandlers({ db: E.db, now, rateLimit: noLimit });
   const put = (body, raw) => call(withRecruiterAuth(h.bank), req('/api/recruiter/wallet/bank', { method: 'PUT', body, raw, cookie: recruiterCookie(E.A) }));
-  const good = await put({ bankName: '  CIH   Bank ', rib: '0117 8000 0012 3456 7890 1234', accountName: 'Recruteur  A' });
+  const good = await put({ bankId: CIH.id, rib: '0117 8000 0012 3456 7890 1234', accountName: 'Recruteur  A' });
   const rec = E.db._tables.recruiter.find((r) => r.id === E.A.id);
-  ok('valid → 200 { bank: { bankName, rib, accountName, complete:true } }, whitespace normalised, RIB spaces removed',
-    good.status === 200 && eq(good.body, { bank: { bankName: 'CIH Bank', rib: '011780000012345678901234', accountName: 'Recruteur A', complete: true } }) && rec.rib === '011780000012345678901234', good.text);
+  ok('valid → 200 { bank: { bankName (= catalogue name), rib, accountName, complete:true, bankId, bank } }, whitespace normalised, RIB spaces removed',
+    good.status === 200 && eq(good.body, { bank: { bankName: 'CIH Bank', rib: '011780000012345678901234', accountName: 'Recruteur A', complete: true, bankId: CIH.id, bank: pub(CIH) } })
+    && rec.rib === '011780000012345678901234' && rec.bankId === CIH.id && rec.bankName === 'CIH Bank', good.text);
   const au = audits(E.db, 'RECRUITER_BANK_UPDATED');
   ok('audited RECRUITER_BANK_UPDATED by the recruiter (no bank value in the audit)', au.length === 1 && au[0].actorId === E.A.id && au[0].details === null);
   const cases = [
-    [{ bankName: '', rib: '0117800000123456', accountName: 'X Y' }, { bankName: 'INVALID_BANK_NAME' }],
-    [{ bankName: 'CIH', rib: '012345678', accountName: 'X Y' }, { rib: 'INVALID_RIB' }],
-    [{ bankName: 'CIH', rib: '0'.repeat(35), accountName: 'X Y' }, { rib: 'INVALID_RIB' }],
-    [{ bankName: 'CIH', rib: '0117-8000-0012-3456', accountName: 'X Y' }, { rib: 'INVALID_RIB' }],
-    [{ bankName: 'CIH', rib: '0117800000123456', accountName: '' }, { accountName: 'INVALID_ACCOUNT_NAME' }],
-    [{ bankName: 'CIH', rib: '0117800000123456', accountName: '<script>' }, { accountName: 'INVALID_ACCOUNT_NAME' }],
-    [{ bankName: 'B'.repeat(81), rib: '0117800000123456', accountName: 'X Y' }, { bankName: 'INVALID_BANK_NAME' }],
-    [{ bankName: 'CIH', rib: '0117800000123456', accountName: 'X Y', isActive: true }, { body: 'UNKNOWN_FIELD' }],
+    [{ rib: '0117800000123456', accountName: 'X Y' }, { bankId: 'BANK_REQUIRED' }],
+    [{ bankId: CIH.id, rib: '012345678', accountName: 'X Y' }, { rib: 'INVALID_RIB' }],
+    [{ bankId: CIH.id, rib: '0'.repeat(35), accountName: 'X Y' }, { rib: 'INVALID_RIB' }],
+    [{ bankId: CIH.id, rib: '0117-8000-0012-3456', accountName: 'X Y' }, { rib: 'INVALID_RIB' }],
+    [{ bankId: CIH.id, rib: '0117800000123456', accountName: '' }, { accountName: 'INVALID_ACCOUNT_NAME' }],
+    [{ bankId: CIH.id, rib: '0117800000123456', accountName: '<script>' }, { accountName: 'INVALID_ACCOUNT_NAME' }],
+    [{ bankId: randomUUID(), rib: '0117800000123456', accountName: 'X Y' }, { bankId: 'BANK_UNAVAILABLE' }],
+    [{ bankId: 'not-a-bank', rib: '0117800000123456', accountName: 'X Y' }, { bankId: 'BANK_UNAVAILABLE' }],
+    [{ bankId: OLD.id, rib: '0117800000123456', accountName: 'X Y' }, { bankId: 'BANK_UNAVAILABLE' }],
+    [{ bankName: 'CIH', rib: '0117800000123456', accountName: 'X Y' }, { body: 'UNKNOWN_FIELD' }],
+    [{ bankId: CIH.id, rib: '0117800000123456', accountName: 'X Y', isActive: true }, { body: 'UNKNOWN_FIELD' }],
   ];
   const before = { ...rec };
   const res = [];
   for (const [b, f] of cases) { const r = await put(b); res.push(r.status === 400 && eq(r.body, { code: 'INVALID_INPUT', fields: f })); }
-  ok('invalid bank details → 400 with the exact field codes; extra key → UNKNOWN_FIELD; nothing changed', res.every(Boolean) && rec.bankName === before.bankName && audits(E.db, 'RECRUITER_BANK_UPDATED').length === 1, JSON.stringify(res));
-  ok('the server rule reuses validateBankInfo (the affiliate one): every input it rejects is rejected here too',
+  ok('invalid bank details → 400 with the exact field codes (bankId BANK_REQUIRED / BANK_UNAVAILABLE incl. an inactive bank, rib, accountName); typed bankName / extra key → UNKNOWN_FIELD; nothing changed',
+    res.every(Boolean) && eq({ ...rec }, before) && audits(E.db, 'RECRUITER_BANK_UPDATED').length === 1, JSON.stringify(res));
+  const cash = await put({ bankId: CASH.id, rib: '0117800000123456', accountName: 'Recruteur A' });
+  ok('a "RIB not required" bank → 200, RIB cleared (null), complete with the holder name alone',
+    cash.status === 200 && eq(cash.body.bank, { bankName: 'Cash Plus', rib: null, accountName: 'Recruteur A', complete: true, bankId: CASH.id, bank: pub(CASH) }) && rec.rib === null && rec.bankId === CASH.id, cash.text);
+  const ws = read('src/lib/services/recruiterWalletService.js');
+  ok('the save validates with checkBankSelection (the same rule as the affiliate save); the withdrawal gate still reuses validateBankInfo (the affiliate one)',
     [{ bankName: '', accountName: 'a', rib: '0123456789' }, { bankName: 'b', accountName: '', rib: '0123456789' }, { bankName: 'b', accountName: 'a', rib: '123' }]
-      .every((b) => ASYS.validateBankInfo(b).length > 0) && /validateBankInfo\(bank\)/.test(read('src/lib/services/recruiterWalletService.js')) && /import \{ PAYOUT_RELEASING_STATUSES, validateBankInfo \} from '\.\/affiliateSystemService\.js'/.test(read('src/lib/services/recruiterWalletService.js')));
+      .every((b) => ASYS.validateBankInfo(b).length > 0)
+    && /checkBankSelection\(\{ bankId: input\.bankId/.test(ws) && /checkBankSelection\(\{ \.\.\.sel/.test(read('src/lib/services/payoutBankService.js'))
+    && /validateBankInfo\(me\)\.length > 0/.test(ws) && /import \{ PAYOUT_RELEASING_STATUSES, validateBankInfo \} from '\.\/affiliateSystemService\.js'/.test(ws));
 }
 
 // ── 8. admin processing ───────────────────────────────────────────────────────

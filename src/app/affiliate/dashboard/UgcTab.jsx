@@ -893,7 +893,7 @@ export default function UgcTab() {
       {/* ── 4. Floating add button (only once the creator has videos) ── */}
       {hasVideos && (
         <button onClick={openWizard} aria-label={t("ugc_add_new_video")}
-          className="fixed bottom-6 end-5 z-40 w-16 h-16 rounded-full bg-violet-600 hover:bg-violet-700 text-white shadow-[0_8px_28px_rgba(124,58,237,0.45)] flex items-center justify-center active:scale-95 transition">
+          className="fixed bottom-6 end-5 max-md:bottom-[calc(104px+env(safe-area-inset-bottom))] z-40 w-16 h-16 rounded-full bg-violet-600 hover:bg-violet-700 text-white shadow-[0_8px_28px_rgba(124,58,237,0.45)] flex items-center justify-center active:scale-95 transition">
           <Plus className="w-7 h-7" />
         </button>
       )}
@@ -901,7 +901,7 @@ export default function UgcTab() {
       {/* ── Replace confirmation (unchanged) ── */}
       {confirmReplaceId && (
         <div className="fixed inset-0 z-[70] bg-black/50 flex items-end sm:items-center justify-center sm:p-4" onClick={() => setConfirmReplaceId(null)}>
-          <div className="bg-white rounded-t-[28px] sm:rounded-[28px] p-6 w-full sm:max-w-sm space-y-4" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-t-[28px] sm:rounded-[28px] p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:pb-6 w-full sm:max-w-sm space-y-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3">
               <span className="w-11 h-11 rounded-2xl bg-amber-50 text-amber-500 flex items-center justify-center shrink-0"><AlertTriangle className="w-5 h-5" /></span>
               <h3 className="text-[17px] font-bold text-gray-900">{t("ugc_replace_title")}</h3>
@@ -922,7 +922,7 @@ export default function UgcTab() {
       {/* ── Upload wizard sheet — SAME wizard, same steps, same submit ── */}
       {wizardOpen && (
         <div className="fixed inset-0 z-[70] bg-black/50 flex items-end sm:items-center justify-center" onClick={() => !submitting && setWizardOpen(false)}>
-          <div className="bg-white rounded-t-[28px] sm:rounded-[28px] w-full sm:max-w-md max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-t-[28px] sm:rounded-[28px] w-full sm:max-w-md max-h-[92vh] overflow-y-auto pb-[env(safe-area-inset-bottom)] sm:pb-0" onClick={(e) => e.stopPropagation()}>
             <div className="sticky top-0 bg-white px-5 pt-5 pb-3 border-b border-gray-50 flex items-center justify-between">
               <h3 className="text-[17px] font-bold text-gray-900">{t("ugc_add_video")}</h3>
               <button onClick={() => !submitting && setWizardOpen(false)} aria-label={t("ugc_close")}

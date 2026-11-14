@@ -53,10 +53,10 @@ import prisma from '../prisma.js';
 import { parseMadToCents, normalizeRecruiterSettings, normalizeRecruiterGroupSettings, REWARD_TYPES } from '../recruiterSettings.js';
 import { lockRecruiterMoney } from './recruiterRewardService.js';
 import { PAYOUT_RELEASING_STATUSES, validateBankInfo } from './affiliateSystemService.js';
+import { bankPublicView, checkBankSelection, isBankId } from '../payoutBanks.js';
 
 const ID_RE = /^[A-Za-z0-9_-]{1,100}$/;
 const REQUEST_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const TEXT_MAX = 80;
 export const RECRUITER_WITHDRAWAL_LIMITS = Object.freeze({ MIN_CENTS: 1, MAX_CENTS: 100_000_000, HISTORY: 200 });
 const fail = (code, extra = {}) => Object.assign(new Error(code), { code, ...extra });
 const toCents = (amount) => Math.round(Number(amount || 0) * 100);
@@ -84,9 +84,13 @@ async function walletTotals(db, recruiterId) {
   return { earnedCents, reservedCents, paidCents, pendingCents: reservedCents - paidCents, availableCents: earnedCents - reservedCents };
 }
 
+// Phase 4: the bank chosen from the admin catalogue (bankId + public view); "RIB not
+// required" banks are complete with the account holder's name alone.
+const BANK_SELECT = { id: true, name: true, logoUrl: true, isActive: true, ribRequired: true };
 const bankOf = (r) => {
   const bank = { bankName: r?.bankName ?? null, rib: r?.rib ?? null, accountName: r?.accountName ?? null };
-  return { ...bank, complete: validateBankInfo(bank).length === 0 };
+  const chosen = bankPublicView(r?.bank);
+  return { ...bank, bankId: r?.bankId ?? null, bank: chosen, complete: validateBankInfo({ ...bank, ribRequired: chosen?.ribRequired }).length === 0 };
 };
 
 /**
@@ -97,7 +101,7 @@ const bankOf = (r) => {
 export async function getRecruiterWallet(recruiterId, { db = prisma } = {}) {
   if (typeof recruiterId !== 'string' || !ID_RE.test(recruiterId)) throw fail('UNAUTHORIZED');
   const [me, settingsRow, totals, ledger, payouts] = await Promise.all([
-    db.recruiter.findUnique({ where: { id: recruiterId }, select: { bankName: true, rib: true, accountName: true } }),
+    db.recruiter.findUnique({ where: { id: recruiterId }, select: { bankName: true, rib: true, accountName: true, bankId: true, bank: { select: BANK_SELECT } } }),
     db.recruiterSettingsVersion.findFirst({ orderBy: { version: 'desc' } }),
     walletTotals(db, recruiterId),
     db.recruiterRewardLedger.findMany({
@@ -141,27 +145,43 @@ export async function getRecruiterWallet(recruiterId, { db = prisma } = {}) {
   };
 }
 
-/** Recruiter: save their bank details (same fields and rules as the affiliate ones). */
+/**
+ * Recruiter: save their bank details { bankId, accountName, rib? } (Phase 4 — same rules as
+ * the affiliate ones): a bank of the admin catalogue (an inactive bank only if it is already
+ * theirs), the account holder's full name always, the RIB only when that bank requires it
+ * (otherwise cleared). bankName is the chosen bank's name, never typed.
+ */
 export async function saveRecruiterBank(recruiterId, input, { db = prisma, now = new Date() } = {}) {
   if (typeof recruiterId !== 'string' || !ID_RE.test(recruiterId)) throw fail('UNAUTHORIZED');
-  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((k) => !['bankName', 'rib', 'accountName'].includes(k))) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((k) => !['bankId', 'rib', 'accountName'].includes(k))) {
     throw fail('INVALID_INPUT', { fields: { body: 'UNKNOWN_FIELD' } });
   }
-  const clean = (v) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '');
-  const bank = { bankName: clean(input.bankName), rib: clean(input.rib).replace(/\s/g, ''), accountName: clean(input.accountName) };
-  const fields = {};
-  const problems = validateBankInfo(bank);
-  if (problems.includes('bankName') || bank.bankName.length > TEXT_MAX || /[<>]/.test(bank.bankName)) fields.bankName = 'INVALID_BANK_NAME';
-  if (problems.includes('accountName') || bank.accountName.length > TEXT_MAX || /[<>]/.test(bank.accountName)) fields.accountName = 'INVALID_ACCOUNT_NAME';
-  if (problems.includes('rib') || problems.includes('ribLength') || !/^[A-Za-z0-9]+$/.test(bank.rib)) fields.rib = 'INVALID_RIB';
-  if (Object.keys(fields).length) throw fail('INVALID_INPUT', { fields });
   return db.$transaction(async (tx) => {
-    const row = await tx.recruiter.update({ where: { id: recruiterId }, data: bank, select: { bankName: true, rib: true, accountName: true } });
+    const [me, chosen] = await Promise.all([
+      tx.recruiter.findUnique({ where: { id: recruiterId }, select: { bankId: true } }),
+      isBankId(input.bankId) ? tx.payoutBank.findUnique({ where: { id: input.bankId }, select: BANK_SELECT }) : null,
+    ]);
+    if (!me) throw fail('UNAUTHORIZED');
+    const { fields, data } = checkBankSelection({ bankId: input.bankId, bank: chosen, currentBankId: me.bankId ?? null, rib: input.rib, accountName: input.accountName });
+    if (fields) throw fail('INVALID_INPUT', { fields });
+    const row = await tx.recruiter.update({
+      where: { id: recruiterId }, data, select: { bankName: true, rib: true, accountName: true, bankId: true, bank: { select: BANK_SELECT } },
+    });
     await tx.recruiterAuditLog.create({
       data: { recruiterId, actorType: 'RECRUITER', actorId: recruiterId, action: 'RECRUITER_BANK_UPDATED', entityType: 'recruiter', entityId: recruiterId, createdAt: now },
     });
     return bankOf(row);
   });
+}
+
+/**
+ * Phase 4: details that fail the original rule are still complete when the chosen catalogue
+ * bank says "RIB not required" (holder name present). Read after the row lock, so it is the
+ * locked row's bank.
+ */
+async function ribOptionalBankComplete(tx, recruiterId, me) {
+  const row = await tx.recruiter.findUnique({ where: { id: recruiterId }, select: { bank: { select: { ribRequired: true } } } });
+  return row?.bank?.ribRequired === false && validateBankInfo({ ...me, ribRequired: false }).length === 0;
 }
 
 /**
@@ -201,7 +221,7 @@ export async function requestRecruiterWithdrawal(recruiterId, input, { db = pris
     // 3. Recruiter KYC APPROVED (Phase 6 part 3c), then the affiliate-workflow gates: bank
     //    details, then available funds.
     if (!(await identityApproved(tx, recruiterId))) throw fail('RECRUITER_IDENTITY_NOT_APPROVED');
-    if (validateBankInfo(me).length > 0) throw fail('INCOMPLETE_BANK_INFO');
+    if (validateBankInfo(me).length > 0 && !(await ribOptionalBankComplete(tx, recruiterId, me))) throw fail('INCOMPLETE_BANK_INFO');
     const totals = await walletTotals(tx, recruiterId);
     if (totals.availableCents <= 0 || cents > totals.availableCents) throw fail('INSUFFICIENT_BALANCE');
     const row = await tx.affiliatePayout.create({

@@ -343,7 +343,8 @@ console.log("\n8. Routes & UI integration");
   const { AFFILIATE_DASHBOARD_TEXT: DT } = await import("../src/lib/affiliateDashboardI18n.js");
   ok("desktop tab (translated label, like its neighbours)", /\{ id: "rewards",\s+label: t\("tab_rewards"\) \}/.test(page)
     && DT.fr.tab_rewards === "🎁 Récompenses" && DT.ar.tab_rewards === "🎁 المكافآت");
-  ok("mobile « More » entry (translated label, like its neighbours)", /\{ icon: Gift,\s+label: t\("more_rewards"\),\s+tab: "rewards" \}/.test(page)
+  // Phase 1: the More sheet moved unchanged into src/components/affiliate/MobileBottomNav.jsx.
+  ok("mobile « More » entry (translated label, like its neighbours)", /\{ icon: Gift,\s+label: t\("more_rewards"\),\s+tab: "rewards" \}/.test(read("../src/components/affiliate/MobileBottomNav.jsx"))
     && DT.ar.more_rewards === "المكافآت" && DT.fr.more_rewards === "Récompenses");
   ok("tab rendered", /activeTab === "rewards" && <RewardsTab \/>/.test(page));
   const tab = read("../src/app/affiliate/dashboard/RewardsTab.jsx");

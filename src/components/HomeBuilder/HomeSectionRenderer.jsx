@@ -6,6 +6,7 @@ import RatingBadge       from "@/components/RatingBadge";
 import Slider            from "@/components/Slider/Slider";
 import SliderCollection  from "@/components/Colleaction/SliderCollection";
 import ProductGrid       from "@/components/Product/ProductGrid";
+import { sectionProductCount } from "@/lib/homepageProducts";
 import HomeCollectionSections, { SingleCollectionSection } from "@/components/Colleaction/HomeCollectionSections";
 import VideoReels        from "@/components/VideoReels";
 import SupportBenefits   from "@/components/SupportBenefits";
@@ -152,11 +153,13 @@ function ContactSection({ data }) {
 }
 
 // ── Products section ──────────────────────────────────────────────────────────
+// Shows the admin-selected number of products (data.productCount: 4 / 6 / 8 / 10, default 4). The old
+// data.limit key is deliberately NOT read (see src/lib/homepageProducts.js).
 function ProductsSection({ data }) {
   return (
     <div>
       {data.title && <h2 className="text-xl md:text-2xl font-bold text-center mb-6 text-gray-900">{data.title}</h2>}
-      <ProductGrid />
+      <ProductGrid limit={sectionProductCount(data)} />
     </div>
   );
 }

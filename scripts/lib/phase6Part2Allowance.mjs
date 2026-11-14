@@ -29,6 +29,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DAC_BASE, dacRoutePinHolds } from './dashboardAdminControlsAllowance.mjs';
+import { PB_BASE, pbLinePinHolds } from './payoutBanksAllowance.mjs';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const PART2_BASE = '003c6f12c97c330536c7e6debb95cbd35397760b';
@@ -61,7 +62,8 @@ export const linesSha = (lines) => createHash('sha256').update(lines.join('\n'),
 /**
  * Check a set of guarded paths against an older base commit.
  * → { ok, unexpected: [files changed outside the Part 2 allowance], mismatched: [Part 2 files whose diff is not exactly the pinned one], allowed: [...],
- *     stageF: [files that differ by exactly their Phase 7 Stage F pin and otherwise satisfy the rule at STAGE_F_BASE] }
+ *     stageF: [files that differ by exactly their Phase 7 Stage F pin and otherwise satisfy the rule at STAGE_F_BASE],
+ *     dac: [Dashboard & Admin Controls route pins], pb: [Phase 4 payout-bank line pins that otherwise satisfy the rule at PB_BASE] }
  */
 export function checkUnchangedExceptPart2(base, paths) {
   const changed = new Set([
@@ -73,7 +75,16 @@ export function checkUnchangedExceptPart2(base, paths) {
   const allowed = [];
   const stageF = [];
   const dac = [];
+  const pb = [];
   for (const file of [...changed].sort()) {
+    // Phase 4 (bank logo picker): a guarded file that differs from PB_BASE (beb8962) by exactly its pinned lines
+    // (scripts/lib/payoutBanksAllowance.mjs); its PB_BASE version must itself satisfy this rule (unchanged versus
+    // `base`, or exactly its Part 2 pin) → reported in `pb`.
+    if (pbLinePinHolds(file)) {
+      const atPb = changedLines(base, file, PB_BASE);
+      const pin2 = PART2_PINS[file];
+      if (atPb.length === 0 || (pin2 && JSON.stringify(atPb) === JSON.stringify(changedLines(PART2_BASE, file, PB_BASE)) && linesSha(atPb) === pin2)) { pb.push(file); continue; }
+    }
     // Phase 7 Stage F: exactly the pinned lines versus 7e111e1; the Part 2 rule then judges the 7e111e1 version
     if (STAGE_F_PINS[file] && linesSha(changedLines(STAGE_F_BASE, file)) === STAGE_F_PINS[file]) {
       const atF = changedLines(base, file, STAGE_F_BASE);
@@ -90,7 +101,7 @@ export function checkUnchangedExceptPart2(base, paths) {
     if (JSON.stringify(sinceBase) !== JSON.stringify(part2) || linesSha(part2) !== pin) mismatched.push(file);
     else allowed.push(file);
   }
-  return { ok: unexpected.length === 0 && mismatched.length === 0, unexpected, mismatched, allowed, stageF, dac };
+  return { ok: unexpected.length === 0 && mismatched.length === 0, unexpected, mismatched, allowed, stageF, dac, pb };
 }
 
 // `node scripts/lib/phase6Part2Allowance.mjs` prints the current pins (for a reviewed refresh).

@@ -63,6 +63,8 @@ export const SERVER_MESSAGES = Object.freeze(Object.fromEntries([
   fr('Affilié introuvable', 'المسوّق غير موجود'),
   fr('Mot de passe actuel requis', 'كلمة المرور الحالية مطلوبة'),
   fr('Mot de passe actuel incorrect', 'كلمة المرور الحالية غير صحيحة'),
+  // PUT /api/affiliate/me bank details (Phase 4 — bank logo picker; the dashboard shows per-field messages)
+  fr('Coordonnées bancaires invalides', 'المعلومات البنكية غير صحيحة'),
 
   // POST /api/affiliate/avatar
   fr('Aucun fichier fourni', 'لم يتم إرسال أي ملف'),

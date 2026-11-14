@@ -16,26 +16,40 @@ export const PAGE_SIZE = 16;
 export const MAX_PAGE_SIZE = 48;
 
 // ── Cursor ────────────────────────────────────────────────────────────────────
-// Opaque base64 of the last row's keyset (createdAt, id). Opaque on purpose: the
-// client must never construct or interpret one — it only echoes it back.
+// Opaque base64 of the last row's keyset. Opaque on purpose: the client must never
+// construct or interpret one — it only echoes it back.
 // btoa/atob (not Buffer) so this module also loads in the browser bundle.
+//
+// Feed order (/products): AVAILABLE products first, then LOCKED ones (Product Lock,
+// products."isLocked"); inside each group newest first — i.e.
+//   ORDER BY "isLocked" ASC, "createdAt" DESC, id DESC
+// so the keyset is (isLocked, createdAt, id):  { l: 0|1, t: createdAt ISO, i: id }.
+//
+// Old cursors ({ t, i } without `l`, issued before this order — e.g. a feed restored
+// from sessionStorage or a cached response during a deploy) are read as l = 0
+// ("still in the available group"): the next pages then return every remaining
+// older available product followed by ALL locked products. Nothing is skipped; a
+// locked product the visitor had already seen comes back once and is dropped by
+// feedReducer's _id dedupe. An `l` that is present but not 0/1 is treated like any
+// tampered cursor (null → first page).
 
 export function encodeCursor(row) {
   if (!row || !row.id || !row.createdAt) return null;
   const createdAt =
     row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt);
-  return btoa(JSON.stringify({ t: createdAt, i: String(row.id) }));
+  return btoa(JSON.stringify({ l: row.isLocked === true ? 1 : 0, t: createdAt, i: String(row.id) }));
 }
 
-// Returns { createdAt: ISO string, id } — or null for absent//malformed/tampered
-// input, in which case the caller must fall back to "first page" rather than error.
+// Returns { createdAt: ISO string, id, locked: boolean } — or null for absent/malformed/
+// tampered input, in which case the caller must fall back to "first page" rather than error.
 export function decodeCursor(cursor) {
   if (!cursor || typeof cursor !== "string") return null;
   try {
     const parsed = JSON.parse(atob(cursor));
     if (!parsed || typeof parsed.t !== "string" || typeof parsed.i !== "string") return null;
     if (Number.isNaN(Date.parse(parsed.t))) return null;
-    return { createdAt: parsed.t, id: parsed.i };
+    if (parsed.l !== undefined && parsed.l !== 0 && parsed.l !== 1) return null;
+    return { createdAt: parsed.t, id: parsed.i, locked: parsed.l === 1 };
   } catch {
     return null;
   }

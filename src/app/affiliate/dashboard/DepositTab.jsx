@@ -278,7 +278,7 @@ export default function DepositTab({ token, onChanged }) {
 
       {/* ── Proof preview modal ── */}
       {proof && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={closeProof}>
+        <div className="fixed inset-0 z-[65] bg-black/70 flex items-center justify-center p-4" onClick={closeProof}>
           <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
               <h3 className="text-sm font-bold text-gray-900">{t("dep_upload_title")}</h3>

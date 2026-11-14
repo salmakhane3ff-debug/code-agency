@@ -108,12 +108,15 @@ async function putHandler(req, _ctx, decoded) {
       return res;
     }
 
-    // ── Bank update (default) ──────────────────────────────────────────────
-    const { bankName, rib, accountName } = body;
-    const affiliate = await updateAffiliateBank(decoded.affiliateId, { bankName, rib, accountName });
+    // ── Bank update (default): { bankId, accountName, rib? } — a bank of the admin catalogue,
+    //    validated server-side (Phase 4); bankName is the chosen bank's name, never typed.
+    const affiliate = await updateAffiliateBank(decoded.affiliateId, body);
     return Response.json({ affiliate });
 
   } catch (err) {
+    if (err?.code === 'INVALID_INPUT') {
+      return Response.json({ error: 'Coordonnées bancaires invalides', code: err.code, fields: err.fields }, { status: 400 });
+    }
     console.error('Affiliate me PUT error:', err);
     return Response.json({ error: 'Erreur serveur' }, { status: 500 });
   }

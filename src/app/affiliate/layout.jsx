@@ -11,6 +11,10 @@
  */
 import { MarketScope } from "@/context/useMarketLocale";
 
+// iOS reports the safe-area insets (home indicator, landscape notch) only with viewport-fit=cover: the
+// dashboard's bottom nav / floating buttons pad themselves with env(safe-area-inset-*). Affiliate area only.
+export const viewport = { viewportFit: "cover" };
+
 export default function AffiliateLayout({ children }) {
   return <MarketScope>{children}</MarketScope>;
 }

@@ -16,6 +16,7 @@
  */
 
 import { normalizeRecruiterSettings, REWARD_TYPES } from './recruiterSettings.js';
+import { bankPublicView } from './payoutBanks.js';
 
 export const RECRUITER_REWARD_STATUS = Object.freeze({ EARNED: 'EARNED', PENDING: 'PENDING', UNAVAILABLE: 'UNAVAILABLE' });
 
@@ -101,6 +102,8 @@ export const RECRUITER_FIELD_ERROR_CODES = Object.freeze({
   bankName: Object.freeze(['INVALID_BANK_NAME']),
   rib: Object.freeze(['INVALID_RIB']),
   accountName: Object.freeze(['INVALID_ACCOUNT_NAME']),
+  // Phase 4 (bank logo picker): the bank chosen from the admin catalogue
+  bankId: Object.freeze(['BANK_REQUIRED', 'BANK_UNAVAILABLE']),
   // Phase 6 part 2: password change
   newPassword: Object.freeze(['INVALID_PASSWORD']),
   newPasswordConfirm: Object.freeze(['PASSWORD_MISMATCH']),
@@ -370,7 +373,11 @@ export function toRecruiterRewardHistoryView(row) {
 
 /** The recruiter's own bank details (shown back to them only). */
 export function toRecruiterBankView(bank) {
-  return { bankName: str(bank?.bankName), rib: str(bank?.rib), accountName: str(bank?.accountName), complete: bank?.complete === true };
+  return {
+    bankName: str(bank?.bankName), rib: str(bank?.rib), accountName: str(bank?.accountName), complete: bank?.complete === true,
+    // Phase 4: the chosen catalogue bank (public fields only) — null for none / legacy typed details.
+    bankId: str(bank?.bankId), bank: bankPublicView(bank?.bank),
+  };
 }
 
 /** The recruiter's wallet: settings, totals (cents), reward history, withdrawals, bank. */

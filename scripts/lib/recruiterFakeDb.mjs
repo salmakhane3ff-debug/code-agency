@@ -123,6 +123,11 @@
  *                       `recruiterAffiliateLink` select `{ recruiter: { select } }`,
  *                       `recruiterAuditLog.findMany` select / take, and admin reads of
  *                       affiliates (phone / isActive / createdAt).
+ *                       Phase 4 (bank logo picker), phase5 mode: `payoutBank` (the admin catalogue
+ *                       payout_banks: create / findUnique / findFirst / findMany / update; trimmed
+ *                       name 1 … 80, unique lower(name) → P2002, sortOrder 0 … 9999) and the
+ *                       `bank: { select }` relation of a recruiter row (recruiter.findUnique /
+ *                       recruiter.update with select), resolved through recruiter.bankId (FK).
  *
  * Mirrors the migration's guarantees: unique username / phone (P2002 with meta.target),
  * the recruiters CHECKs (username format, name length, bcrypt-only passwordHash,
@@ -224,7 +229,7 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
   const T = {
     recruiter: [], recruiterAuditLog: [], affiliate: [], recruiterAffiliateLink: [], affiliateOrder: [], identityVerification: [],
     recruiterSettingsVersion: [], recruiterRewardLedger: [], affiliatePayout: [], affiliateActivationCode: [],
-    affiliateActivationRecovery: [], recruiterIdentityVerification: [],
+    affiliateActivationRecovery: [], recruiterIdentityVerification: [], payoutBank: [],
   };
   const payoutCalls = [];
   let seq = 0;
@@ -284,6 +289,20 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
     }
     return out;
   }
+  // Phase 4: a recruiter row read with `bank: { select }` (or bank: true) → the chosen catalogue
+  // bank (recruiter.bankId), null when none. Every other key behaves exactly like pick().
+  function pickRecruiter(row, select) {
+    if (!row || !select || !('bank' in select)) return pick(row, select);
+    const out = {};
+    for (const [k, v] of Object.entries(select)) {
+      if (!v) continue;
+      if (k === 'bank') {
+        const b = row.bankId == null ? null : rows('payoutBank').find((x) => x.id === row.bankId) || null;
+        out.bank = pick(b, v === true ? undefined : v.select);
+      } else out[k] = clone(row[k]);
+    }
+    return out;
+  }
   const recruiter = {
     async create({ data }) {
       await before('recruiter', 'create', { data });
@@ -306,26 +325,29 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
       const keys = Object.keys(where || {});
       if (keys.length !== 1 || !['id', 'username'].includes(keys[0])) throw new Error(`fake recruiter.findUnique: unsupported where ${JSON.stringify(where)}`);
       const row = rows('recruiter').find((x) => x[keys[0]] === where[keys[0]]);
-      return pick(row, select);
+      return pickRecruiter(row, select);
     },
     async findMany({ where, orderBy, select, take } = {}) {
       await before('recruiter', 'findMany', { where });
       const list = sortRows(rows('recruiter').filter((r) => Object.entries(where || {}).every(([k, v]) => matchScalar(r[k], v))), orderBy);
       return (Number.isInteger(take) ? list.slice(0, take) : list).map((r) => pick(r, select));
     },
-    async update({ where, data }) {
+    async update({ where, data, select }) {
       await before('recruiter', 'update', { where, data });
       if (where?.id) await lockRecruiterRow(where.id);
       const row = rows('recruiter').find((x) => x.id === where?.id);
       if (!row) throw Object.assign(new Error('Record to update not found.'), { code: 'P2025' });
       const prev = clone(row);
       const next = { ...row, ...applyOps(row, clone(data)), updatedAt: new Date() };
+      // Phase 4: recruiters.bankId → payout_banks.id (FK).
+      if (next.bankId != null && next.bankId !== row.bankId && !rows('payoutBank').some((x) => x.id === next.bankId)) throw fkErr('bankId');
       if (next.username !== row.username && T.recruiter.some((x) => x !== row && x.username === next.username)) throw p2002('username');
       if (next.phone != null && next.phone !== row.phone && T.recruiter.some((x) => x !== row && x.phone === next.phone)) throw p2002('phone');
       checkRecruiter(next);
       Object.assign(row, next);
       undoPush(() => { Object.keys(row).forEach((k) => delete row[k]); Object.assign(row, prev); });
-      return clone(row);
+      // (select is honoured only when it reads the Phase 4 bank relation; otherwise the whole row, as before)
+      return select && 'bank' in select ? pickRecruiter(row, select) : clone(row);
     },
     // Phase 6 part 2: the conditional password change (where id + passwordHash + isActive).
     async updateMany({ where = {}, data } = {}) {
@@ -342,6 +364,66 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
       return { count: targets.length };
     },
   };
+
+  // Phase 4 (bank logo picker): the admin catalogue payout_banks (CHECKs: trimmed name 1 … 80,
+  // sortOrder 0 … 9999; unique lower(name) → P2002). Never deleted.
+  function checkPayoutBank(b) {
+    if (typeof b.name !== 'string' || b.name !== b.name.trim() || b.name.length < 1 || b.name.length > 80) throw checkErr('payout_banks_name_check');
+    if (!Number.isInteger(b.sortOrder) || b.sortOrder < 0 || b.sortOrder > 9999) throw checkErr('payout_banks_sort_order_check');
+    if (typeof b.isActive !== 'boolean' || typeof b.ribRequired !== 'boolean') throw Object.assign(new Error('payout_banks boolean NOT NULL'), { code: 'P2011' });
+    if (T.payoutBank.some((x) => x.id !== b.id && x.name.toLowerCase() === b.name.toLowerCase())) throw Object.assign(p2002('name'), { message: 'Unique constraint failed: payout_banks_name_lower_key' });
+  }
+  const bankMatch = (r, where) => Object.entries(where || {}).every(([k, v]) => {
+    // name { equals, mode: 'insensitive' } (the case-insensitive duplicate check)
+    if (v && typeof v === 'object' && !(v instanceof Date) && v.mode === 'insensitive' && 'equals' in v) {
+      return typeof r[k] === 'string' && r[k].toLowerCase() === String(v.equals).toLowerCase();
+    }
+    return matchScalar(r[k], v);
+  });
+  const payoutBank = {
+    async create({ data, select } = {}) {
+      await before('payoutBank', 'create', { data });
+      const now = new Date();
+      const b = { id: randomUUID(), logoUrl: null, isActive: true, ribRequired: true, sortOrder: 0, createdAt: now, updatedAt: now, ...clone(data) };
+      if (T.payoutBank.some((x) => x.id === b.id)) throw p2002('id');
+      checkPayoutBank(b);
+      T.payoutBank.push(b);
+      markWritten(b);
+      undoPush(() => { T.payoutBank.splice(T.payoutBank.indexOf(b), 1); });
+      return pick(b, select);
+    },
+    async findUnique({ where, select } = {}) {
+      await before('payoutBank', 'findUnique', { where });
+      const k = Object.keys(where || {});
+      if (k.length !== 1 || k[0] !== 'id') throw new Error(`fake payoutBank.findUnique: unsupported where ${JSON.stringify(where)}`);
+      return pick(rows('payoutBank').find((x) => x.id === where.id), select);
+    },
+    async findFirst({ where, orderBy, select } = {}) {
+      await before('payoutBank', 'findFirst', { where });
+      return pick(sortRows(rows('payoutBank').filter((r) => bankMatch(r, where)), orderBy)[0], select);
+    },
+    async findMany({ where, orderBy, select, take } = {}) {
+      await before('payoutBank', 'findMany', { where });
+      const list = sortRows(rows('payoutBank').filter((r) => bankMatch(r, where)), orderBy);
+      return (Number.isInteger(take) ? list.slice(0, take) : list).map((r) => pick(r, select));
+    },
+    async update({ where, data, select } = {}) {
+      await before('payoutBank', 'update', { where, data });
+      const k = Object.keys(where || {});
+      if (k.length !== 1 || k[0] !== 'id') throw new Error(`fake payoutBank.update: unsupported where ${JSON.stringify(where)}`);
+      const row = rows('payoutBank').find((x) => x.id === where.id);
+      if (!row) throw Object.assign(new Error('Record to update not found.'), { code: 'P2025' });
+      const prev = clone(row);
+      const next = { ...row, ...clone(data), id: row.id, updatedAt: new Date() };
+      checkPayoutBank(next);
+      Object.assign(row, next);
+      undoPush(() => { Object.keys(row).forEach((x) => delete row[x]); Object.assign(row, prev); });
+      return pick(row, select);
+    },
+  };
+  for (const op of ['delete', 'deleteMany', 'upsert', 'createMany', 'updateMany']) {
+    payoutBank[op] = async () => { throw new Error(`fake db: payoutBank.${op} is not allowed (a bank is never deleted; edits are one row at a time)`); };
+  }
 
   const auditMatch = (r, where) => Object.entries(where || {}).every(([k, v]) => {
     if (k === 'details' && v && typeof v === 'object' && Array.isArray(v.path)) {
@@ -2222,6 +2304,14 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
       T.recruiterIdentityVerification.push(r);
       return clone(r);
     },
+    // Phase 4: a catalogue bank as-is (CHECKs + unique lower(name) still apply).
+    payoutBank(data) {
+      const now = new Date();
+      const b = { id: randomUUID(), logoUrl: null, isActive: true, ribRequired: true, sortOrder: 0, createdAt: now, updatedAt: now, ...clone(data) };
+      checkPayoutBank(b);
+      T.payoutBank.push(b);
+      return clone(b);
+    },
     recruiter(data) {
       const now = new Date();
       const r = {
@@ -2239,7 +2329,7 @@ export function makeRecruiterFakeDb({ failAuditCreate = false, phase3: phase3In 
     recruiter, recruiterAuditLog, $transaction, $queryRaw,
     ...(phase3 ? { affiliate, recruiterAffiliateLink, affiliateActivationCode, $executeRaw } : {}),
     ...(phase4 ? { affiliateOrder, identityVerification } : {}),
-    ...(phase5 ? { recruiterSettingsVersion, recruiterRewardLedger, affiliatePayout, recruiterIdentityVerification } : {}),
+    ...(phase5 ? { recruiterSettingsVersion, recruiterRewardLedger, affiliatePayout, recruiterIdentityVerification, payoutBank } : {}),
     ...(recovery ? { affiliateActivationRecovery } : {}),
     _queryCount: () => log.filter((l) => l.model !== '$transaction').length,
     _tables: T, _log: log, _state: state, _seed: seed, _openTx: openTx, _locks: locks, _payoutCalls: payoutCalls,
