@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import UgcTab from "./UgcTab";
+import UgcVideosTab from "./UgcVideosTab";
 import DepositTab from "./DepositTab";
 import BoosterTab from "./BoosterTab";
 import BrandTab from "./BrandTab";
@@ -96,9 +97,17 @@ const bankServerFieldErrors = (fields) => Object.fromEntries(
     .map((f) => [f, BANK_FIELD_ERROR_KEY[fields[f]]]),
 );
 
-function authHeaders() {
+/**
+ * Affiliate API headers: always the Bearer token; JSON Content-Type by default.
+ * For FormData (multipart) uploads call authHeaders(false): NO Content-Type at all, so the
+ * browser sets multipart/form-data with its own boundary (never set it by hand).
+ */
+function authHeaders(json = true) {
   const token = localStorage.getItem("affiliateToken") || "";
-  return { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+  return {
+    ...(json ? { "Content-Type": "application/json" } : {}),
+    Authorization: `Bearer ${token}`,
+  };
 }
 
 // ── Status badge ──────────────────────────────────────────────────────────────
@@ -456,7 +465,7 @@ function AvatarUpload({ affiliate, authHeaders, onUpdate }) {
       form.append("file", file);
       const res  = await fetch("/api/affiliate/avatar", {
         method:  "POST",
-        headers: authHeaders(),
+        headers: authHeaders(false), // multipart: the browser sets Content-Type + boundary
         body:    form,
       });
       const json = await res.json();
@@ -997,6 +1006,9 @@ export default function AffiliateDashboard() {
 
   // ── Logout ───────────────────────────────────────────────────────────────
   const handleLogout = () => {
+    // Clear the HttpOnly session cookie server-side first (fire-and-forget), else it would
+    // keep authenticating the affiliate API after logout.
+    fetch("/api/affiliate/auth", { method: "DELETE", credentials: "same-origin", cache: "no-store" }).catch(() => {});
     ["affiliateToken","affiliateId","affiliateUsername","affiliateName"].forEach((k) => {
       try { localStorage.removeItem(k); } catch {}
     });
@@ -1338,6 +1350,7 @@ export default function AffiliateDashboard() {
     { id: "brand",         label: t("tab_brand") },
     { id: "rewards",       label: t("tab_rewards") },
     { id: "ugc",           label: t("tab_ugc") },
+    { id: "ugc-videos",    label: t("tab_ugc_videos") },
     { id: "notifications", label: unread > 0 ? t("tab_notifications_count", { n: unread }) : t("tab_notifications") },
     { id: "team",          label: t("tab_team", { n: team.length }) },
     { id: "settings",      label: t("tab_settings") },
@@ -2703,6 +2716,9 @@ export default function AffiliateDashboard() {
         {activeTab === "rewards" && <RewardsTab />}
 
         {activeTab === "ugc" && <UgcTab />}
+
+        {/* SIMULATED Demo Competition "UGC Videos" leaderboard — reads only /api/demo-competition/ugc-videos. */}
+        {activeTab === "ugc-videos" && <UgcVideosTab />}
 
         {/* Competition now lives inline on the overview (no standalone tab). */}
 

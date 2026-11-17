@@ -92,6 +92,7 @@ const SideBar = ({ onItemClick }) => {
     { href: "/admin/demo-competition", icon: <Flag size={16} />, label: "🏁 Demo Competition", group: true },
     { href: "/admin/demo-competition/members", icon: <Users size={14} />, label: "Demo Members", indent: true },
     { href: "/admin/demo-competition/brands", icon: <Store size={14} />, label: "Demo Brands", indent: true },
+    { href: "/admin/demo-competition/ugc-videos", icon: <Video size={14} />, label: "Demo UGC Videos", indent: true },
     { href: "/admin/demo-competition/engine", icon: <Activity size={14} />, label: "Live Engine", indent: true },
     { href: "/admin/demo-competition/homepage", icon: <LayoutGrid size={14} />, label: "Homepage Settings", indent: true },
     { href: "/admin/promo", icon: <Tag size={16} />, label: "Promo Codes" },

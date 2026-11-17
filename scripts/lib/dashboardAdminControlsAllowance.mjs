@@ -27,6 +27,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { withoutPayoutBankDiffLines } from './payoutBanksAllowance.mjs';
+import { withoutUgcDiffLines } from './uploadAuthUgcSupportAllowance.mjs';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 /** origin/main when this work started (the deposits route is identical there and at every older guard base). */
@@ -117,8 +118,9 @@ export function withoutDacDiffLines(lines) {
   const drop = dacDiffLines();
   return lines.filter((l) => { const i = drop.indexOf(norm(l)); if (i === -1) return true; drop.splice(i, 1); return false; });
 }
-// Phase 4 (bank logo picker, scripts/lib/payoutBanksAllowance.mjs — its own SHA pin) adds later schema lines: set aside here.
-export const dacSchemaSha = () => sha(withoutPayoutBankDiffLines(git(['diff', DAC_BASE, '--', 'prisma/schema.prisma']).split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l))).join('\n'));
+// Phase 4 (bank logo picker, scripts/lib/payoutBanksAllowance.mjs) and the Demo UGC Videos models
+// (scripts/lib/uploadAuthUgcSupportAllowance.mjs) — each with its own SHA pin — add later schema lines: set aside here.
+export const dacSchemaSha = () => sha(withoutUgcDiffLines(withoutPayoutBankDiffLines(git(['diff', DAC_BASE, '--', 'prisma/schema.prisma']).split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l)))).join('\n'));
 export const dacSchemaPinHolds = () => dacSchemaSha() === DAC_SCHEMA_SHA;
 
 export const isDacSrc = (f) => DAC_SRC_FILES.includes(f);

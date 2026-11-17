@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Users, Store, Activity, LayoutGrid, ChevronRight, Loader2 } from "lucide-react";
+import { Users, Store, Clapperboard, Activity, LayoutGrid, ChevronRight, Loader2 } from "lucide-react";
 import { MAX_MEMBERS, MAX_BRANDS } from "@/lib/demoCompetition/engine";
 import { dcApi, PageHeader, SimulationNotice, Notice, cardCls, fmtInt, fmtDateTime } from "./_components/ui";
 
@@ -25,6 +25,7 @@ export default function DemoCompetitionHub() {
   const cards = [
     { href: "/admin/demo-competition/members", icon: Users, title: "Demo Members", desc: `Profils, photos, réglages de ventes démo et réseau démo.${archivedNote(counts?.archivedMembers, "archivé", "archivés")}`, stat: v(`${counts?.members ?? 0} / ${limits.members}`) },
     { href: "/admin/demo-competition/brands", icon: Store, title: "Demo Brands", desc: `Marques démo, image produit, propriétaire, réglages.${archivedNote(counts?.archivedBrands, "archivée", "archivées")}`, stat: v(`${counts?.brands ?? 0} / ${limits.brands}`) },
+    { href: "/admin/demo-competition/ugc-videos", icon: Clapperboard, title: "Demo UGC Videos", desc: "Vidéos UGC démo de membres démo : ventes et récompenses simulées (5 / 6 / 7 DH), fichiers vidéo.", stat: null },
     {
       href: "/admin/demo-competition/engine", icon: Activity, title: "Live Engine",
       desc: engine ? `Dernière exécution : ${fmtDateTime(engine.lastRunAt)} · ${fmtInt(counts?.events)} événements démo` : "Génération serveur, initialisation, valeurs par défaut.",

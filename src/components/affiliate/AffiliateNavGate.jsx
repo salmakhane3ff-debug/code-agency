@@ -10,7 +10,8 @@
  *     localStorage). Public visitors, crawlers and the server HTML are unchanged.
  *   • The SAME component as the dashboard (MobileBottomNav): each tab opens
  *     /affiliate/dashboard?tab=<id>; "Produits" goes to /products as on the dashboard; the
- *     center button copies the referral link; "Déconnexion" clears the same session keys.
+ *     center button copies the referral link; "Déconnexion" clears the session cookie
+ *     (DELETE /api/affiliate/auth) and the same session keys.
  *   • Referral link / unread badge / recharge entry come from the snapshot the dashboard keeps
  *     in sessionStorage (src/lib/affiliateNav.js), else the username saved at login.
  *   • While shown it sets <html data-affiliate-nav> so globals.css pads the page bottom on
@@ -53,6 +54,8 @@ export default function AffiliateNavGate() {
 
   const openTab = (tab) => router.push(dashboardTabHref(tab));
   const logout = () => {
+    // Clear the HttpOnly session cookie server-side first (fire-and-forget), then the local keys.
+    fetch("/api/affiliate/auth", { method: "DELETE", credentials: "same-origin", cache: "no-store" }).catch(() => {});
     AFFILIATE_SESSION_KEYS.forEach((k) => { try { window.localStorage.removeItem(k); } catch {} });
     try { window.sessionStorage.removeItem(NAV_SNAPSHOT_KEY); } catch {}
     router.push("/affiliate/login");

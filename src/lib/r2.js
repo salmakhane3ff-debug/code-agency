@@ -190,6 +190,29 @@ export function r2Deps(env = process.env) {
   };
 }
 
+// ── safe error diagnostics ─────────────────────────────────────────────────────
+
+/**
+ * The safe, useful part of an S3/R2 SDK error: HTTP status, error code, request id and a
+ * message with the configured credentials scrubbed. The raw SDK error is NEVER logged or
+ * re-thrown as is: S3-style errors can carry extra parsed fields (AWSAccessKeyId,
+ * StringToSign, SignatureProvided, CanonicalRequest…) and the raw HTTP response, which
+ * callers that `console.error(err)` would print.
+ */
+export function r2ErrorInfo(err, cfg = {}) {
+  let message = String(err?.message || err || 'unknown error').slice(0, 300);
+  for (const secret of [cfg.accessKeyId, cfg.secretAccessKey]) {
+    if (secret && String(secret).length >= 4) message = message.split(String(secret)).join('[redacted]');
+  }
+  const status = err?.$metadata?.httpStatusCode ?? err?.$response?.statusCode ?? err?.statusCode;
+  return {
+    status: Number.isInteger(status) ? status : undefined,
+    code: String(err?.Code || err?.code || err?.name || 'Error').slice(0, 80),
+    requestId: err?.$metadata?.requestId || undefined,
+    message,
+  };
+}
+
 // ── facade: upload + delete (deps injectable for tests) ─────────────────────────
 
 /**
@@ -208,7 +231,27 @@ export async function saveMediaR2(buffer, opts = {}, deps, env = process.env) {
   const key = buildObjectKey({ prefix: cfg.prefix, category: cat, filename, deterministic });
   const ct = contentType || contentTypeFor(filename);
 
-  await d.putObject({ bucket: cfg.bucket, key, body: buffer, contentType: ct, cacheControl: R2_CACHE_CONTROL });
+  try {
+    await d.putObject({ bucket: cfg.bucket, key, body: buffer, contentType: ct, cacheControl: R2_CACHE_CONTROL });
+  } catch (err) {
+    // Diagnostics without secrets: bucket / key / category / type / size + status / code / request id.
+    const info = r2ErrorInfo(err, cfg);
+    console.error('[r2] upload failed', {
+      bucket: cfg.bucket, key, category: cat, resourceType: rtype, contentType: ct, bytes: buffer?.length,
+      status: info.status, code: info.code, requestId: info.requestId, message: info.message,
+    });
+    // A clean error (no raw SDK object / response / signing fields) for the caller to log. Its `code` is the generic
+    // R2_UPLOAD_FAILED and it has NO `status`: shared route error mappers treat `code` / `status` as a client-facing
+    // answer (e.g. demoCompetition errorResponse), so a storage failure stays a 500 there; the provider's own code and
+    // HTTP status are kept separately (r2Code / httpStatus) for logs only.
+    const safe = new Error(`R2 upload failed: ${info.code}${info.status ? ` (HTTP ${info.status})` : ''} — ${info.message}`);
+    safe.name = 'R2UploadError';
+    safe.code = 'R2_UPLOAD_FAILED';
+    safe.r2Code = info.code;
+    safe.httpStatus = info.status;
+    safe.key = key;
+    throw safe;
+  }
 
   const url = publicUrlForKey(cfg.publicUrl, key);
   const format = extOf(filename) || undefined;
@@ -233,12 +276,14 @@ export async function destroyByUrlR2(url, deps, env = process.env) {
   if (!isR2Url(url, publicUrl)) return { ok: false, skipped: true, reason: 'wrong-host' };
   const key = keyFromUrl(url, { publicUrl, prefix: env.R2_PREFIX, enforcePrefix: true });
   if (!key) return { ok: false, skipped: true, reason: 'invalid-key' };
+  let cfg = {};
   try {
     const d = deps || r2Deps(env);
-    const cfg = r2Config(env);
+    cfg = r2Config(env);
     await d.deleteObject({ bucket: cfg.bucket, key });
     return { ok: true, storage: 'r2', result: 'deleted', key, publicId: key };
   } catch (err) {
-    return { ok: false, storage: 'r2', error: err?.message || String(err), key, publicId: key };
+    const info = r2ErrorInfo(err, cfg);
+    return { ok: false, storage: 'r2', error: info.message, code: info.code, status: info.status, key, publicId: key };
   }
 }

@@ -1,6 +1,8 @@
 /**
- * POST /api/affiliate/auth
- * Affiliate login — username + password.
+ * POST   /api/affiliate/auth  Affiliate login — username + password.
+ * DELETE /api/affiliate/auth  Logout — clears the HttpOnly `affiliate_token` cookie (always 200,
+ *                              no session needed: the dashboard and the nav gate call it before
+ *                              clearing localStorage, so the old cookie stops authenticating).
  *
  * Security:
  *   - Rate limited (10 req/min per IP)
@@ -13,6 +15,7 @@
 import { loginAffiliate } from '@/lib/services/affiliateSystemService';
 // Phase 6 part 2: keyed on the TRUSTED client IP only (src/lib/trustedProxy.js).
 import { trustedRateLimit as rateLimit } from '@/lib/trustedProxy';
+import { affiliateCookieHeader } from '@/lib/middleware/withAffiliateAuth';
 
 const COOKIE_MAX_AGE = 7 * 24 * 60 * 60; // 7 days
 
@@ -30,12 +33,9 @@ export async function POST(req) {
     const result = await loginAffiliate(username, password);
 
     // Set HttpOnly cookie (XSS-proof) in addition to returning token in body
-    const isProduction = process.env.NODE_ENV === 'production';
+    // (affiliate_token=…; HttpOnly; Path=/api/affiliate; Max-Age=…; SameSite=Strict[; Secure in production])
     const response = Response.json(result);
-    response.headers.set(
-      'Set-Cookie',
-      `affiliate_token=${result.token}; HttpOnly; Path=/api/affiliate; Max-Age=${COOKIE_MAX_AGE}; SameSite=Strict${isProduction ? '; Secure' : ''}`,
-    );
+    response.headers.set('Set-Cookie', affiliateCookieHeader(result.token, COOKIE_MAX_AGE));
 
     return response;
   } catch (err) {
@@ -49,4 +49,12 @@ export async function POST(req) {
     console.error('Affiliate auth error:', err);
     return Response.json({ error: 'Erreur serveur' }, { status: 500 });
   }
+}
+
+/** Logout: clears the session cookie with the same attributes as the setter above. */
+export async function DELETE() {
+  return Response.json({ ok: true }, {
+    status: 200,
+    headers: { 'Set-Cookie': affiliateCookieHeader('', 0), 'Cache-Control': 'no-store' },
+  });
 }

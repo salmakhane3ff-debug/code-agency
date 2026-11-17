@@ -463,8 +463,15 @@ console.log('\n8. Isolation');
   const demoModels = [...schema.matchAll(/^model (\w+) \{[\s\S]*?^\}/gm)].filter((m) => NEW_MODELS.includes(m[1])).map((m) => m[0]);
   const SCALARS = new Set(['String', 'Int', 'Boolean', 'DateTime', 'Float', 'Json', 'Decimal', 'BigInt', 'Bytes']);
   const relTypes = demoModels.flatMap((b) => [...b.matchAll(/^\s+\w+\s+([A-Z]\w+)(?:\[\]|\?)?(?:\s|$)/gm)].map((m) => m[1]).filter((t) => !SCALARS.has(t)));
-  ok('the 7 DemoComp models relate only to each other (no relation to Affiliate / Order / …)', demoModels.length === 7
-    && relTypes.length >= 10 && relTypes.every((t) => NEW_MODELS.includes(t)), relTypes.filter((t) => !NEW_MODELS.includes(t)));
+  // Demo UGC Videos (approved, simulation only): DemoCompMember gains ONE back-relation to its own demo videos
+  // (DemoCompUgcVideo) — still a demo model; the 5 UGC models must relate only to demo models too.
+  const UGC_DEMO_MODELS = ['DemoCompUgcVideo', 'DemoCompUgcVideoVersion', 'DemoCompUgcDailyPlan', 'DemoCompUgcEvent', 'DemoCompUgcSettings'];
+  ok('the 7 DemoComp models relate only to each other (no relation to Affiliate / Order / …; + the demo UGC videos back-relation)', demoModels.length === 7
+    && relTypes.length >= 10 && relTypes.every((t) => NEW_MODELS.includes(t) || t === 'DemoCompUgcVideo'), relTypes.filter((t) => !NEW_MODELS.includes(t)));
+  const ugcBlocks = [...schema.matchAll(/^model (\w+) \{[\s\S]*?^\}/gm)].filter((m) => UGC_DEMO_MODELS.includes(m[1])).map((m) => m[0]);
+  const ugcRel = ugcBlocks.flatMap((b) => [...b.matchAll(/^\s+\w+\s+([A-Z]\w+)(?:\[\]|\?)?(?:\s|$)/gm)].map((m) => m[1]).filter((t) => !SCALARS.has(t)));
+  ok('the 5 demo UGC models relate only to demo models (DemoCompMember + each other)', ugcBlocks.length === 5
+    && ugcRel.length >= 4 && ugcRel.every((t) => t === 'DemoCompMember' || UGC_DEMO_MODELS.includes(t)), ugcRel.filter((t) => t !== 'DemoCompMember' && !UGC_DEMO_MODELS.includes(t)));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DAC_BASE, dacRoutePinHolds } from './dashboardAdminControlsAllowance.mjs';
 import { PB_BASE, pbLinePinHolds } from './payoutBanksAllowance.mjs';
+import { UAUS_BASE, uausLinePinHolds } from './uploadAuthUgcSupportAllowance.mjs';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const PART2_BASE = '003c6f12c97c330536c7e6debb95cbd35397760b';
@@ -76,7 +77,16 @@ export function checkUnchangedExceptPart2(base, paths) {
   const stageF = [];
   const dac = [];
   const pb = [];
+  const uaus = [];
   for (const file of [...changed].sort()) {
+    // Combined task (upload/auth fix): a guarded auth file that differs from UAUS_BASE (d9f188a) by exactly its pinned
+    // lines (scripts/lib/uploadAuthUgcSupportAllowance.mjs); its UAUS_BASE version must itself satisfy this rule
+    // (unchanged versus `base`, or exactly its Part 2 pin) → reported in `uaus`.
+    if (uausLinePinHolds(file)) {
+      const atBase = changedLines(base, file, UAUS_BASE);
+      const pin2 = PART2_PINS[file];
+      if (atBase.length === 0 || (pin2 && JSON.stringify(atBase) === JSON.stringify(changedLines(PART2_BASE, file, UAUS_BASE)) && linesSha(atBase) === pin2)) { uaus.push(file); continue; }
+    }
     // Phase 4 (bank logo picker): a guarded file that differs from PB_BASE (beb8962) by exactly its pinned lines
     // (scripts/lib/payoutBanksAllowance.mjs); its PB_BASE version must itself satisfy this rule (unchanged versus
     // `base`, or exactly its Part 2 pin) → reported in `pb`.
@@ -101,7 +111,7 @@ export function checkUnchangedExceptPart2(base, paths) {
     if (JSON.stringify(sinceBase) !== JSON.stringify(part2) || linesSha(part2) !== pin) mismatched.push(file);
     else allowed.push(file);
   }
-  return { ok: unexpected.length === 0 && mismatched.length === 0, unexpected, mismatched, allowed, stageF, dac, pb };
+  return { ok: unexpected.length === 0 && mismatched.length === 0, unexpected, mismatched, allowed, stageF, dac, pb, uaus };
 }
 
 // `node scripts/lib/phase6Part2Allowance.mjs` prints the current pins (for a reviewed refresh).

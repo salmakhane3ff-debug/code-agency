@@ -16,7 +16,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Package, Store, Gift, Video, Users, Wallet, Building2, Bell, Settings, X, LogOut,
-  Home, TrendingUp, Plus, ShoppingBag, MoreHorizontal,
+  Home, TrendingUp, Plus, ShoppingBag, MoreHorizontal, Clapperboard,
 } from "lucide-react";
 import { useMarketLocale } from "@/context/useMarketLocale";
 import { AFFILIATE_DASHBOARD_TEXT } from "@/lib/affiliateDashboardI18n";
@@ -48,6 +48,7 @@ function MobileBottomNav({ activeTab, setActiveTab, refLink, onLogout, unread = 
     { icon: Store,       label: t("more_brand"),         tab: "brand" },
     { icon: Gift,        label: t("more_rewards"),       tab: "rewards" },
     { icon: Video,       label: t("more_ugc"),           tab: "ugc" },
+    { icon: Clapperboard, label: t("more_ugc_videos"),   tab: "ugc-videos" },
     { icon: Users,       label: t("more_team"),          tab: "team" },
     { icon: Wallet,      label: t("more_payout"),        tab: "payout" },
     { icon: Wallet,      label: t("more_deposit"),       tab: "deposit" },

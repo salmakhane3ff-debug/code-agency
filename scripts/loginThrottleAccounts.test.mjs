@@ -25,6 +25,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
 import { DEMO_COMP_MIGRATION_DIR, DEMO_COMP_MIGRATION, demoCompPinsHold } from './lib/demoCompetitionAllowance.mjs';
+import { UGC_MIGRATION_DIR, UGC_MIGRATION, ugcMigrationPinHolds } from './lib/uploadAuthUgcSupportAllowance.mjs';
 import { DAC_MIGRATION_DIR, DAC_MIGRATION, dacMigrationPinHolds } from './lib/dashboardAdminControlsAllowance.mjs';
 import { PB_MIGRATION_DIR, PB_MIGRATION, pbMigrationPinHolds } from './lib/payoutBanksAllowance.mjs';
 
@@ -357,7 +358,7 @@ console.log('\n8. Sensitive data, no migration');
   // scripts/lib/demoCompetitionAllowance.mjs). It is excluded from the exact list below and checked separately.
   // Affiliate Dashboard & Admin Controls: + exactly 20261114_payment_proof_display_controls (payment_proofs /
   // payment_proof_events only, SHA-256 pinned in scripts/lib/dashboardAdminControlsAllowance.mjs), checked separately below.
-  const after = migrations.slice(migrations.indexOf('20261109_account_token_version') + 1).filter((d) => d !== DEMO_COMP_MIGRATION_DIR && d !== DAC_MIGRATION_DIR && d !== PB_MIGRATION_DIR); // + Phase 4 payout banks (checked below)
+  const after = migrations.slice(migrations.indexOf('20261109_account_token_version') + 1).filter((d) => d !== DEMO_COMP_MIGRATION_DIR && d !== DAC_MIGRATION_DIR && d !== PB_MIGRATION_DIR && d !== UGC_MIGRATION_DIR); // + Phase 4 payout banks, Demo UGC videos (checked below)
   // Phase 7: + 20261112_recruiter_group_rewards (recruiter group reward: settings columns + ledger guards only).
   ok('no database migration for D5: 20261109_account_token_version is followed only by 20261110_recruiter_reward_cycles (Phase 6 part 3a, ledger only), 20261111_recruiter_identity_verifications (Phase 6 part 3c, recruiter KYC only) and 20261112_recruiter_group_rewards (Phase 7, group reward only), and nothing in prisma/ stores login attempts',
     migrations.includes('20261109_account_token_version') && JSON.stringify(after) === JSON.stringify(['20261110_recruiter_reward_cycles', '20261111_recruiter_identity_verifications', '20261112_recruiter_group_rewards'])
@@ -373,6 +374,10 @@ console.log('\n8. Sensitive data, no migration');
   ok('Dashboard & Admin Controls migration: pinned, payment-proof tables only, and it stores no login attempts',
     dacMigrationPinHolds() && !/login|throttle|attempt/i.test(read(DAC_MIGRATION))
     && [...read(DAC_MIGRATION).replace(/--[^\n]*/g, '').matchAll(/(?:ALTER TABLE|ON|INDEX IF NOT EXISTS "\w+" ON) "(\w+)"/g)].every((m) => /^payment_proof/.test(m[1]) || /_idx$|_key$/.test(m[1])));
+  // Demo UGC Videos (simulation only): ONE additive migration — demo_comp_ugc_* tables only.
+  ok('Demo UGC Videos migration: pinned, demo_comp_ugc_* tables only, and it stores no login attempts',
+    ugcMigrationPinHolds() && !/login|throttle|attempt/i.test(read(UGC_MIGRATION))
+    && [...read(UGC_MIGRATION).replace(/--[^\n]*/g, '').matchAll(/(?:ALTER TABLE|CREATE TABLE IF NOT EXISTS|INSERT INTO) "(\w+)"/g)].every((m) => /^demo_comp_ugc_/.test(m[1])));
   // Phase 4 (bank logo picker): ONE additive migration — the payout_banks catalogue + the affiliates / recruiters bankId reference.
   ok('Phase 4 payout-bank migration: pinned, payout_banks + the bankId reference only, and it stores no login attempts',
     pbMigrationPinHolds() && !/login|throttle|attempt/i.test(read(PB_MIGRATION))

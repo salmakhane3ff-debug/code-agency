@@ -58,16 +58,18 @@ console.log("\n1. Sidebar");
   const entries = [...src.matchAll(/^\s*\{ href: "([^"]+)",.*label: "([^"]+)"(.*)\},\s*$/gm)].map((m) => ({ href: m[1], label: m[2], rest: m[3] }));
   const hrefs = entries.map((e) => e.href);
   const i = hrefs.indexOf("/admin/affiliates");
-  const group = entries.slice(i + 1, i + 6);
+  const group = entries.slice(i + 1, i + 7); // the group + its 5 sub-entries (Demo UGC Videos added)
   ok("the group comes right after Affiliates", i !== -1 && group[0]?.href === "/admin/demo-competition" && group[0]?.label === "🏁 Demo Competition" && /group: true/.test(group[0]?.rest));
-  ok("followed by the 4 sub-entries in order", eq(group.slice(1).map((e) => [e.href, e.label]), [
+  // Demo UGC Videos (simulation only): + its sub-entry right after Demo Brands (Affiliates → Brands → UGC Videos).
+  ok("followed by the 5 sub-entries in order", eq(group.slice(1).map((e) => [e.href, e.label]), [
     ["/admin/demo-competition/members", "Demo Members"],
     ["/admin/demo-competition/brands", "Demo Brands"],
+    ["/admin/demo-competition/ugc-videos", "Demo UGC Videos"],
     ["/admin/demo-competition/engine", "Live Engine"],
     ["/admin/demo-competition/homepage", "Homepage Settings"],
   ]), group);
-  ok("the 4 sub-entries are indented, the group is not", group.slice(1).every((e) => /indent: true/.test(e.rest)) && !/indent/.test(group[0]?.rest || "x"));
-  ok("exactly one entry per demo-competition href", hrefs.filter((h) => h.startsWith("/admin/demo-competition")).length === 5 && new Set(hrefs).size === hrefs.length);
+  ok("the 5 sub-entries are indented, the group is not", group.slice(1).every((e) => /indent: true/.test(e.rest)) && !/indent/.test(group[0]?.rest || "x"));
+  ok("exactly one entry per demo-competition href", hrefs.filter((h) => h.startsWith("/admin/demo-competition")).length === 6 && new Set(hrefs).size === hrefs.length);
   ok("indent style (ps-8, smaller text) only for indent entries", /indent \? "mb-1 ps-8 pe-3 py-1\.5 text-xs" : "mb-2 px-3 py-2\.5 text-sm"/.test(src));
   ok("group highlighted on any /admin/demo-competition/* path", /!!group && !isActive && !!pathname && pathname\.startsWith\(`\$\{href\}\/`\)/.test(src));
   ok("non-indent entries keep the original active / idle classes",
@@ -112,8 +114,10 @@ console.log("\n3. Requests");
   ok("LAYOUT_URL is exactly /api/admin/homepage-layout", /const LAYOUT_URL = "\/api\/admin\/homepage-layout";/.test(home));
   const dcPaths = [];
   for (const f of uiFiles) for (const m of read(f).matchAll(/\bdcApi\(\s*(["`])([^"`]*)\1/g)) dcPaths.push(m[2]);
-  ok(`every dcApi path is /members, /brands or /engine (${dcPaths.length} calls)`,
-    dcPaths.length >= 14 && dcPaths.every((p) => /^\/(members|brands|engine)(\/|$)/.test(p)), dcPaths);
+  // Demo UGC Videos: its admin page calls the same dcApi helper under `${UGC}` = "/ugc-videos" (its own module routes).
+  ok(`every dcApi path is /members, /brands, /engine or the UGC videos module (${dcPaths.length} calls)`,
+    dcPaths.length >= 14 && dcPaths.every((p) => /^(\/(members|brands|engine)|\$\{UGC\})(\/|$)/.test(p))
+    && uiFiles.filter((f) => /\$\{UGC\}/.test(read(f))).every((f) => /const UGC = "\/ugc-videos";/.test(read(f)) || /import \{[^}]*\bUGC\b[^}]*\} from/.test(read(f))), dcPaths);
   const apiStrings = uiFiles.flatMap((f) => [...read(f).matchAll(/\/api\/[A-Za-z0-9_\-/?=.]*/g)].map((m) => m[0]));
   ok("no other /api/ URL anywhere in the section (no /api/setting any more)", apiStrings.every((s) => s === "/api/admin/demo-competition" || s === "/api/admin/homepage-layout"), apiStrings);
   const forbidden = /\/api\/(orders|affiliate|affiliates|admin\/affiliate|wallet|payout|deposits?|boosters?|ugc|rewards|recruiter|demo\/|admin\/demo\/|admin\/brand|brand\/)/;
@@ -288,7 +292,8 @@ console.log("\n9. Archive / restore");
   const dcCalls = [...all.matchAll(/\bdcApi\(\s*(["`])([^"`]*)\1(?:,\s*\{\s*method:\s*"(\w+)")?/g)].map((m) => [m[3] || "GET", m[2]]);
   const archiveCalls = dcCalls.filter(([, p]) => /\/(archive|restore)$/.test(p));
   ok(`every archive / restore call is a POST on /members|/brands/{id}/archive|restore (${archiveCalls.length})`,
-    archiveCalls.length === 6 && archiveCalls.every(([m, p]) => m === "POST" && /^\/(members|brands)\/\$\{(id|m\.id|b\.id)\}\/(archive|restore)$/.test(p)), archiveCalls);
+    archiveCalls.length >= 6 && archiveCalls.every(([m, p]) => m === "POST" && (/^\/(members|brands)\/\$\{(id|m\.id|b\.id)\}\/(archive|restore)$/.test(p)
+      || /^\$\{UGC\}\/videos\/\$\{(id|v\.id)\}\/(archive|restore)$/.test(p))), archiveCalls);
   ok("ArchiveZone explains: disabled, gone from public rankings, history kept, restorable",
     /export function ArchiveZone/.test(parts) && /disparaît des classements publics/.test(parts) && /historique démo est <strong>conservé<\/strong>/.test(parts) && /restaurer/.test(parts));
   ok("both editors render ArchiveZone (non-archived) and ArchivedBanner with Restore (archived)",

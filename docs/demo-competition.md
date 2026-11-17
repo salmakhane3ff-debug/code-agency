@@ -119,3 +119,66 @@ badge. While the data is simulated, ONE discreet footnote tells visitors so.
 
 `src/lib/neutralWording.js` (switch `NEUTRAL_WORDING_PREVIEW`) no longer touches these texts; it only holds the
 temporary neutral-wording preview of the active "Create Your Own Brand" dashboard (`scripts/neutralWording.test.mjs`).
+
+## 7. UGC Videos (SIMULATION ONLY, migration `20261116_demo_comp_ugc_videos`)
+
+A third, independent demo leaderboard: demo UGC videos owned by Demo Members. A member can own several videos;
+each video competes on its own. It never reads or writes the real UGC system and never writes the member / brand
+demo stats.
+
+**Data** (additive, re-runnable; the only reference outside the new tables is the owner FK to `demo_comp_members`, `ON DELETE RESTRICT`):
+
+| Table | Content |
+|---|---|
+| `demo_comp_ugc_videos` | Title, `videoUrl` / `thumbnailUrl` (dedicated media namespace only), owner `memberId`, `active`, min / max simulated sales per day (0 ≤ min ≤ max ≤ 1000), `rewardPerSaleMad` ∈ {5, 6, 7}, `sortOrder`, generation cursor, `archivedAt` |
+| `demo_comp_ugc_video_versions` | Append-only settings snapshots (active, min / max, reward, `effectiveFrom`, `createdBy`) |
+| `demo_comp_ugc_daily_plans` | One immutable plan per (video, Casablanca day), UNIQUE: the day's target in the snapshot's min / max |
+| `demo_comp_ugc_events` | Append-only events (1–3 sales each), reward snapshot, `rewardCents = quantity × rewardPerSaleMad × 100` (CHECK), UNIQUE `idempotencyKey = UGC:<videoId>:<day>:<seq>` |
+| `demo_comp_ugc_settings` | Single row `ugc`: module switch (ships **off**), `targetVideoCount` (default 20, 1–100), `resumedAt` / `pausedAt`, last run |
+
+Guards: CHECK constraints (ranges, reward IN (5, 6, 7), reward formula, archived ⇒ disabled) and triggers that refuse
+UPDATE / DELETE of versions, plans and events (DELETE only through the cascade of a deleted video; the application
+never deletes a video). The existing `demo_comp_daily_plans` / `demo_comp_events` were NOT reused: their CHECKs only allow
+the PERSONAL / NETWORK / BRAND streams. Schema: five separate `DemoCompUgc*` model blocks plus one back-relation line
+(`ugcVideos DemoCompUgcVideo[]`) in `DemoCompMember` (Prisma needs both sides of the owner FK).
+
+**Engine** — `src/lib/demoCompUgc.js` (pure) + `src/lib/services/demoCompUgcService.js`. It reuses the calendar, PRNG
+and day schedule of `engine.js` with its own stream name `UGC`:
+- per video and Casablanca day, a deterministic target within [min, max] of the version in force at the day start,
+  split into 1–3-sale events; each event snapshots the reward of the version in force at its time (a settings change
+  never rewrites history);
+- per-video `pg_advisory_xact_lock` + `createMany({ skipDuplicates })` (INSERT … ON CONFLICT DO NOTHING) on the unique
+  keys: concurrent or repeated runs never duplicate a row (verified with `Promise.all` and 3 concurrent OS processes on a
+  disposable PostgreSQL);
+- 30-day backfill at creation (module ON or OFF; OFF after having run → only up to `pausedAt`); module OFF → nothing is
+  generated and the OFF period is never caught up (`resumedAt`); a disabled or archived video generates nothing after the
+  change; a video whose owner is archived stops at the owner's archive time;
+- ranking: rolling 720 h simulated reward (then 720 h sales, `sortOrder`, creation, id), same window convention as the
+  member / brand leaderboards. Listed publicly: module ON, video active, not archived, with a `videoUrl`, owner not archived;
+- triggers: throttled catch-up on the public / admin reads (≤ every 5 s), admin "Run now". It is a separate entry point:
+  the `demo-leaderboard-engine` worker is unchanged. `runDemoCompUgcTick({ lock })` (session lock key `DCUG`) is
+  exported for the worker if live generation without readers is wanted later (separate approval).
+
+**API**
+- Admin (`withAdminAuth`), under `/api/admin/demo-competition/ugc-videos`: `GET` (state) / `PATCH` (settings),
+  `POST /videos`, `GET` / `PATCH /videos/{id}`, `POST /videos/{id}/archive`, `POST /videos/{id}/restore`,
+  `POST /videos/{id}/video`, `POST /videos/{id}/thumbnail`, `POST /upload/video`, `POST /upload/thumbnail`, `POST /run`,
+  `POST /generate` (deterministic placeholders up to the target; owners round-robin over the non-archived members).
+  Videos are archived, never deleted (no DELETE route).
+- Public: `GET /api/demo-competition/ugc-videos?limit=` — same caching as the members / brands leaderboards
+  (`public, s-maxage=3, stale-while-revalidate=2`), `simulation: true` + `simulated: true` per row; empty with
+  `enabled: false` while the module is OFF.
+
+**Media**: multipart field `file`. Video `.mp4` / `.webm` / `.mov` ≤ 50 MB (`validateVideo`: magic bytes), stored as is;
+thumbnail `.jpg` / `.jpeg` / `.png` / `.webp` ≤ 5 MB (`validateImage`: magic bytes + script scan), re-encoded to WebP
+(≤ 720×1280). Stored through `saveMedia` in the dedicated namespace `demo-competition-ugc` (R2 category, Cloudinary
+folder and local `public/uploads/` sub-folder) — never the real UGC folder (`ugc`) or R2 category `videos`. `videoUrl` /
+`thumbnailUrl` sent to the API must point into that namespace (`INVALID_MEDIA_URL` otherwise).
+
+**Isolation**: `scripts/demoCompUgc.test.mjs` runs the service on a strict fake DB (`scripts/lib/demoCompUgcFakeDb.mjs`)
+that throws on any other model — real UGC, orders, affiliates, wallets, payouts, rewards, and the member / brand demo
+stats — proves that only `demo_comp_ugc_*` rows are written (members are only read), and statically checks the files,
+the migration and the schema.
+
+**Operations (not executed)**: apply `20261116_demo_comp_ugc_videos` with `prisma migrate deploy` (after `20261115`);
+then in the admin: create or generate videos, upload the files, switch the module ON.

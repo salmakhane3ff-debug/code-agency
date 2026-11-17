@@ -252,7 +252,7 @@ console.log('\n4. Static assertions on the recruiter pages');
   ok('simplified: exactly three main sections (dashboard, affiliates, wallet) and the "المزيد" group (profile, verification, password, activation, stats)',
     eq(sectionIds('MAIN_SECTIONS'), ['home', 'affiliates', 'wallet']) && eq(sectionIds('MORE_SECTIONS'), ['profile', 'verification', 'password', 'activation', 'stats'])
     && /href: "\/recruiter\/affiliates"/.test(shell) && /href: "\/recruiter\/wallet"/.test(shell) && /href: "\/recruiter\/profile"/.test(shell)
-    && /import RecruiterAppShell from "\.\/_components\/RecruiterAppShell"/.test(layout) && /<RecruiterAppShell>\{children\}<\/RecruiterAppShell>/.test(layout)
+    && /import RecruiterAppShell from "\.\/_components\/RecruiterAppShell"/.test(layout) && /<RecruiterAppShell>\s*\{children\}[\s\S]*?<\/RecruiterAppShell>/.test(layout) /* (+ the dashboard WhatsApp support button after the children) */
     && /import RecruiterShell from "\.\/RecruiterShell"/.test(appShell) && !/RecruiterShell/.test(hub.replace(/RecruiterAppShell/g, '')));
   ok('simplified dashboard: six KPI cards — whole network, direct, real orders, delivered, total earned, available balance',
     ['network-total', 'network-direct', 'orders-total', 'orders-delivered', 'earned', 'available'].every((h) => hub.includes(`hook="${h}"`))

@@ -7,10 +7,14 @@
  * FR → French, LTR (MarketScope, src/lib/marketLocale.js).
  * Phase 2 (UI only): every authenticated recruiter page renders inside ONE app shell
  * (RecruiterAppShell — sidebar, header, drawer, bottom bar); the public login page does not.
+ * Dashboard support: the floating WhatsApp support button is mounted here once, INSIDE the app shell so it can read
+ * the shell's session (RecruiterWhatsAppButton → useRecruiterSession); it shows itself only on the authenticated recruiter
+ * pages to a signed-in recruiter (src/components/support/DashboardWhatsAppButton.jsx — UI Control number).
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import RecruiterAppShell from "./_components/RecruiterAppShell";
 import { MarketScope } from "@/context/useMarketLocale";
+import RecruiterWhatsAppButton from "@/components/support/RecruiterWhatsAppButton";
 
 export const metadata = { title: "لوحة مسؤول التوظيف · Espace recruteur", robots: { index: false, follow: false } };
 
@@ -18,7 +22,10 @@ export default function RecruiterLayout({ children }) {
   return (
     <MarketScope className="min-h-screen bg-slate-50 text-slate-900"
       style={{ fontFamily: "'Tajawal', 'Cairo', 'Noto Sans Arabic', 'Segoe UI', Tahoma, Arial, sans-serif" }}>
-      <RecruiterAppShell>{children}</RecruiterAppShell>
+      <RecruiterAppShell>
+        {children}
+        <RecruiterWhatsAppButton />
+      </RecruiterAppShell>
     </MarketScope>
   );
 }

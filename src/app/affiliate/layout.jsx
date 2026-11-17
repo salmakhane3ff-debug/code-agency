@@ -7,14 +7,22 @@
  * from LanguageContext; <html dir> follows the same rule (pre-paint script in
  * app/layout.jsx + LanguageContext → src/lib/marketLocale.js htmlDirFor).
  * No functionality is changed.
+ * Dashboard support: the floating "تحدث مع الدعم مباشرة" WhatsApp button is mounted here once; it shows itself only
+ * on /affiliate/dashboard/** (src/components/support/DashboardWhatsAppButton.jsx — UI Control number).
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { MarketScope } from "@/context/useMarketLocale";
+import DashboardWhatsAppButton from "@/components/support/DashboardWhatsAppButton";
 
 // iOS reports the safe-area insets (home indicator, landscape notch) only with viewport-fit=cover: the
 // dashboard's bottom nav / floating buttons pad themselves with env(safe-area-inset-*). Affiliate area only.
 export const viewport = { viewportFit: "cover" };
 
 export default function AffiliateLayout({ children }) {
-  return <MarketScope>{children}</MarketScope>;
+  return (
+    <MarketScope>
+      {children}
+      <DashboardWhatsAppButton />
+    </MarketScope>
+  );
 }

@@ -29,7 +29,7 @@ import { v2 as cloudinary } from "cloudinary";
 import { writeFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
-import { saveMediaR2, destroyByUrlR2, isR2Url, isR2Configured, categoryFor } from "./r2.js";
+import { saveMediaR2, destroyByUrlR2, isR2Url, isR2Configured, r2ConfigStatus, categoryFor } from "./r2.js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -227,7 +227,8 @@ export async function saveMedia(buffer, opts = {}) {
     if (!isR2Configured()) {
       // Fail safe: never break an upload, and NEVER silently use Cloudinary.
       // Documented fallback: incomplete R2 config → LOCAL storage (public/uploads).
-      console.error("[storage] MEDIA_STORAGE=r2 but R2 configuration is incomplete — falling back to LOCAL storage (never Cloudinary).");
+      // Variable NAMES only (never values).
+      console.error(`[storage] MEDIA_STORAGE=r2 but R2 configuration is incomplete (missing: ${r2ConfigStatus().missing.join(", ")}) — falling back to LOCAL storage (never Cloudinary).`);
       return saveLocal(buffer, filename, subdir);
     }
     return saveMediaR2(buffer, {

@@ -33,6 +33,7 @@ import { execFileSync } from 'node:child_process';
 import { DEMO_COMP_MODELS, demoCompPinsHold } from './lib/demoCompetitionAllowance.mjs';
 import { stripDacSchema, dacSchemaPinHolds } from './lib/dashboardAdminControlsAllowance.mjs';
 import { stripPayoutBankSchema, pbSchemaPinHolds, pbMigrationPinHolds } from './lib/payoutBanksAllowance.mjs';
+import { stripUgcSchema, ugcSchemaPinHolds, ugcMigrationPinHolds } from './lib/uploadAuthUgcSupportAllowance.mjs';
 
 const R = await import('../src/lib/recruiterSettings.js');
 
@@ -375,8 +376,10 @@ console.log('\n1e. Data sources: real delivered orders (isFake = false) and the 
   ok('identityService.js, the affiliate identity route, ugcService.js and ugcStatus.js are unchanged versus the base ef79c6b; the affiliate login route and affiliateSystemService.js differ ONLY by the exact pinned Phase 6 part 2 diff',
     // Phase 4 (bank logo picker): affiliateSystemService.js may instead be reported in `pb` — exactly its pinned Phase 4
     // lines on top of a version that satisfies this same rule (scripts/lib/payoutBanksAllowance.mjs).
-    p2.ok && JSON.stringify([...p2.allowed, ...p2.pb].sort()) === JSON.stringify(['src/app/api/affiliate/auth/route.js', 'src/lib/services/affiliateSystemService.js'])
-      && p2.pb.every((f) => f === 'src/lib/services/affiliateSystemService.js'), JSON.stringify(p2));
+    // Combined task (affiliate session fix): the affiliate auth route may instead be reported in `uaus` — exactly its pinned lines
+    // (logout DELETE) on top of a version that satisfies this same rule (scripts/lib/uploadAuthUgcSupportAllowance.mjs).
+    p2.ok && JSON.stringify([...p2.allowed, ...p2.pb, ...p2.uaus].sort()) === JSON.stringify(['src/app/api/affiliate/auth/route.js', 'src/lib/services/affiliateSystemService.js'])
+      && p2.pb.every((f) => f === 'src/lib/services/affiliateSystemService.js') && p2.uaus.every((f) => f === 'src/app/api/affiliate/auth/route.js'), JSON.stringify(p2));
   // Phase 5 (documented allowance, docs/recruiter-system.md §6): the admin identity route only
   // gained the post-commit recruiter reward hook around the UNCHANGED adminApproveIdentity call.
   const idDiff = git(['diff', 'ef79c6bb1e445c964f915effe558e817844db9f0', '--', 'src/app/api/admin/identity/route.js'])
@@ -480,7 +483,10 @@ console.log('\n3. Prisma schema (vs pre-recruiter base ef79c6b)');
   // (scripts/lib/dashboardAdminControlsAllowance.mjs — SHA-256 pinned, asserted just below); every other check is unchanged.
   // Phase 4 (bank logo picker): its exact PayoutBank model + Affiliate / Recruiter bankId lines are set aside the same way
   // (scripts/lib/payoutBanksAllowance.mjs — SHA-256 pinned, asserted just below).
-  const now = stripDacSchema(stripPayoutBankSchema(read('prisma/schema.prisma')));
+  // Demo UGC Videos (simulation only): its 5 demo_comp_ugc_* models + the ONE DemoCompMember back-relation are set aside
+  // (scripts/lib/uploadAuthUgcSupportAllowance.mjs — SHA-256 pinned, asserted below).
+  const now = stripDacSchema(stripPayoutBankSchema(stripUgcSchema(read('prisma/schema.prisma'))));
+  ok('Demo UGC Videos allowance: its schema lines and migration are exactly the pinned ones', ugcSchemaPinHolds() && ugcMigrationPinHolds());
   ok('Dashboard & Admin Controls allowance: its schema lines are exactly the pinned ones', dacSchemaPinHolds());
   ok('Phase 4 payout-bank allowance: its schema lines and migration are exactly the pinned ones', pbSchemaPinHolds() && pbMigrationPinHolds());
   const head = git(['show', 'ef79c6bb1e445c964f915effe558e817844db9f0:prisma/schema.prisma']);

@@ -45,6 +45,7 @@ import bcrypt from 'bcryptjs';
 import { makeRecruiterFakeDb } from './lib/recruiterFakeDb.mjs';
 import { isDemoCompPrisma, withoutDemoCompDiffLines, demoCompPinsHold } from './lib/demoCompetitionAllowance.mjs';
 import { isDacPrisma, withoutDacDiffLines, dacSchemaPinHolds, dacMigrationPinHolds } from './lib/dashboardAdminControlsAllowance.mjs';
+import { isUgcPrisma, withoutUgcDiffLines, ugcSchemaPinHolds, ugcMigrationPinHolds } from './lib/uploadAuthUgcSupportAllowance.mjs';
 import { PB_BASE, isPayoutBankPrisma, withoutPayoutBankDiffLines, pbSchemaPinHolds, pbMigrationPinHolds, pbLinePinHolds } from './lib/payoutBanksAllowance.mjs';
 
 const { recruiterAffiliateHandlers, RECRUITER_CREATE_RATE } = await import('../src/lib/recruiterAffiliateRouteHandlers.js');
@@ -701,7 +702,8 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
   // (scripts/lib/dashboardAdminControlsAllowance.mjs — SHA-256 pinned, asserted below).
   // Phase 4 (bank logo picker): its migration 20261115 and its exact schema lines likewise
   // (scripts/lib/payoutBanksAllowance.mjs — SHA-256 pinned, asserted below).
-  ].filter(Boolean).filter((f) => !isDemoCompPrisma(f) && !isDacPrisma(f) && !isPayoutBankPrisma(f)))].sort();
+  // Demo UGC Videos (simulation only): its migration 20261116 and exact schema lines likewise (scripts/lib/uploadAuthUgcSupportAllowance.mjs).
+  ].filter(Boolean).filter((f) => !isDemoCompPrisma(f) && !isDacPrisma(f) && !isPayoutBankPrisma(f) && !isUgcPrisma(f)))].sort();
   ok('prisma/ changed since 63abd2d ONLY by the Phase 5 files (schema.prisma + migration 20261106), the Phase 6 part 1 migrations 20261107 (activation codes) + 20261108 (admin activation recovery), the Phase 6 part 2 migration 20261109 (session version), the Phase 6 part 3a migration 20261110 (reward cycles) and the Phase 6 part 3c migration 20261111 (recruiter KYC)',
     eq(prismaFiles, ['prisma/migrations/20261106_recruiter_rewards_withdrawals/migration.sql', 'prisma/migrations/20261107_affiliate_activation_codes/migration.sql',
       'prisma/migrations/20261108_affiliate_activation_recovery/migration.sql', 'prisma/migrations/20261109_account_token_version/migration.sql',
@@ -711,8 +713,9 @@ console.log('\n13. The admin affiliate creation and the affiliate auth flow are 
       'prisma/schema.prisma']), prismaFiles.join(','));
   ok('Dashboard & Admin Controls allowance: its schema lines and migration are exactly the pinned ones', dacSchemaPinHolds() && dacMigrationPinHolds());
   ok('Phase 4 payout-bank allowance: its schema lines and migration are exactly the pinned ones', pbSchemaPinHolds() && pbMigrationPinHolds());
-  const schemaDiff = withoutPayoutBankDiffLines(withoutDacDiffLines(withoutDemoCompDiffLines(gitOut(['diff', '63abd2d42577570cad31082901f18b8544a0b38f', '--', 'prisma/schema.prisma']).split('\n')
-    .filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l)).map((l) => l[0] + l.slice(1).replace(/\s+/g, ' ').trim()))));
+  ok('Demo UGC Videos allowance: its schema lines and migration are exactly the pinned ones', ugcSchemaPinHolds() && ugcMigrationPinHolds());
+  const schemaDiff = withoutUgcDiffLines(withoutPayoutBankDiffLines(withoutDacDiffLines(withoutDemoCompDiffLines(gitOut(['diff', '63abd2d42577570cad31082901f18b8544a0b38f', '--', 'prisma/schema.prisma']).split('\n')
+    .filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l)).map((l) => l[0] + l.slice(1).replace(/\s+/g, ' ').trim())))));
   { const pins = demoCompPinsHold(); ok('Demo Competition allowance: its schema blocks and migration are exactly the pinned ones', pins.schema && pins.migration, pins); }
   const removedLines = schemaDiff.filter((l) => l.startsWith('-')).sort();
   // Phase 6 part 1 (documented): the AffiliateActivationCode model block (+ its /// doc comment) and the

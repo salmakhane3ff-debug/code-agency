@@ -238,7 +238,10 @@ console.log('\n4. Admin page wiring and unchanged surfaces');
   // Phase 4 (bank logo picker, approved): its bank-details edits of affiliateSystemService.js (line-pinned) and the recruiter wallet /
   // error-label files are set aside (exact list + pins in scripts/lib/payoutBanksAllowance.mjs); no order code is among them.
   const { isPayoutBankSrc } = await import('./lib/payoutBanksAllowance.mjs');
-  const changed = git(['diff', '--name-only', 'HEAD', '--', ...UNTOUCHED]).split('\n').filter((f) => f && !isPayoutBankSrc(f)).join('\n');
+  // Combined task (WhatsApp support button in the recruiter layout, Demo UGC tab, upload/auth fix): exact list in
+  // scripts/lib/uploadAuthUgcSupportAllowance.mjs — no order code among them.
+  const { isUausSrc } = await import('./lib/uploadAuthUgcSupportAllowance.mjs');
+  const changed = git(['diff', '--name-only', 'HEAD', '--', ...UNTOUCHED]).split('\n').filter((f) => f && !isPayoutBankSrc(f) && !isUausSrc(f)).join('\n');
   ok('GET /api/order, its controller / service / mapper, its 5 other consumers, affiliate & recruiter orders: unchanged', changed === '', changed);
   ok('GET /api/order still returns the plain array of every order (controller unchanged)',
     /const orders = await getAllOrders\(\);\s*\n\s*return Response\.json\(orders\);/.test(read('src/lib/controllers/orderController.js')));

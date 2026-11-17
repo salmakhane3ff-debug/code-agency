@@ -80,7 +80,10 @@ console.log("\n2. Keys used by the page");
   for (const m of code.matchAll(/setError\(\s*["']([a-z0-9_]+)["']\s*\)/g)) used.add(m[1]);
   const missing = [...used].filter((k) => !(k in fr) || !(k in ar));
   ok(`all ${used.size} keys referenced by the page exist in ar and fr`, used.size > 150 && missing.length === 0, missing.join());
-  const unused = Object.keys(fr).filter((k) => !used.has(k) && !["currency"].includes(k) && !page.includes(`"${k}"`) && !page.includes(`'${k}'`));
+  // The SIMULATED Demo Competition "UGC Videos" tab reads its ugcv_* texts from this dictionary in its own files
+  // (UgcVideosTab.jsx + src/components/demoCompetition/ugc/*), so they count as users too (scripts/demoCompUgcDashboard.test.mjs).
+  const ugcVideosSrc = ["../src/app/affiliate/dashboard/UgcVideosTab.jsx", "../src/components/demoCompetition/ugc/UgcVideoCards.jsx", "../src/components/demoCompetition/ugc/UgcVideoModal.jsx"].map(read).join("\n");
+  const unused = Object.keys(fr).filter((k) => !used.has(k) && !["currency"].includes(k) && !page.includes(`"${k}"`) && !page.includes(`'${k}'`) && !ugcVideosSrc.includes(`"${k}"`));
   ok("no orphan dictionary keys", unused.length === 0, unused.join());
 }
 

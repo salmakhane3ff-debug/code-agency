@@ -23,6 +23,7 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { stripUgcSchema } from './uploadAuthUgcSupportAllowance.mjs';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const DEMO_COMP_MIGRATION_DIR = '20261113_demo_competition';
@@ -105,7 +106,9 @@ export function withoutDemoCompDiffLines(lines) {
 
 /** True when the schema blocks and the migration are exactly the reviewed ones. */
 export function demoCompPinsHold(root = ROOT) {
-  const schema = readFileSync(`${root}prisma/schema.prisma`, 'utf8');
+  // Demo UGC Videos (scripts/lib/uploadAuthUgcSupportAllowance.mjs — own SHA pin): its 5 models and the ONE
+  // `ugcVideos` back-relation line in DemoCompMember are set aside; the 7 blocks are otherwise hashed unchanged.
+  const schema = stripUgcSchema(readFileSync(`${root}prisma/schema.prisma`, 'utf8'));
   const mig = readFileSync(`${root}${DEMO_COMP_MIGRATION}`, 'utf8');
   return { schema: sha(demoCompSchemaBlocks(schema)) === DEMO_COMP_SCHEMA_SHA, migration: sha(mig) === DEMO_COMP_MIGRATION_SHA };
 }

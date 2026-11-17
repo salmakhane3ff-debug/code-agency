@@ -5,7 +5,9 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Fixed WhatsApp contact button shown on public pages, controlled entirely from
  * Admin → UI Control (no hardcoded number). Renders nothing unless enabled and
- * a number is configured, and is hidden on admin/affiliate/login/checkout pages.
+ * a number is configured, and is hidden on admin/affiliate/recruiter/login/checkout pages
+ * (the affiliate dashboard and the recruiter pages show their own support button,
+ * src/components/support/DashboardWhatsAppButton.jsx, with this same number).
  *
  * Fixed-position → does not affect layout. Independent of the sticky cart bar
  * and the existing per-page WhatsApp links (this touches neither).
@@ -17,7 +19,7 @@ import { useUIControl } from "@/hooks/useUIControl";
 import { trackClarity } from "@/lib/trackClarity";
 
 // Routes where the floating button must never appear.
-const HIDDEN_PREFIXES = ["/admin", "/affiliate", "/login", "/checkout"];
+const HIDDEN_PREFIXES = ["/admin", "/affiliate", "/recruiter", "/login", "/checkout"];
 
 export default function FloatingWhatsApp() {
   const pathname = usePathname();

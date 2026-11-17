@@ -29,6 +29,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { withoutUgcDiffLines } from './uploadAuthUgcSupportAllowance.mjs';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 /** Base of this branch (feature/dashboard-admin-controls head) — every pinned diff is taken against it. */
@@ -152,7 +153,8 @@ const sha = (s) => createHash('sha256').update(s, 'utf8').digest('hex');
 const git = (args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' });
 const changedLines = (file) => git(['diff', PB_BASE, '--', file]).split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l));
 
-export const pbSchemaSha = () => sha(changedLines('prisma/schema.prisma').join('\n'));
+// The later Demo UGC Videos schema lines (scripts/lib/uploadAuthUgcSupportAllowance.mjs — own SHA pin) are set aside.
+export const pbSchemaSha = () => sha(withoutUgcDiffLines(changedLines('prisma/schema.prisma')).join('\n'));
 export const pbSchemaPinHolds = () => pbSchemaSha() === PB_SCHEMA_SHA;
 export const pbMigrationSha = () => sha(readFileSync(`${ROOT}${PB_MIGRATION}`, 'utf8'));
 export const pbMigrationPinHolds = () => pbMigrationSha() === PB_MIGRATION_SHA;

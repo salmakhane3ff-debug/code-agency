@@ -20,6 +20,7 @@ import { isDemoCompSrc } from "./lib/demoCompetitionAllowance.mjs";
 import { isDacSrc } from "./lib/dashboardAdminControlsAllowance.mjs";
 import { isNavHomepageSrc } from "./lib/navHomepageAllowance.mjs";
 import { isPayoutBankSrc } from "./lib/payoutBanksAllowance.mjs";
+import { isUausSrc } from "./lib/uploadAuthUgcSupportAllowance.mjs";
 import { readFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
@@ -199,7 +200,10 @@ const isBrandFinal = (f) => BRAND_FINAL_DESIGN.includes(f) || PAYMENT_PROOF_SCHE
   || isNavHomepageSrc(f)
   // Phase 4 — bank logo picker + admin bank management (exact list + line pins of the financial / guarded files:
   // scripts/lib/payoutBanksAllowance.mjs, asserted by the recruiter suites).
-  || isPayoutBankSrc(f);
+  || isPayoutBankSrc(f)
+  // Combined task — affiliate upload/session fix, R2 diagnostics, Demo UGC Videos, WhatsApp support button (exact list + line pins:
+  // scripts/lib/uploadAuthUgcSupportAllowance.mjs, asserted by the recruiter suites).
+  || isUausSrc(f);
 const outside = [...changed, ...untracked].filter((f) => !ALLOWED.some((re) => re.test(f)) && !isBrandFinal(f));
 ok("src changes stay inside the four areas + the shared language plumbing", outside.length === 0, outside);
 ok("no admin file changed (except the approved brand package-management files)", ![...changed, ...untracked].some((f) => !isBrandFinal(f) && (/^src\/(app|components)\/admin\//.test(f) || /^src\/app\/api\/admin\//.test(f))));
