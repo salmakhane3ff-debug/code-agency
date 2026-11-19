@@ -31,6 +31,7 @@ import { fileURLToPath } from 'node:url';
 import { DAC_BASE, dacRoutePinHolds } from './dashboardAdminControlsAllowance.mjs';
 import { PB_BASE, pbLinePinHolds } from './payoutBanksAllowance.mjs';
 import { UAUS_BASE, uausLinePinHolds } from './uploadAuthUgcSupportAllowance.mjs';
+import { rwRoutePinHolds } from './recentWinnersAllowance.mjs';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const PART2_BASE = '003c6f12c97c330536c7e6debb95cbd35397760b';
@@ -58,6 +59,7 @@ const git = (args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' })
 export function changedLines(base, file, to = null) {
   return git(['diff', base, ...(to ? [to] : []), '--', file]).split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l));
 }
+const existsAt = (rev, file) => { try { execFileSync('git', ['cat-file', '-e', `${rev}:${file}`], { cwd: ROOT, stdio: 'ignore' }); return true; } catch { return false; } };
 export const linesSha = (lines) => createHash('sha256').update(lines.join('\n'), 'utf8').digest('hex');
 
 /**
@@ -78,7 +80,11 @@ export function checkUnchangedExceptPart2(base, paths) {
   const dac = [];
   const pb = [];
   const uaus = [];
+  const rw = [];
   for (const file of [...changed].sort()) {
+    // Recent Winners (Rewards / Gifts page): the NEW read-only route GET /api/affiliate/rewards/winners — absent at the
+    // base and byte-identical to its pin (scripts/lib/recentWinnersAllowance.mjs) → reported in `rw`.
+    if (rwRoutePinHolds(file) && !existsAt(base, file)) { rw.push(file); continue; }
     // Combined task (upload/auth fix): a guarded auth file that differs from UAUS_BASE (d9f188a) by exactly its pinned
     // lines (scripts/lib/uploadAuthUgcSupportAllowance.mjs); its UAUS_BASE version must itself satisfy this rule
     // (unchanged versus `base`, or exactly its Part 2 pin) → reported in `uaus`.
@@ -111,7 +117,7 @@ export function checkUnchangedExceptPart2(base, paths) {
     if (JSON.stringify(sinceBase) !== JSON.stringify(part2) || linesSha(part2) !== pin) mismatched.push(file);
     else allowed.push(file);
   }
-  return { ok: unexpected.length === 0 && mismatched.length === 0, unexpected, mismatched, allowed, stageF, dac, pb, uaus };
+  return { ok: unexpected.length === 0 && mismatched.length === 0, unexpected, mismatched, allowed, stageF, dac, pb, uaus, rw };
 }
 
 // `node scripts/lib/phase6Part2Allowance.mjs` prints the current pins (for a reviewed refresh).

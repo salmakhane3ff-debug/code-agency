@@ -41,6 +41,7 @@ import { dropDemoCompSrc, isDemoCompPrisma, demoCompPinsHold } from './lib/demoC
 import { dropDacSrc, isDacPrisma, dacMigrationPinHolds, dacRoutePinHolds } from './lib/dashboardAdminControlsAllowance.mjs';
 import { dropNavHomepageSrc } from './lib/navHomepageAllowance.mjs';
 import { isUgcPrisma, ugcSchemaPinHolds, ugcMigrationPinHolds, dropUausSrc, uausLinePinHolds, UAUS_BASE } from './lib/uploadAuthUgcSupportAllowance.mjs';
+import { dropRwSrc, rwRoutePinHolds } from './lib/recentWinnersAllowance.mjs';
 import { isPayoutBankPrisma, dropPayoutBankSrc, pbIdenticalExceptPinned, pbLinePinHolds, pbMigrationPinHolds, pbSchemaPinHolds, PB_BASE } from './lib/payoutBanksAllowance.mjs';
 
 const { adminRecruiterHandlers, recruiterHandlers } = await import('../src/lib/recruiterRouteHandlers.js');
@@ -773,7 +774,7 @@ console.log('\n4. Regression and scope');
   // (scripts/lib/payoutBanksAllowance.mjs); the financial files it edits are line-pinned there and checked by the byte-identity pins.
   // Combined task (upload/auth fix, Demo UGC Videos, WhatsApp support — approved): its exact src files are dropped unless the list
   // below already names them (scripts/lib/uploadAuthUgcSupportAllowance.mjs; the two guarded auth files are line-pinned there).
-  ok('src/ changed versus the Part 4 base ONLY in the exact Part 4 files', ((exp) => eq(dropUausSrc(dropPayoutBankSrc(dropNavHomepageSrc(dropDacSrc(allSrc, exp), exp), exp), exp), exp))([
+  ok('src/ changed versus the Part 4 base ONLY in the exact Part 4 files', ((exp) => eq(dropRwSrc(dropUausSrc(dropPayoutBankSrc(dropNavHomepageSrc(dropDacSrc(allSrc, exp), exp), exp), exp), exp), exp))([
     'src/app/admin/recruiters/page.jsx', 'src/app/api/admin/recruiters/[id]/permissions/route.js',
     'src/app/recruiter/affiliates/activation/page.jsx', 'src/app/recruiter/affiliates/new/page.jsx',
     'src/app/recruiter/network/networkUi.jsx', 'src/app/recruiter/network/page.jsx', 'src/app/recruiter/network/stats/page.jsx', 'src/app/recruiter/page.jsx',
@@ -1042,7 +1043,9 @@ console.log('\n4. Regression and scope');
     .filter((f) => !(pbLinePinHolds(f) && git(['diff', '--name-only', PART4_BASE, PB_BASE, '--', f]).trim() === ''))
     // Combined task (affiliate session fix): the affiliate auth route + withAffiliateAuth differ from UAUS_BASE by exactly their
     // pinned lines (logout DELETE, stale-cookie handling) and were otherwise unchanged versus the Part 4 base.
-    .filter((f) => !(uausLinePinHolds(f) && git(['diff', '--name-only', PART4_BASE, UAUS_BASE, '--', f]).trim() === ''));
+    .filter((f) => !(uausLinePinHolds(f) && git(['diff', '--name-only', PART4_BASE, UAUS_BASE, '--', f]).trim() === ''))
+    // Recent Winners: the NEW read-only route GET /api/affiliate/rewards/winners, byte-identical to its pin (scripts/lib/recentWinnersAllowance.mjs).
+    .filter((f) => !rwRoutePinHolds(f));
   ok('no file changed under the affiliate API, the admin identity API, the recruiter API or the middleware (only the new Phase 7 route src/app/api/recruiter/progress/route.js)',
     eq(dirs, ['src/app/api/recruiter/progress/route.js']), dirs.join(','));
   ok('the creation permission check stays in the service under the row lock, before the replay lookup (unchanged order)', (() => {

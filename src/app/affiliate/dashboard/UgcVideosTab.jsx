@@ -2,8 +2,9 @@
 /**
  * src/app/affiliate/dashboard/UgcVideosTab.jsx
  * ─────────────────────────────────────────────────────────────────────────────
- * Affiliate dashboard tab "UGC Videos" (?tab=ugc-videos) — the SIMULATED Demo Competition leaderboard
- * of UGC videos. NOT the real UGC tab (?tab=ugc, UgcTab.jsx): separate id, separate data.
+ * The FULL "UGC Videos" leaderboard of the SIMULATED Demo Competition (podium + every ranked video + player),
+ * shown on /top-ugc-videos — the "Voir tout" page of the dashboard home's compact Top 3 section
+ * (src/components/demoCompetition/ugc/HomeTopUgcVideos.jsx). NOT the real UGC tab (?tab=ugc, UgcTab.jsx).
  *
  *   · Data: ONLY the public read-only GET /api/demo-competition/ugc-videos (no auth, short CDN cache),
  *     polled through the shared Demo Competition live poller (useLivePolling: same 5 s interval as

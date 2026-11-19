@@ -12,7 +12,7 @@ import {
   X,
 } from "lucide-react";
 import UgcTab from "./UgcTab";
-import UgcVideosTab from "./UgcVideosTab";
+import HomeTopUgcVideos from "@/components/demoCompetition/ugc/HomeTopUgcVideos";
 import DepositTab from "./DepositTab";
 import BoosterTab from "./BoosterTab";
 import BrandTab from "./BrandTab";
@@ -1350,7 +1350,6 @@ export default function AffiliateDashboard() {
     { id: "brand",         label: t("tab_brand") },
     { id: "rewards",       label: t("tab_rewards") },
     { id: "ugc",           label: t("tab_ugc") },
-    { id: "ugc-videos",    label: t("tab_ugc_videos") },
     { id: "notifications", label: unread > 0 ? t("tab_notifications_count", { n: unread }) : t("tab_notifications") },
     { id: "team",          label: t("tab_team", { n: team.length }) },
     { id: "settings",      label: t("tab_settings") },
@@ -1655,6 +1654,13 @@ export default function AffiliateDashboard() {
             {/* 🏆 Demo Competition: Top Members + Top Brands (rolling 30 days), in the approved Store
                 Homepage design — inline on the overview, where the competition block was. */}
             <CompetitionTab lang={lang} />
+
+            {/* 🎬 Demo Competition: Top 3 UGC Videos (rolling 30 days) — the third compact ranking section, right
+                below Top Members / Top Brands, in their row design; "Voir tout" → /top-ugc-videos. One column from
+                lg, like each of them. Reads only /api/demo-competition/ugc-videos; hidden while the module is off. */}
+            <div className="grid items-start gap-3 lg:grid-cols-2 lg:gap-5">
+              <HomeTopUgcVideos />
+            </div>
 
             {/* Referral CTA (kept directly below the competition) */}
             <ReferralCta link={refLink} ratePct={((affiliate?.commissionRate || 0) * 100).toFixed(0)} />
@@ -2716,9 +2722,6 @@ export default function AffiliateDashboard() {
         {activeTab === "rewards" && <RewardsTab />}
 
         {activeTab === "ugc" && <UgcTab />}
-
-        {/* SIMULATED Demo Competition "UGC Videos" leaderboard — reads only /api/demo-competition/ugc-videos. */}
-        {activeTab === "ugc-videos" && <UgcVideosTab />}
 
         {/* Competition now lives inline on the overview (no standalone tab). */}
 

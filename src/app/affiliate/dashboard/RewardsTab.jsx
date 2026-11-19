@@ -15,6 +15,7 @@ import { Loader2, Gift, ImageIcon, Truck, Copy, Check, X, ChevronDown, AlertTria
 import { useLanguage } from "@/context/LanguageContext";
 import { rewardsT, rewardsDir, cancellationNote, REWARDS_TEXT } from "@/lib/rewardsI18n";
 import { knownServerError } from "@/lib/serverText/affiliateServerText";
+import RecentWinners from "@/components/rewards/RecentWinners";
 
 function authHeaders(json = false) {
   const t = (typeof localStorage !== "undefined" && localStorage.getItem("affiliateToken")) || "";
@@ -116,6 +117,9 @@ export default function RewardsTab() {
           {notice}<button onClick={() => setNotice(null)} aria-label={t("close")}><X className="w-4 h-4" /></button>
         </p>
       )}
+
+      {/* Recent Winners slider: under the points card (and its alerts), above the gifts listing */}
+      <RecentWinners t={t} lang={lang} dir={dir} />
 
       {/* Sub-tabs */}
       <div className="flex gap-1.5 overflow-x-auto pb-1">

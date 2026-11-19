@@ -36,6 +36,7 @@ import { dropDacSrc } from './lib/dashboardAdminControlsAllowance.mjs';
 import { dropNavHomepageSrc } from './lib/navHomepageAllowance.mjs';
 import { dropPayoutBankSrc, pbIdenticalExceptPinned } from './lib/payoutBanksAllowance.mjs';
 import { dropUausSrc } from './lib/uploadAuthUgcSupportAllowance.mjs';
+import { dropRwSrc } from './lib/recentWinnersAllowance.mjs';
 
 const RS = await import('../src/lib/services/recruiterRewardService.js');
 const WS = await import('../src/lib/services/recruiterWalletService.js');
@@ -556,7 +557,7 @@ console.log('\n11. Affiliate commissions, points, balances and payouts untouched
   // (scripts/lib/payoutBanksAllowance.mjs); the financial files it edits are line-pinned there and checked by the byte-identity pins.
   // Combined task (upload/auth fix, Demo UGC Videos, WhatsApp support — approved): its exact src files are dropped unless the list
   // below already names them (scripts/lib/uploadAuthUgcSupportAllowance.mjs; the two guarded auth files are line-pinned there).
-  ok('src/ changed versus the part 3 base commit ONLY in the Part 3a files + the Part 3b files errorLabels.js / recruiterRewardAdminHandlers.js + the exact Part 3c recruiter KYC files + the exact Part 4 permission files (no commission / points / balance / payout / affiliate KYC file)', ((exp) => eq(dropUausSrc(dropPayoutBankSrc(dropNavHomepageSrc(dropDacSrc(allSrc, exp), exp), exp), exp), exp))([
+  ok('src/ changed versus the part 3 base commit ONLY in the Part 3a files + the Part 3b files errorLabels.js / recruiterRewardAdminHandlers.js + the exact Part 3c recruiter KYC files + the exact Part 4 permission files (no commission / points / balance / payout / affiliate KYC file)', ((exp) => eq(dropRwSrc(dropUausSrc(dropPayoutBankSrc(dropNavHomepageSrc(dropDacSrc(allSrc, exp), exp), exp), exp), exp), exp))([
     'src/app/admin/recruiter-identity/page.jsx', 'src/app/admin/recruiter-rewards/page.jsx', 'src/app/api/admin/affiliate-orders/route.js',
     'src/app/api/admin/recruiter-identity/[id]/[side]/route.js', 'src/app/api/admin/recruiter-identity/route.js', 'src/app/api/recruiter/identity/route.js',
     'src/app/recruiter/errorLabels.js', 'src/app/recruiter/page.jsx', 'src/app/recruiter/verification/page.jsx', 'src/app/recruiter/wallet/page.jsx',

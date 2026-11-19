@@ -84,7 +84,6 @@ const fr = {
   more_brand: "Créez votre marque",
   more_rewards: "Récompenses",
   more_ugc: "UGC",
-  more_ugc_videos: "Vidéos UGC",
   more_team: "Équipe",
   more_payout: "Solde et retraits",
   more_deposit: "Recharger le solde",
@@ -168,7 +167,6 @@ const fr = {
   tab_brand: "🏪 Créez votre marque",
   tab_rewards: "🎁 Récompenses",
   tab_ugc: "💰 Video UGC",
-  tab_ugc_videos: "Vidéos UGC",
   tab_notifications: "Notifs",
   tab_notifications_count: "Notifs ({n})",
   tab_team: "Équipe ({n})",
@@ -333,6 +331,7 @@ const fr = {
   // ── "UGC Videos" tab (SIMULATED Demo Competition leaderboard — UgcVideosTab.jsx + components/demoCompetition/ugc) ──
   // Required by the product owner on this tab: a visible demo / simulation marking (badge + note).
   ugcv_title: "Classement des vidéos UGC",
+  ugcv_home_title: "Top Vidéos UGC",
   ugcv_subtitle: "Classement sur 30 jours glissants · mise à jour en direct",
   ugcv_videos_count: "vidéos",
   ugcv_podium_label: "Podium des vidéos UGC",
@@ -426,7 +425,6 @@ const ar = {
   more_brand: "أنشئ علامتك التجارية",
   more_rewards: "المكافآت",
   more_ugc: "UGC",
-  more_ugc_videos: "فيديوهات UGC",
   more_team: "الفريق",
   more_payout: "الرصيد والسحب",
   more_deposit: "شحن الرصيد",
@@ -510,7 +508,6 @@ const ar = {
   tab_brand: "🏪 أنشئ علامتك التجارية",
   tab_rewards: "🎁 المكافآت",
   tab_ugc: "💰 فيديو UGC",
-  tab_ugc_videos: "فيديوهات UGC",
   tab_notifications: "الإشعارات",
   tab_notifications_count: "الإشعارات ({n})",
   tab_team: "الفريق ({n})",
@@ -674,6 +671,7 @@ const ar = {
 
   // ── "UGC Videos" tab (SIMULATED Demo Competition leaderboard) ──
   ugcv_title: "ترتيب فيديوهات UGC",
+  ugcv_home_title: "أفضل فيديوهات UGC",
   ugcv_subtitle: "ترتيب آخر 30 يوماً · تحديث مباشر",
   ugcv_videos_count: "فيديو",
   ugcv_podium_label: "منصة تتويج فيديوهات UGC",

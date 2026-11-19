@@ -194,7 +194,7 @@ console.log('\n3. Landing Page Only Mode never redirects /recruiter or /affiliat
     && ev('/admin').action === 'next' && ev('/api/x').action === 'next' && ev('/', { ...cfg, enabled: false }).action === 'next');
   // Demo Competition (approved decision 7): /top-members and /top-brands join the Landing Page Only Mode allowlist —
   // the only expectation change here; the list is still exact and still in one place.
-  ok('landingMode.js: the allowlist is the ALWAYS_PREFIXES constant (one place)', /const ALWAYS_PREFIXES = \["\/admin", "\/api", "\/_next", "\/uploads", "\/recruiter", "\/affiliate\/activate", "\/top-members", "\/top-brands"\];/.test(read('src/lib/landingMode.js')));
+  ok('landingMode.js: the allowlist is the ALWAYS_PREFIXES constant (one place)', /const ALWAYS_PREFIXES = \["\/admin", "\/api", "\/_next", "\/uploads", "\/recruiter", "\/affiliate\/activate", "\/top-members", "\/top-brands", "\/top-ugc-videos"\];/.test(read('src/lib/landingMode.js')));
 }
 
 // ── 4. static source assertions ─────────────────────────────────────────────────

@@ -17,9 +17,9 @@
 // Route prefixes that must never be redirected. "/recruiter" (the recruiter area) and
 // "/affiliate/activate" (an affiliate choosing their password with an activation code) are
 // operational pages, never storefront: Landing Page Only Mode must not lock them out.
-// "/top-members" and "/top-brands" (the public Demo Competition leaderboards + profiles,
+// "/top-members", "/top-brands" and "/top-ugc-videos" (the public Demo Competition leaderboards + profiles,
 // SIMULATION ONLY) stay reachable too.
-const ALWAYS_PREFIXES = ["/admin", "/api", "/_next", "/uploads", "/recruiter", "/affiliate/activate", "/top-members", "/top-brands"];
+const ALWAYS_PREFIXES = ["/admin", "/api", "/_next", "/uploads", "/recruiter", "/affiliate/activate", "/top-members", "/top-brands", "/top-ugc-videos"];
 // Exact infrastructure files.
 const ALWAYS_EXACT = new Set([
   "/favicon.ico", "/robots.txt", "/sitemap.xml",

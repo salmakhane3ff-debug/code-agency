@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * scripts/demoCompUgcDashboard.test.mjs — affiliate dashboard tab "UGC Videos" (?tab=ugc-videos), the SIMULATED
+ * scripts/demoCompUgcDashboard.test.mjs — affiliate dashboard "UGC Videos" board (on the overview / home), the SIMULATED
  * Demo Competition leaderboard of UGC videos:
  *   1. navigation: tab id whitelisted (deep link), desktop tab bar, mobile More sheet; the real UGC tab ('ugc') unchanged;
  *   2. isolation: the tab reads ONLY /api/demo-competition/ugc-videos (no real UGC, orders, earnings, wallet, no auth);
@@ -39,24 +39,49 @@ const MODAL = CODE[`${UGC_DIR}/UgcVideoModal.jsx`] || '';
 const PAGE = read('src/app/affiliate/dashboard/page.jsx');
 const NAV = read('src/components/affiliate/MobileBottomNav.jsx');
 
-// ── 1. Navigation ─────────────────────────────────────────────────────────────
-console.log('1. Navigation (deep link, desktop tab bar, mobile More sheet)');
+// ── 1. Placement: the dashboard HOME (overview), not a tab ───────────────────────
+console.log('1. Placement (overview, below Top Members / Top Brands; no tab, no More-sheet entry)');
 {
-  ok('files exist (tab + cards + modal + pure helpers)', ['UgcVideoCards.jsx', 'UgcVideoModal.jsx', 'ugcVideos.js'].every((f) => ugcFiles.includes(`${UGC_DIR}/${f}`)) && existsSync(`${ROOT}${TAB_PATH}`));
-  ok('"ugc-videos" is a whitelisted dashboard tab, distinct from the real "ugc" tab', N.DASHBOARD_TABS.includes('ugc-videos') && N.DASHBOARD_TABS.includes('ugc'));
-  ok('parseDashboardTab: ?tab=ugc-videos → ugc-videos; ?tab=ugc still → the real UGC tab',
-    N.parseDashboardTab('?tab=ugc-videos') === 'ugc-videos' && N.parseDashboardTab('?x=1&tab=ugc-videos') === 'ugc-videos' && N.parseDashboardTab('?tab=ugc') === 'ugc');
-  ok('look-alike ids are refused', ['?tab=ugc-video', '?tab=UGC-VIDEOS', '?tab=ugc-videos%3Cx', '?tab=ugc_videos'].every((s) => N.parseDashboardTab(s) === null));
-  ok('dashboardTabHref(ugc-videos) → /affiliate/dashboard?tab=ugc-videos', N.dashboardTabHref('ugc-videos') === '/affiliate/dashboard?tab=ugc-videos');
-  ok('desktop tab bar: "ugc-videos" right after the real "ugc" tab (translated label)',
-    /\{ id: "ugc",\s+label: t\("tab_ugc"\) \},\n\s+\{ id: "ugc-videos",\s+label: t\("tab_ugc_videos"\) \},/.test(PAGE));
-  ok('the page renders the tab on its own id and keeps the real UGC tab',
-    /import UgcVideosTab from "\.\/UgcVideosTab";/.test(PAGE) && /\{activeTab === "ugc-videos" && <UgcVideosTab \/>\}/.test(PAGE) && /\{activeTab === "ugc" && <UgcTab \/>\}/.test(PAGE));
-  ok('mobile More sheet: "ugc-videos" entry after "UGC" (Clapperboard icon, translated label), settings still last',
-    /tab: "ugc" \},\n\s+\{ icon: Clapperboard, label: t\("more_ugc_videos"\),\s+tab: "ugc-videos" \},/.test(NAV)
-    && /Clapperboard,?\s*\n?\} from "lucide-react";/.test(NAV) && /const moreItems = \[[\s\S]*?tab: "settings" \},\n  \];/.test(NAV));
-  ok('labels: FR « Vidéos UGC », AR « فيديوهات UGC » (desktop + More sheet)',
-    DT.fr.tab_ugc_videos === 'Vidéos UGC' && DT.ar.tab_ugc_videos === 'فيديوهات UGC' && DT.fr.more_ugc_videos === 'Vidéos UGC' && DT.ar.more_ugc_videos === 'فيديوهات UGC');
+  ok('files exist (board + cards + modal + pure helpers)', ['UgcVideoCards.jsx', 'UgcVideoModal.jsx', 'ugcVideos.js'].every((f) => ugcFiles.includes(`${UGC_DIR}/${f}`)) && existsSync(`${ROOT}${TAB_PATH}`));
+  ok('"ugc-videos" is NOT a dashboard tab; the real "ugc" tab is kept', !N.DASHBOARD_TABS.includes('ugc-videos') && N.DASHBOARD_TABS.includes('ugc'));
+  ok('an old ?tab=ugc-videos link is not a known tab (→ the overview, where the board is); ?tab=ugc still → the real UGC tab',
+    N.parseDashboardTab('?tab=ugc-videos') === null && N.parseDashboardTab('?x=1&tab=ugc-videos') === null && N.parseDashboardTab('?tab=ugc') === 'ugc');
+  ok('desktop tab bar: no "ugc-videos" entry (the real "ugc" tab stays)', !/id: "ugc-videos"/.test(PAGE) && /\{ id: "ugc",\s+label: t\("tab_ugc"\) \},/.test(PAGE));
+  ok('no tab panel for it any more; the real UGC tab panel is kept', !/activeTab === "ugc-videos"/.test(PAGE) && /\{activeTab === "ugc" && <UgcTab \/>\}/.test(PAGE));
+  const overview = (() => { const i = PAGE.indexOf('{activeTab === "overview" && ('); const j = PAGE.indexOf('{activeTab === "orders"', i); return i >= 0 && j > i ? PAGE.slice(i, j) : ''; })();
+  ok('the overview renders the compact Top 3 section right below Top Members / Top Brands (CompetitionTab), above the referral CTA',
+    /import HomeTopUgcVideos from "@\/components\/demoCompetition\/ugc\/HomeTopUgcVideos";/.test(PAGE)
+    && /<CompetitionTab lang=\{lang\} \/>[\s\S]*?<HomeTopUgcVideos \/>[\s\S]*?<ReferralCta /.test(overview)
+    && (PAGE.match(/<HomeTopUgcVideos\b/g) || []).length === 1 && !/<UgcVideosTab\b/.test(PAGE));
+  ok('desktop: one column, like each of Top Members / Top Brands (lg:grid-cols-2 cell)',
+    /<div className="grid items-start gap-3 lg:grid-cols-2 lg:gap-5">\s*<HomeTopUgcVideos \/>\s*<\/div>/.test(overview));
+  ok('Top Members / Top Brands untouched: CompetitionTab still renders DemoCompetitionBlock with HomeTopMembers + HomeTopBrands',
+    /<DemoCompetitionBlock count=\{count\} lang=\{lang\}>[\s\S]*?<HomeTopMembers [\s\S]*?<HomeTopBrands [\s\S]*?<\/DemoCompetitionBlock>/.test(PAGE));
+  ok('mobile More sheet: no UGC Videos entry (no Clapperboard, no ugc-videos)', !/ugc-videos|Clapperboard|more_ugc_videos/.test(NAV));
+  ok('no tab label keys any more (tab_ugc_videos / more_ugc_videos), FR + AR',
+    !('tab_ugc_videos' in DT.fr) && !('more_ugc_videos' in DT.fr) && !('tab_ugc_videos' in DT.ar) && !('more_ugc_videos' in DT.ar));
+  // The compact home section: the Top Members / Top Brands frame + row design, Top 3 only, "Voir tout" → the full page.
+  const H = CODE[`${UGC_DIR}/HomeTopUgcVideos.jsx`] || '';
+  const CL = strip(read('src/components/demoCompetition/CompactLeaderboard.jsx'));
+  ok('home section: the SAME HomeSectionFrame as Top Members / Top Brands, "Voir tout" → /top-ugc-videos',
+    /import HomeSectionFrame from "\.\.\/HomeSectionFrame";/.test(H) && /<HomeSectionFrame\b[\s\S]*?viewAllHref=\{UGC_FULL_PAGE\} showViewAll/.test(H) && /export const UGC_FULL_PAGE = "\/top-ugc-videos";/.test(H));
+  ok('home section: Top 3 only (limit 3 + slice), one row per video in a vertical list (flex-col), no side-by-side cards',
+    /export const UGC_HOME_COUNT = UGC_PODIUM_SIZE;/.test(H) && /\.slice\(0, UGC_HOME_COUNT\)/.test(H) && /<ol className="flex flex-col gap-2"/.test(H)
+    && !/PodiumCard|grid-cols|md:order/.test(H));
+  // The row's class list, with the item variable name normalised (CompactRow: item.rank — here: v.rank).
+  const rowClass = (src) => ((/className=\{`(dc-row \$\{TOP\[[^\]]+\] \|\| ""\} \$\{flash \? "dc-highlight" : ""\}) [^`]*?flex min-h-\[60px\][^`]*?`\}/.exec(src) || [])[1] || '').replace(/TOP\[\w+\.rank\]/, 'TOP[rank]');
+  ok('home rows: the CompactRow design (same dc-row tint / highlight classes, 60 px row, sm medal, 34 px image, end numbers, chevron)',
+    rowClass(H) === rowClass(CL) && !!rowClass(H) && /<RankBadge rank=\{v\.rank\} t=\{dt\} size="sm" \/>/.test(H) && /h-\[34px\] w-\[34px\]/.test(H)
+    && /text-\[14px\] font-extrabold text-gray-900/.test(H) && /<ChevronRight className="h-4 w-4 shrink-0 text-gray-300 rtl:rotate-180"/.test(H));
+  ok('home rows: thumbnail, rank, title, creator, sales, reward; a row opens the existing player (no <video> in the row)',
+    /<VideoThumb src=\{v\.thumbnailUrl\}/.test(H) && /\{v\.title\}/.test(H) && /<CreatorText owner=\{v\.owner\}/.test(H) && /<Count value=\{v\.sales\}/.test(H)
+    && /<Money cents=\{v\.totalRewardCents\}/.test(H) && /onClick=\{\(\) => onOpen\(v\)\}/.test(H) && /<UgcVideoModal video=\{current\}/.test(H) && !/<video\b/.test(H));
+  ok('home section: hidden while the module is switched off or nothing is ranked (like an empty Top Members)',
+    /hidden=\{view === "disabled" \|\| view === "empty"\}/.test(H));
+  ok('full page /top-ugc-videos: the existing full board, same frame as /top-members, no simulation footnote; Top layout',
+    /import UgcVideosTab from "@\/app\/affiliate\/dashboard\/UgcVideosTab";/.test(read('src/app/top-ugc-videos/page.jsx')) && /<UgcVideosTab \/>/.test(read('src/app/top-ugc-videos/page.jsx'))
+    && !/SimulationNote|PageShell|disclosure/.test(read('src/app/top-ugc-videos/page.jsx')) && /<AffiliateNavGate \/>/.test(read('src/app/top-ugc-videos/layout.jsx'))
+    && /"\/top-ugc-videos"/.test(read('src/lib/landingMode.js')));
 }
 
 // ── 2. Isolation ──────────────────────────────────────────────────────────────

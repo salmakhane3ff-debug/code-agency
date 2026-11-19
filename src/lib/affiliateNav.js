@@ -13,11 +13,12 @@
 
 /**
  * Every tab of the affiliate dashboard (desktop tab bar + More sheet + the overview-only booster).
- * 'ugc' is the REAL UGC tab (the affiliate's own videos); 'ugc-videos' is the SIMULATED Demo Competition
- * "UGC Videos" leaderboard (src/app/affiliate/dashboard/UgcVideosTab.jsx) — two separate tabs.
+ * 'ugc' is the REAL UGC tab (the affiliate's own videos). The SIMULATED Demo Competition "UGC Videos"
+ * leaderboard is NOT a tab: it is shown on the overview (home) below Top Members / Top Brands — an old
+ * ?tab=ugc-videos link is not a known tab and simply opens the overview.
  */
 export const DASHBOARD_TABS = Object.freeze([
-  'overview', 'orders', 'bank', 'payout', 'deposit', 'brand', 'rewards', 'ugc', 'ugc-videos', 'notifications', 'team', 'settings', 'booster',
+  'overview', 'orders', 'bank', 'payout', 'deposit', 'brand', 'rewards', 'ugc', 'notifications', 'team', 'settings', 'booster',
 ]);
 export const DASHBOARD_PATH = '/affiliate/dashboard';
 

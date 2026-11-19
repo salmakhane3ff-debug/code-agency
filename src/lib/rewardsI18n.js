@@ -100,6 +100,18 @@ const fr = {
   ledger_REDEMPTION_DEBIT: "Demande de cadeau",
   ledger_REDEMPTION_REFUND: "Remboursement",
   ledger_ADMIN_ADJUSTMENT: "Ajustement",
+  // Recent Winners (slider under the points card)
+  winners_title: "Les gagnants récents",
+  winners_subtitle: "Découvrez les derniers membres qui ont gagné leurs cadeaux avec leurs points !",
+  winners_empty: "Aucun gagnant pour le moment. Soyez le premier !",
+  winners_error: "Impossible de charger les gagnants.",
+  winners_retry: "Réessayer",
+  winners_prev: "Gagnants précédents",
+  winners_next: "Gagnants suivants",
+  winners_page: "Page {n} sur {total}",
+  winners_member: "Membre",
+  winners_won: "{name} a gagné {gift}",
+  winners_demo_note: "Certains gagnants affichés sont des profils de démonstration (simulation), pas des cadeaux réellement gagnés.",
 };
 
 const ar = {
@@ -190,6 +202,17 @@ const ar = {
   ledger_REDEMPTION_DEBIT: "طلب هدية",
   ledger_REDEMPTION_REFUND: "استرجاع نقاط",
   ledger_ADMIN_ADJUSTMENT: "تعديل",
+  winners_title: "الفائزون مؤخراً",
+  winners_subtitle: "تعرف على آخر الأعضاء الذين ربحوا هداياهم بالنقاط!",
+  winners_empty: "لا يوجد فائزون حالياً. كن أول الفائزين!",
+  winners_error: "تعذّر تحميل الفائزين.",
+  winners_retry: "إعادة المحاولة",
+  winners_prev: "الفائزون السابقون",
+  winners_next: "الفائزون التاليون",
+  winners_page: "الصفحة {n} من {total}",
+  winners_member: "عضو",
+  winners_won: "{name} ربح {gift}",
+  winners_demo_note: "بعض الفائزين المعروضين ملفات تجريبية (محاكاة)، وليست هدايا رُبحت فعلياً.",
 };
 
 export const REWARDS_TEXT = Object.freeze({ fr: Object.freeze(fr), ar: Object.freeze(ar) });

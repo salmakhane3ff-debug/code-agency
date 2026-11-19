@@ -31,8 +31,8 @@ const CSS = read('src/app/globals.css');
 // ── 1a. Pure helpers ───────────────────────────────────────────────────────────
 console.log('1a. affiliateNav helpers');
 {
-  // 13 since the SIMULATED Demo Competition "UGC Videos" tab ('ugc-videos', scripts/demoCompUgcDashboard.test.mjs).
-  ok('every dashboard tab is whitelisted (13, incl. booster and ugc-videos)', N.DASHBOARD_TABS.length === 13 && N.DASHBOARD_TABS.includes('booster') && N.DASHBOARD_TABS.includes('overview') && N.DASHBOARD_TABS.includes('ugc-videos'));
+  // 12: the SIMULATED Demo Competition "UGC Videos" board is shown on the overview, NOT as a tab (scripts/demoCompUgcDashboard.test.mjs).
+  ok('every dashboard tab is whitelisted (12, incl. booster; no ugc-videos tab)', N.DASHBOARD_TABS.length === 12 && N.DASHBOARD_TABS.includes('booster') && N.DASHBOARD_TABS.includes('overview') && !N.DASHBOARD_TABS.includes('ugc-videos'));
   ok('?tab= known tab → that tab', N.DASHBOARD_TABS.every((t) => N.parseDashboardTab(`?tab=${t}`) === t) && N.parseDashboardTab('?x=1&tab=ugc') === 'ugc');
   ok('?tab= unknown / injected / empty → null', ['?tab=admin', '?tab=UGC', '?tab=ugc%3Cscript', '?tab=', '', null, undefined, 42, '?tab=__proto__']
     .every((s) => N.parseDashboardTab(s) === null));
@@ -64,11 +64,9 @@ console.log('\n1b. MobileBottomNav moved unchanged');
   const oldFn = fnOf(before), newFn = fnOf(NAV);
   const STYLE_OLD = 'style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>';
   const STYLE_NEW = 'style={{ paddingBottom: "env(safe-area-inset-bottom)", paddingLeft: "env(safe-area-inset-left)", paddingRight: "env(safe-area-inset-right)" }}>';
-  // Later approved change: the More sheet gains ONE entry, the Demo Competition "UGC Videos" tab, right after "UGC".
-  const UGC_ITEM = '    { icon: Video,       label: t("more_ugc"),           tab: "ugc" },\n';
-  const UGC_VIDEOS_ITEM = '    { icon: Clapperboard, label: t("more_ugc_videos"),   tab: "ugc-videos" },\n';
-  ok('the component is the dashboard\'s, character for character (only the bar gains left/right safe-area padding and the More sheet the "UGC Videos" entry)',
-    oldFn.length > 4000 && newFn === oldFn.replace(STYLE_OLD, STYLE_NEW).replace(UGC_ITEM, UGC_ITEM + UGC_VIDEOS_ITEM));
+  // (The Demo Competition "UGC Videos" board is on the overview — the More sheet has no entry for it.)
+  ok('the component is the dashboard\'s, character for character (only the bar gains left/right safe-area padding)',
+    oldFn.length > 4000 && newFn === oldFn.replace(STYLE_OLD, STYLE_NEW));
   ok('the dashboard no longer defines it and imports the shared one', !/function MobileBottomNav\(/.test(PAGE) && /import MobileBottomNav from "@\/components\/affiliate\/MobileBottomNav";/.test(PAGE));
   ok('client component with the same hook + dictionary', /^"use client";/.test(NAV) && /useMarketLocale\(AFFILIATE_DASHBOARD_TEXT\)/.test(NAV) && /export default MobileBottomNav;/.test(NAV));
 }
@@ -90,11 +88,12 @@ console.log('\n1c. AffiliateNavGate + Top layouts');
     ok(`${l}: renders the page then the gate; viewport-fit=cover`, /\{children\}\s*<AffiliateNavGate \/>/.test(s) && /export const viewport = \{ viewportFit: "cover" \};/.test(s));
   }
   const users = SRC.filter((f) => /<AffiliateNavGate\b/.test(read(f)));
-  ok('the gate is mounted ONLY by the two Top layouts (no other storefront page)', JSON.stringify(users.sort()) === JSON.stringify(['src/app/top-brands/layout.jsx', 'src/app/top-members/layout.jsx']), users.join());
+  // + the full UGC Videos leaderboard (/top-ugc-videos — the "Voir tout" of the dashboard home's Top UGC Videos), same layout.
+  ok('the gate is mounted ONLY by the three Top layouts (no other storefront page)', JSON.stringify(users.sort()) === JSON.stringify(['src/app/top-brands/layout.jsx', 'src/app/top-members/layout.jsx', 'src/app/top-ugc-videos/layout.jsx']), users.join());
   const navUsers = SRC.filter((f) => /<MobileBottomNav\b/.test(read(f)));
   ok('the nav itself is rendered only by the dashboard and the gate', JSON.stringify(navUsers.sort()) === JSON.stringify(['src/app/affiliate/dashboard/page.jsx', 'src/components/affiliate/AffiliateNavGate.jsx']), navUsers.join());
   const cover = SRC.filter((f) => /viewportFit:\s*"cover"/.test(read(f)));
-  ok('viewport-fit=cover only on the affiliate area + the two Top layouts', JSON.stringify(cover.sort()) === JSON.stringify(['src/app/affiliate/layout.jsx', 'src/app/top-brands/layout.jsx', 'src/app/top-members/layout.jsx']), cover.join());
+  ok('viewport-fit=cover only on the affiliate area + the three Top layouts', JSON.stringify(cover.sort()) === JSON.stringify(['src/app/affiliate/layout.jsx', 'src/app/top-brands/layout.jsx', 'src/app/top-members/layout.jsx', 'src/app/top-ugc-videos/layout.jsx']), cover.join());
   ok('the affiliate layout still wraps the area in MarketScope', /<MarketScope>\s*\{children\}[\s\S]*?<\/MarketScope>/.test(read('src/app/affiliate/layout.jsx')) /* (+ the dashboard WhatsApp support button after the children) */);
 }
 

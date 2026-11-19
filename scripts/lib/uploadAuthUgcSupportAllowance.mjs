@@ -65,6 +65,8 @@ export const UAUS_SRC_FILES = Object.freeze([
 export const UAUS_SRC_DIRS = Object.freeze([
   /^src\/app\/api\/admin\/demo-competition\/ugc-videos\//,
   /^src\/app\/api\/demo-competition\/ugc-videos\//,
+  // the full UGC Videos leaderboard page ("Voir tout" of the dashboard home's Top 3 section) + its layout
+  /^src\/app\/top-ugc-videos\//,
 ]);
 
 /** Guarded files (Phase 6 part 2 pins / guarded middleware + affiliate API dirs): allowed ONLY with exactly these +/- lines vs UAUS_BASE. */
