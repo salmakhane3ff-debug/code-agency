@@ -17,8 +17,10 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
+// Switched OFF on request (owner decision): the footnote is no longer shown anywhere (dashboard home block,
+// /top-members, /top-brands, member / brand profiles) and the page descriptions no longer carry the sentence.
 export const SIMULATION_DISCLOSURE = Object.freeze({
-  enabled: true,
+  enabled: false,
   text: Object.freeze({
     fr: "Classement basé sur des données simulées : il ne s'agit ni de ventes ni de gains réels.",
     ar: "ترتيب مبني على بيانات محاكاة: ليست مبيعات ولا أرباحاً حقيقية.",

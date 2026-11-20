@@ -265,12 +265,15 @@ const FORBIDDEN = /\bd[ée]mo\b|d[ée]monstration|\btest\b|b[êe]ta|exp[ée]rime
   const bad = [...Object.entries(fr).map(([k, v]) => [`fr.${k}`, v]), ...Object.entries(ar).map(([k, v]) => [`ar.${k}`, v])].filter(([, v]) => FORBIDDEN.test(v)).map(([k]) => k);
   ok("no demo / test / beta / experimental / temporary / internal wording in the FR + AR dictionaries", bad.length === 0, bad);
   const DT = SIMULATION_DISCLOSURE.text;
-  ok("disclosure: one frozen config { enabled: true, text: { fr, ar } }", Object.isFrozen(SIMULATION_DISCLOSURE) && Object.isFrozen(DT) && SIMULATION_DISCLOSURE.enabled === true
+  // Owner decision: the disclaimer is switched OFF (not shown anywhere); the switch and its texts stay in one place.
+  ok("disclosure: one frozen config { enabled: false (switched off), text: { fr, ar } }", Object.isFrozen(SIMULATION_DISCLOSURE) && Object.isFrozen(DT) && SIMULATION_DISCLOSURE.enabled === false
     && Object.keys(DT).sort().join() === "ar,fr");
   ok("disclosure is accurate (simulated data, not real sales / earnings) in FR + AR, and has no demo / test wording itself",
     /simulées/.test(DT.fr) && /ventes/.test(DT.fr) && /gains réels/.test(DT.fr) && /محاكاة/.test(DT.ar) && /مبيعات/.test(DT.ar) && /حقيقية/.test(DT.ar)
     && !FORBIDDEN.test(DT.fr) && !FORBIDDEN.test(DT.ar) && /[\u0600-\u06FF]/.test(DT.ar) && !/[\u0600-\u06FF]/.test(DT.fr));
-  ok("simulationDisclosure(lang): fr / ar text, other languages → fr", simulationDisclosure("fr") === DT.fr && simulationDisclosure("ar") === DT.ar && simulationDisclosure("en") === DT.fr && simulationDisclosure(undefined) === DT.fr);
+  ok("switched off → simulationDisclosure(lang) is null in every language (the note renders nothing)", ["fr", "ar", "en", undefined].every((l) => simulationDisclosure(l) === null));
+  const ON = { enabled: true, text: DT };
+  ok("switch still works when enabled: fr / ar text, other languages → fr", simulationDisclosure("fr", ON) === DT.fr && simulationDisclosure("ar", ON) === DT.ar && simulationDisclosure("en", ON) === DT.fr && simulationDisclosure(undefined, ON) === DT.fr);
   ok("disabled (enabled: false) or empty text → null (the note renders nothing)",
     simulationDisclosure("fr", { ...SIMULATION_DISCLOSURE, enabled: false }) === null && simulationDisclosure("ar", { enabled: false, text: DT }) === null
     && simulationDisclosure("fr", { enabled: true, text: { fr: "  ", ar: "" } }) === null && simulationDisclosure("ar", null) === null);
@@ -278,9 +281,10 @@ const FORBIDDEN = /\bd[ée]mo\b|d[ée]monstration|\btest\b|b[êe]ta|exp[ée]rime
   const metas = kinds.map((k) => demoPageMetadata(k));
   ok("page metadata: neutral titles (Top Membres / Top Marques / Profil membre / Profil marque), no demo / test wording",
     metas.map((m) => m.title).join("|") === "Top Membres|Top Marques|Profil membre|Profil marque" && metas.every((m) => !FORBIDDEN.test(m.title) && !FORBIDDEN.test(m.description)));
-  ok("page metadata: the description carries the central disclosure while enabled, and drops it when disabled",
-    metas.every((m) => m.description.endsWith(` ${DT.fr}`))
-    && kinds.every((k) => { const d = demoPageMetadata(k, { enabled: false, text: DT }).description; return !d.includes(DT.fr) && d.length > 0; }));
+  ok("page metadata: switched off → the descriptions no longer carry the disclaimer (neutral description kept)",
+    metas.every((m) => !m.description.includes(DT.fr) && !m.description.includes(DT.ar) && m.description.length > 0));
+  ok("page metadata: the switch still appends it when enabled",
+    kinds.every((k) => demoPageMetadata(k, { enabled: true, text: DT }).description.endsWith(` ${DT.fr}`)));
   let threw = false;
   try { demoPageMetadata("nope"); } catch { threw = true; }
   ok("page metadata: unknown page → error (no silent empty metadata)", threw);
