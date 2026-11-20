@@ -13,6 +13,8 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLanguage } from "@/context/LanguageContext";
+import { useHydrated } from "@/context/useMarketLocale";
+import { FALLBACK_LANG } from "@/lib/languageSettings";
 import { demoDir, demoLang, demoT } from "@/lib/demoCompetition/i18n";
 import {
   POLL_INTERVAL_MS, HIGHLIGHT_MS, createPoller, createJsonFetcher, diffRanks,
@@ -21,9 +23,17 @@ import {
 /**
  * { lang, dir, t } — the storefront language by default; `langOverride` lets a host page impose its own language
  * (the Affiliate Dashboard passes the dashboard language, so the leaderboard never differs from the page around it).
+ *
+ * Hydration-safe (same gate as useMarketLocale): the server renders the fallback language, and these pages hydrate
+ * inside the root layout's Suspense boundary — possibly AFTER LanguageContext switched to the stored language. While
+ * hydrating, the storefront language reads as the fallback so the first client render matches the server HTML (else
+ * React error #418 on /top-members, /top-brands and the profiles for a French visitor); right after, it re-renders in
+ * the visitor's language. A host-imposed `langOverride` is passed through unchanged (same value on both sides).
  */
 export function useDemoText(langOverride) {
-  const { lang } = useLanguage();
+  const hydrated = useHydrated();
+  const { lang: siteLang } = useLanguage();
+  const lang = hydrated ? siteLang : FALLBACK_LANG;
   const l = demoLang(langOverride || lang);
   const t = useMemo(() => demoT(l), [l]);
   return { lang: l, dir: demoDir(l), t };
