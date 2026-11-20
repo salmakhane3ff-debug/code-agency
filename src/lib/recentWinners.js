@@ -17,8 +17,7 @@
  *     (rebuilt from the gift audit trail, so later catalogue changes never alter it). The schedule is a pure function of
  *     (seed, member id, cycle), so refreshing never changes past wins, and a member added or
  *     archived during a month never moves anyone else's wins. Only past instants are returned.
- *     Every demo item carries demo: true (the slider then shows the discreet
- *     simulation footnote); demo items are never written to any rewards table.
+ *     Every demo item carries demo: true; demo items are never written to any rewards table.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { casablancaLocal } from './casablancaTime.js';

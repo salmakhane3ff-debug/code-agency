@@ -76,6 +76,10 @@ console.log('1. Placement (overview, below Top Members / Top Brands; no tab, no 
   ok('home rows: thumbnail, rank, title, creator, sales, reward; a row opens the existing player (no <video> in the row)',
     /<VideoThumb src=\{v\.thumbnailUrl\}/.test(H) && /\{v\.title\}/.test(H) && /<CreatorText owner=\{v\.owner\}/.test(H) && /<Count value=\{v\.sales\}/.test(H)
     && /<Money cents=\{v\.totalRewardCents\}/.test(H) && /onClick=\{\(\) => onOpen\(v\)\}/.test(H) && /<UgcVideoModal video=\{current\}/.test(H) && !/<video\b/.test(H));
+  // Page scroll: the player locks the page scroll for as long as it is MOUNTED → the home section mounts it only while a
+  // video is open (as the full leaderboard does); an always-mounted player froze the dashboard home's scrolling.
+  ok('home Top 3: the player is mounted ONLY while a video is open (no permanent page-scroll lock)', /\{current && \(\s*<UgcVideoModal video=\{current\}/.test(H) && (H.match(/<UgcVideoModal\b/g) || []).length === 1);
+  ok('the player locks the page scroll only while mounted and restores it on close', /document\.body\.style\.overflow = "hidden"/.test(MODAL) && /document\.body\.style\.overflow = prevOverflow/.test(MODAL));
   ok('home section: hidden while the module is switched off or nothing is ranked (like an empty Top Members)',
     /hidden=\{view === "disabled" \|\| view === "empty"\}/.test(H));
   ok('full page /top-ugc-videos: the existing full board, same frame as /top-members, no simulation footnote; Top layout',

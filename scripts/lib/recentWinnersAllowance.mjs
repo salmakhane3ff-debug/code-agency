@@ -10,7 +10,8 @@
  *   • ONE new affiliate route, GET /api/affiliate/rewards/winners (content SHA-256 pinned below —
  *     it is new, so it must not exist at the base, and any edit breaks the guards);
  *   • a pure rules module, a read-only service, the slider component;
- *   • the slider in RewardsTab + its FR / AR texts in rewardsI18n (line pins versus the base).
+ *   • the slider in RewardsTab + its FR / AR texts in rewardsI18n (line pins versus the base; re-pinned after the
+ *     approved removal of the demo-winner footnote text winners_demo_note).
  * Re-pin ONLY after reviewing a deliberate change:  node scripts/lib/recentWinnersAllowance.mjs
  * ─────────────────────────────────────────────────────────────────────────────
  */
@@ -39,7 +40,7 @@ export const RW_ROUTE_PINS = Object.freeze({
 /** Edited files: sha256 of the +/- lines of `git diff RW_BASE -- <file>`. */
 export const RW_LINE_PINS = Object.freeze({
   'src/app/affiliate/dashboard/RewardsTab.jsx': '02d2fbd9d1f6eff6919dd5a280bc6bc712f76a619b0dc3b40566137dcde7e73d',
-  'src/lib/rewardsI18n.js': 'dc4e9ccf3f834d797e2a794c7d3b205ecf19c2a78ad420d810a59076abb2099a',
+  'src/lib/rewardsI18n.js': '369ea73edb6200bb9d2408e5b2d3ea734717a61301e9d1a07e7d8aadea133dd1',
 });
 
 const sha = (s) => createHash('sha256').update(s, 'utf8').digest('hex');

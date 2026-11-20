@@ -111,7 +111,6 @@ const fr = {
   winners_page: "Page {n} sur {total}",
   winners_member: "Membre",
   winners_won: "{name} a gagné {gift}",
-  winners_demo_note: "Certains gagnants affichés sont des profils de démonstration (simulation), pas des cadeaux réellement gagnés.",
 };
 
 const ar = {
@@ -212,7 +211,6 @@ const ar = {
   winners_page: "الصفحة {n} من {total}",
   winners_member: "عضو",
   winners_won: "{name} ربح {gift}",
-  winners_demo_note: "بعض الفائزين المعروضين ملفات تجريبية (محاكاة)، وليست هدايا رُبحت فعلياً.",
 };
 
 export const REWARDS_TEXT = Object.freeze({ fr: Object.freeze(fr), ar: Object.freeze(ar) });

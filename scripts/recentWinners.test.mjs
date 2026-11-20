@@ -395,10 +395,11 @@ console.log("\n4. UI — placement, slider, texts");
   ok("states: loading skeleton, error + retry, empty, hidden when the program is off", /data-recent-winners-loading/.test(c) && /data-recent-winners-error/.test(c) && /winners_retry/.test(c) && /data-recent-winners-empty/.test(c) && /if \(!state\.enabled\) return null/.test(code));
   ok("broken avatar / gift image → fallback (Top Members Avatar initials; gift icon via onError)", /import DemoAvatar from "@\/components\/demoCompetition\/Avatar"/.test(c) && /<DemoAvatar src=\{src\} name=\{name\} id=\{avatarKey \|\| name\}/.test(c) && /data-winner-gift-fallback/.test(c) && /onError=\{\(\) => setBroken\(true\)\}/.test(code));
   ok("card: avatar, name, gift image, gift name, gift icon, time, relative date", ["<Avatar", "<bdi>{name}</bdi>", "<GiftImage", "{w.giftName}", "data-winner-gift-icon", "winnerTime(w.wonAt)", "relativeWin(w.wonAt, nowMs, lang)"].every((s) => c.includes(s)));
-  ok("demo footnote only when a demo winner is shown", /const hasDemo = state\.winners\.some\(\(w\) => w\.demo\)/.test(code) && /hasDemo \?/.test(code));
+  ok("no demo-winner footnote / disclaimer under the slider (removed on request)", !/hasDemo|winners_demo_note|data-recent-winners-note|role="note"/.test(code));
+  ok("demo-winner footnote texts removed (FR + AR)", !("winners_demo_note" in REWARDS_TEXT.fr) && !("winners_demo_note" in REWARDS_TEXT.ar) && !read("src/lib/rewardsI18n.js").includes("بعض الفائزين المعروضين ملفات تجريبية"));
   ok("no hard-coded French / Arabic text in the component", !/[؀-ۿ]/.test(code) && !/"(Gagnants|Précédent|Suivant|Réessayer)/.test(code));
 
-  const keys = ["winners_title", "winners_subtitle", "winners_empty", "winners_error", "winners_retry", "winners_prev", "winners_next", "winners_page", "winners_member", "winners_won", "winners_demo_note"];
+  const keys = ["winners_title", "winners_subtitle", "winners_empty", "winners_error", "winners_retry", "winners_prev", "winners_next", "winners_page", "winners_member", "winners_won"];
   ok("FR + AR texts present", keys.every((k) => REWARDS_TEXT.fr[k] && REWARDS_TEXT.ar[k]));
   ok("AR title / subtitle as specified", REWARDS_TEXT.ar.winners_title === "الفائزون مؤخراً" && REWARDS_TEXT.ar.winners_subtitle === "تعرف على آخر الأعضاء الذين ربحوا هداياهم بالنقاط!");
   ok("page label interpolates", rewardsT("fr")("winners_page", { n: 2, total: 5 }) === "Page 2 sur 5");

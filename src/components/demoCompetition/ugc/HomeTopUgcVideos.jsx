@@ -130,7 +130,10 @@ export default function HomeTopUgcVideos() {
           <CompactSkeleton label={label} />
         )}
       </HomeSectionFrame>
-      <UgcVideoModal video={current} t={t} dt={dt} lang={lang} dir={dir} onClose={() => setSelected(null)} />
+      {/* Mounted ONLY while a video is open: the player locks the page scroll for as long as it is mounted. */}
+      {current && (
+        <UgcVideoModal video={current} t={t} dt={dt} lang={lang} dir={dir} onClose={() => setSelected(null)} />
+      )}
     </>
   );
 }

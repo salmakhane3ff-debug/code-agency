@@ -15,7 +15,7 @@
  * icon; it never breaks the slider.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarDays, ChevronLeft, ChevronRight, Clock, Crown, Gift, Info } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, Clock, Crown, Gift } from "lucide-react";
 import { pageStarts, perViewFor, relativeWin, winnerTime } from "@/lib/recentWinners";
 import DemoAvatar from "@/components/demoCompetition/Avatar";
 
@@ -100,7 +100,7 @@ function WinnerCard({ w, t, lang, nowMs, width, hidden }) {
   );
 }
 
-function Shell({ t, dir, children, footer }) {
+function Shell({ t, dir, children }) {
   return (
     <section
       dir={dir}
@@ -118,7 +118,6 @@ function Shell({ t, dir, children, footer }) {
         <p className="mt-1 text-xs text-gray-500 sm:text-[13px]">{t("winners_subtitle")}</p>
       </div>
       <div className="mt-3">{children}</div>
-      {footer}
     </section>
   );
 }
@@ -184,16 +183,8 @@ export default function RecentWinners({ t, lang, dir }) {
       </Shell>
     );
   }
-  const hasDemo = state.winners.some((w) => w.demo);
   return (
-    <Shell
-      t={t} dir={dir}
-      footer={hasDemo ? (
-        <p role="note" className="mt-2 flex items-start justify-center gap-1 px-2 text-center text-[10.5px] leading-snug text-gray-500" data-recent-winners-note>
-          <Info className="mt-px h-3 w-3 shrink-0" aria-hidden="true" /><span>{t("winners_demo_note")}</span>
-        </p>
-      ) : null}
-    >
+    <Shell t={t} dir={dir}>
       <WinnersSlider winners={state.winners} t={t} lang={lang} dir={dir} nowMs={nowMs} />
     </Shell>
   );
